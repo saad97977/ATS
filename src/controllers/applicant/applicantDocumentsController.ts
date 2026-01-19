@@ -1,21 +1,54 @@
 import prisma from '../../prisma.config';
-import { createCrudController } from '../../factories/crudFactory';
 import { Request, Response } from 'express';
 import { sendSuccess, sendError } from '../../utils/response';
+import { BlobServiceClient } from '@azure/storage-blob';
 
 /**
- * Applicant Document CRUD Controller
+ * Applicant Document CRUD Controller with Azure Blob Storage
  * 
  * Validation Rules:
  * - applicant_id: Required UUID
  * - document_type: Required document type (e.g., "Resume", "Cover Letter", "ID Proof", etc.)
- * - file_url: File upload (PDF, images, documents) - stored as base64 in database
+ * - file_url: File upload (PDF, images, documents) - stored in Azure Blob Storage
  */
 
+// Initialize Azure Blob Service Client
+if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
+  throw new Error('AZURE_STORAGE_CONNECTION_STRING is not defined in environment variables');
+}
+
+const blobServiceClient = BlobServiceClient.fromConnectionString(
+  process.env.AZURE_STORAGE_CONNECTION_STRING
+);
+
+const containerName = process.env.AZURE_CONTAINER_NAME || 'applicant-documents';
+
 /**
- * Create Applicant Document with File Upload
- * Handles file upload and saves file content directly to database
- * Stores file as JSON: {originalFileName, mimeType, fileData}
+ * Get container client (creates container if it doesn't exist)
+ */
+const getContainerClient = async () => {
+  const containerClient = blobServiceClient.getContainerClient(containerName);
+  
+  // Create container if it doesn't exist
+  await containerClient.createIfNotExists({
+    access: 'blob', // Public read access for blobs
+  });
+  
+  return containerClient;
+};
+
+/**
+ * Generate unique blob name
+ */
+const generateBlobName = (applicantId: string, originalName: string): string => {
+  const timestamp = Date.now();
+  const randomStr = Math.random().toString(36).substring(2, 8);
+  const sanitizedName = originalName.replace(/[^a-zA-Z0-9.-]/g, '_');
+  return `${applicantId}/${timestamp}-${randomStr}-${sanitizedName}`;
+};
+
+/**
+ * Create Applicant Document with File Upload to Azure Blob
  */
 export const createApplicantDocumentWithFile = async (req: Request, res: Response) => {
   try {
@@ -42,15 +75,31 @@ export const createApplicantDocumentWithFile = async (req: Request, res: Respons
       return sendError(res, 'Applicant not found', 404);
     }
 
-    // Convert file buffer to base64 and store with metadata
-    const fileBase64 = file.buffer.toString('base64');
+    // Upload to Azure Blob Storage
+    const containerClient = await getContainerClient();
+    const blobName = generateBlobName(applicant_id, file.originalname);
+    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+    // Upload file buffer to Azure
+    await blockBlobClient.upload(file.buffer, file.buffer.length, {
+      blobHTTPHeaders: {
+        blobContentType: file.mimetype,
+      },
+    });
+
+    // Get the blob URL
+    const fileUrl = blockBlobClient.url;
+
+    // Store metadata in database
     const fileMetadata = {
       originalFileName: file.originalname,
       mimeType: file.mimetype,
-      fileData: fileBase64,
+      blobName: blobName,
+      size: file.size,
+      url: fileUrl,
     };
 
-    // Create document record in database with file content and metadata
+    // Create document record in database
     const newDocument = await prisma.applicantDocument.create({
       data: {
         applicant_id,
@@ -67,6 +116,7 @@ export const createApplicantDocumentWithFile = async (req: Request, res: Respons
         originalName: file.originalname,
         size: file.size,
         mimeType: file.mimetype,
+        url: fileUrl,
       },
     }, 201);
   } catch (err: any) {
@@ -77,7 +127,6 @@ export const createApplicantDocumentWithFile = async (req: Request, res: Respons
 
 /**
  * Update Applicant Document with Optional File Upload
- * Allows updating document type and/or uploading a new document
  */
 export const updateApplicantDocumentWithFile = async (req: Request, res: Response) => {
   try {
@@ -102,13 +151,41 @@ export const updateApplicantDocumentWithFile = async (req: Request, res: Respons
     }
 
     if (file) {
-      // Convert file buffer to base64 and store with metadata
-      const fileBase64 = file.buffer.toString('base64');
+      // Delete old file from Azure if it exists
+      if (existingDocument.file_url) {
+        try {
+          const oldMetadata = JSON.parse(existingDocument.file_url);
+          if (oldMetadata.blobName) {
+            const containerClient = await getContainerClient();
+            const oldBlobClient = containerClient.getBlockBlobClient(oldMetadata.blobName);
+            await oldBlobClient.deleteIfExists();
+          }
+        } catch (err) {
+          console.warn('Error deleting old blob:', err);
+        }
+      }
+
+      // Upload new file to Azure
+      const containerClient = await getContainerClient();
+      const blobName = generateBlobName(existingDocument.applicant_id, file.originalname);
+      const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+      await blockBlobClient.upload(file.buffer, file.buffer.length, {
+        blobHTTPHeaders: {
+          blobContentType: file.mimetype,
+        },
+      });
+
+      const fileUrl = blockBlobClient.url;
+
       const fileMetadata = {
         originalFileName: file.originalname,
         mimeType: file.mimetype,
-        fileData: fileBase64,
+        blobName: blobName,
+        size: file.size,
+        url: fileUrl,
       };
+
       updateData.file_url = JSON.stringify(fileMetadata);
     }
 
@@ -142,9 +219,7 @@ export const updateApplicantDocumentWithFile = async (req: Request, res: Respons
 };
 
 /**
- * Download Applicant Document
- * Extracts file from database and returns for download with proper extension
- * Preserves original filename and file extension from upload
+ * Download Applicant Document from Azure Blob
  */
 export const downloadApplicantDocument = async (req: Request, res: Response) => {
   try {
@@ -164,61 +239,51 @@ export const downloadApplicantDocument = async (req: Request, res: Response) => 
     }
 
     try {
-      // Try to parse JSON metadata
-      let originalFileName: string | null = null;
-      let mimeType: string = 'application/octet-stream';
-      let fileData: string | null = null;
-
-      try {
-        const fileMetadata = JSON.parse(document.file_url);
-        originalFileName = fileMetadata.originalFileName;
-        mimeType = fileMetadata.mimeType || 'application/octet-stream';
-        fileData = fileMetadata.fileData;
-      } catch (parseErr) {
-        console.warn('JSON parsing failed, checking if it\'s plain base64');
-        // If JSON parsing fails, assume it's plain base64 (old format)
-        fileData = document.file_url;
+      // Parse file metadata
+      const fileMetadata = JSON.parse(document.file_url);
+      
+      if (!fileMetadata.blobName) {
+        return sendError(res, 'Document blob reference not found', 404);
       }
 
-      if (!fileData) {
-        return sendError(res, 'Document file data is missing or corrupted', 500);
+      // Download from Azure Blob Storage
+      const containerClient = await getContainerClient();
+      const blockBlobClient = containerClient.getBlockBlobClient(fileMetadata.blobName);
+
+      // Check if blob exists
+      const exists = await blockBlobClient.exists();
+      if (!exists) {
+        return sendError(res, 'Document file not found in storage', 404);
       }
 
-      try {
-        // Convert base64 string back to buffer
-        const fileBuffer = Buffer.from(fileData, 'base64');
-
-        // Use original filename if available, otherwise use document_type with .pdf
-        if (!originalFileName) {
-          originalFileName = `${document.document_type}.pdf`;
-          console.log('Using fallback filename:', originalFileName);
-        }
-
-        // Sanitize filename - remove invalid characters for HTTP headers
-        // Keep only alphanumeric, dots, hyphens, underscores, and spaces
-        const sanitizedFileName = originalFileName
-          .replace(/[^a-zA-Z0-9._\- ]/g, '')
-          .replace(/\s+/g, '_')
-          .trim();
-
-        if (!sanitizedFileName) {
-          throw new Error('Filename is empty after sanitization');
-        }
-
-        // Set response headers for file download with proper extension
-        res.setHeader('Content-Type', mimeType);
-        res.setHeader('Content-Disposition', `attachment; filename="${sanitizedFileName}"`);
-        res.setHeader('Content-Length', fileBuffer.length);
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-
-        console.log('Downloading file:', sanitizedFileName, 'with MIME type:', mimeType);
-        return res.send(fileBuffer);
-      } catch (bufferErr) {
-        console.error('Error converting base64 to buffer:', bufferErr);
-        return sendError(res, 'Failed to process document', 500);
+      // Download blob
+      const downloadResponse = await blockBlobClient.download();
+      
+      if (!downloadResponse.readableStreamBody) {
+        return sendError(res, 'Failed to download document', 500);
       }
+
+      // Set response headers
+      const originalFileName = fileMetadata.originalFileName || `${document.document_type}.pdf`;
+      const sanitizedFileName = originalFileName
+        .replace(/[^a-zA-Z0-9._\- ]/g, '')
+        .replace(/\s+/g, '_')
+        .trim();
+
+      const mimeType = fileMetadata.mimeType || 'application/octet-stream';
+
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename="${sanitizedFileName}"`);
+      if (downloadResponse.contentLength) {
+        res.setHeader('Content-Length', downloadResponse.contentLength);
+      }
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+      // Stream the blob to response
+      downloadResponse.readableStreamBody.pipe(res);
+
     } catch (err: any) {
-      console.error('Unexpected error in download:', err);
+      console.error('Error downloading from Azure:', err);
       return sendError(res, 'Failed to download document', 500);
     }
   } catch (err: any) {
@@ -244,7 +309,6 @@ export const getAllApplicantDocuments = async (req: Request, res: Response) => {
           applicant_document_id: true,
           applicant_id: true,
           document_type: true,
-          // Exclude file_url to reduce response size
         },
         orderBy: { applicant_document_id: 'desc' },
       }),
@@ -279,7 +343,6 @@ export const getApplicantDocumentById = async (req: Request, res: Response) => {
         applicant_document_id: true,
         applicant_id: true,
         document_type: true,
-        // Exclude file_url to reduce response size
       },
     });
 
@@ -297,7 +360,7 @@ export const getApplicantDocumentById = async (req: Request, res: Response) => {
 };
 
 /**
- * Delete Applicant Document
+ * Delete Applicant Document (also deletes from Azure Blob)
  */
 export const deleteApplicantDocument = async (req: Request, res: Response) => {
   try {
@@ -311,6 +374,22 @@ export const deleteApplicantDocument = async (req: Request, res: Response) => {
       return sendError(res, 'Applicant Document not found', 404);
     }
 
+    // Delete from Azure Blob Storage
+    if (document.file_url) {
+      try {
+        const fileMetadata = JSON.parse(document.file_url);
+        if (fileMetadata.blobName) {
+          const containerClient = await getContainerClient();
+          const blockBlobClient = containerClient.getBlockBlobClient(fileMetadata.blobName);
+          await blockBlobClient.deleteIfExists();
+        }
+      } catch (err) {
+        console.warn('Error deleting blob from Azure:', err);
+        // Continue with database deletion even if blob deletion fails
+      }
+    }
+
+    // Delete from database
     await prisma.applicantDocument.delete({
       where: { applicant_document_id: id },
     });
@@ -325,12 +404,8 @@ export const deleteApplicantDocument = async (req: Request, res: Response) => {
   }
 };
 
-
-
-
 /**
  * Get All Documents by Applicant ID
- * Returns all documents belonging to a specific applicant (without file data)
  */
 export const getDocumentsByApplicantId = async (req: Request, res: Response) => {
   try {
@@ -352,7 +427,6 @@ export const getDocumentsByApplicantId = async (req: Request, res: Response) => 
         applicant_document_id: true,
         applicant_id: true,
         document_type: true,
-        // Exclude file_url to reduce response size
       },
       orderBy: { applicant_document_id: 'desc' },
     });
@@ -367,4 +441,3 @@ export const getDocumentsByApplicantId = async (req: Request, res: Response) => 
     return sendError(res, 'Failed to fetch documents', 500);
   }
 };
-

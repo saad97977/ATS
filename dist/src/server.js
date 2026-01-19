@@ -38,6 +38,25 @@ const taskRoutes_1 = __importDefault(require("./routes/user/taskRoutes"));
 const fullOrganizationRoutes_1 = __importDefault(require("./routes/organization/fullOrganizationRoutes"));
 const fullJobRoutes_1 = __importDefault(require("./routes/job/fullJobRoutes"));
 dotenv_1.default.config();
+// At the top of your main server file or this controller file
+const storage_blob_1 = require("@azure/storage-blob");
+async function testAzureConnection() {
+    try {
+        if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
+            console.error('❌ AZURE_STORAGE_CONNECTION_STRING not found');
+            return;
+        }
+        const blobServiceClient = storage_blob_1.BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION_STRING);
+        const containerClient = blobServiceClient.getContainerClient(process.env.AZURE_CONTAINER_NAME || 'applicant-documents');
+        await containerClient.createIfNotExists({ access: 'blob' });
+        console.log('✅ Azure Blob Storage connected successfully');
+    }
+    catch (error) {
+        console.error('❌ Azure connection failed:', error);
+    }
+}
+// Call on server start
+testAzureConnection();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 // Middleware
@@ -87,6 +106,10 @@ app.use('/api/assignments', assignmentRoutes_1.default);
 // For Complete Data:
 app.use('/organizations/complete', fullOrganizationRoutes_1.default);
 app.use('/jobs/complete', fullJobRoutes_1.default);
+// adding health endpoint for render:
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
 // Error handling middleware (must be last)
 app.use(errorHandler_1.errorHandler);
 // Start server

@@ -36,6 +36,41 @@ import jobCompleteRoutes from './routes/job/fullJobRoutes';
 
 dotenv.config();
 
+
+
+
+// At the top of your main server file or this controller file
+import { BlobServiceClient } from '@azure/storage-blob';
+
+async function testAzureConnection() {
+  try {
+    if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
+      console.error('❌ AZURE_STORAGE_CONNECTION_STRING not found');
+      return;
+    }
+    
+    const blobServiceClient = BlobServiceClient.fromConnectionString(
+      process.env.AZURE_STORAGE_CONNECTION_STRING
+    );
+    const containerClient = blobServiceClient.getContainerClient(
+      process.env.AZURE_CONTAINER_NAME || 'applicant-documents'
+    );
+    
+    await containerClient.createIfNotExists({ access: 'blob' });
+    console.log('✅ Azure Blob Storage connected successfully');
+  } catch (error) {
+    console.error('❌ Azure connection failed:', error);
+  }
+}
+
+// Call on server start
+testAzureConnection();
+
+
+
+
+
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -102,6 +137,14 @@ app.use('/organizations/complete', organizationCompleteRoutes);
 app.use('/jobs/complete', jobCompleteRoutes);
 
     
+// adding health endpoint for render:
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+}
+);
+
+
+
 
 
 // Error handling middleware (must be last)
