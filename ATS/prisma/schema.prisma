@@ -1,0 +1,747 @@
+// This is your Prisma schema file for PostgreSQL ATS Database
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// CORE IDENTITY & ACCESS
+// ============================================
+
+model User {
+  user_id       String     @id @default(uuid())
+  name          String
+  email         String     @unique
+  password_hash String
+  status        UserStatus @default(ACTIVE)
+  is_admin      Boolean    @default(true)
+  created_at    DateTime   @default(now())
+  updated_at    DateTime   @updatedAt
+
+  // Relations
+  user_role            UserRole?
+  user_activity        UserActivity?
+  created_tasks        Task[]                 @relation("TaskCreatedBy")
+  assigned_tasks       Task[]                 @relation("TaskAssignedTo")
+  contracts            Contract[]
+  organization_users   OrganizationUser[]
+  organization_docs    OrganizationDocument[]
+  job_owners           JobOwner[]
+  applicant_references ApplicantReferences[]
+  credited_stages      PipelineStage[]        @relation("CreditUser")
+  represented_stages   PipelineStage[]        @relation("RepresentativeUser")
+  managed_jobs         Job[]                  @relation("JobManager")
+  created_jobs         Job[]                  @relation("JobCreatedBy")
+  created_organizations Organization[]        @relation("OrganizationCreatedBy")
+
+
+
+  @@index([email])
+  @@map("users")
+}
+
+model Role {
+  role_id   String   @id @default(uuid())
+  role_name RoleName
+
+  // Relations
+  user_roles UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  user_role_id String @id @default(uuid())
+  user_id      String @unique
+  role_id      String
+
+  // Relations
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  role Role @relation(fields: [role_id], references: [role_id])
+
+  @@map("user_roles")
+}
+
+model UserActivity {
+  activity_id   String   @id @default(uuid())
+  user_id       String   @unique
+  last_login_at DateTime?
+  last_actions  Json?
+  updated_at    DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@map("user_activities")
+}
+
+
+
+model Task {
+  task_id             String    @id @default(uuid())
+  user_id             String
+  assigned_to_user_id String
+  description         String
+  status              String
+  due_date            DateTime?
+  created_at          DateTime  @default(now())
+
+  // Relations
+  created_by   User @relation("TaskCreatedBy", fields: [user_id], references: [user_id])
+  assigned_to  User @relation("TaskAssignedTo", fields: [assigned_to_user_id], references: [user_id])
+
+  @@index([assigned_to_user_id])
+  @@map("tasks")
+}
+
+// ============================================
+// ORGANIZATION & CLIENT CRM
+// ============================================
+
+model Organization {
+  organization_id String             @id @default(uuid())
+  name            String             @unique
+  website         String?
+  status          OrganizationStatus @default(ACTIVE)
+  phone           String?
+  created_by_user_id String
+  created_at      DateTime           @default(now())
+
+  // Relations
+  addresses          OrganizationAddress[]
+  contacts           OrganizationContact[]
+  licenses           OrganizationLicense[]
+  accounting         OrganizationAccounting[]
+  organization_users OrganizationUser[]
+  contracts          Contract[]
+  document_titles    OrganizationDocumentTitle[]
+  documents          OrganizationDocument[]
+  jobs               Job[]
+  company_offices    CompanyOffice[]
+  created_by         User @relation("OrganizationCreatedBy", fields: [created_by_user_id], references: [user_id])
+
+  @@index([created_by_user_id])
+  @@map("organizations")
+}
+
+model OrganizationAddress {
+  organization_address_id String      @id @default(uuid())
+  organization_id         String
+  address_type            AddressType
+  address1                String
+  address2                String?
+  city                    String
+  state                   String
+  zip                     String
+  phone                   String?
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@map("organization_addresses")
+}
+
+model OrganizationContact {
+  organization_contact_id String      @id @default(uuid())
+  organization_id         String
+  name                    String
+  email                   String
+  phone                   String
+  contact_type            ContactType
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@map("organization_contacts")
+}
+
+model OrganizationAccounting {
+  organization_accounting_id String @id @default(uuid())
+  organization_id            String
+  account_type               String
+  bank_name                  String
+  account_number             String
+  routing_number             String
+  country                    String
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@map("organization_accounting")
+}
+
+
+model OrganizationLicense {
+  organization_license_id String    @id @default(uuid())
+  organization_id         String
+  license_name            String    @unique
+  license_document        String
+  expiration_date         DateTime?
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@map("organization_licenses")
+}
+
+
+model OrganizationUser {
+  organization_user_id String  @id @default(uuid())
+  organization_id      String
+  user_id              String
+  division             String?
+  department           String?
+  title                String?
+  work_phone           String?
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  user         User         @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@index([user_id])
+  @@map("organization_users")
+}
+
+// ============================================
+// CONTRACTS & DOCUMENTS
+// ============================================
+
+model Contract {
+  contract_id                String    @id @default(uuid())
+  organization_id            String
+  user_id                    String
+  contract_name              String
+  status                     String
+  is_organization_contractor Boolean
+  sent_status                String?
+  signed_status              String?
+  signed_at                  DateTime?
+  created_at                 DateTime  @default(now())
+  updated_at                 DateTime  @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id])
+  user         User         @relation(fields: [user_id], references: [user_id])
+
+  @@index([organization_id])
+  @@index([user_id])
+  @@map("contracts")
+}
+
+
+
+model OrganizationDocumentTitle {
+  document_title_id String @id @default(uuid())
+  organization_id   String 
+  document_title    String @unique
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  documents    OrganizationDocument[]
+
+  @@index([organization_id])
+  @@map("organization_document_titles")
+}
+
+
+
+model OrganizationDocument {
+  document_id       String    @id @default(uuid())
+  document_title_id String
+  organization_id   String
+  document_type     String
+  document_name     String    @unique
+  user_id           String
+  file              String
+  privacy           Privacy
+  expiration_date   DateTime?
+  upload_date       DateTime  @default(now())
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  user         User         @relation(fields: [user_id], references: [user_id])
+  title        OrganizationDocumentTitle @relation(fields: [document_title_id], references: [document_title_id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@index([user_id])
+  @@index([document_title_id])
+  @@map("organization_documents")
+}
+
+
+// ============================================
+// JOB MANAGEMENT
+// ============================================
+
+
+model Job {
+  job_id          String    @id @default(uuid())
+  organization_id String
+  manager_id      String?
+  job_title       String
+  status          JobStatus @default(DRAFT)
+  job_type        JobType
+  location        String
+  days_active     Int?
+  days_inactive   Int?
+  approved        Boolean   @default(false)
+  start_date      DateTime?
+  end_date        DateTime?
+  created_at      DateTime  @default(now())
+  created_by_user_id String
+
+
+  // Relations
+  organization  Organization   @relation(fields: [organization_id], references: [organization_id])
+  manager       User?          @relation("JobManager", fields: [manager_id], references: [user_id])
+  created_by    User         @relation("JobCreatedBy", fields: [created_by_user_id], references: [user_id])
+  job_detail    JobDetail?
+  job_owners    JobOwner[]
+  job_notes     JobNote[]
+  job_postings  JobPosting[]
+  job_rates     JobRate[]
+  applications  Application[]
+  pipeline_stages PipelineStage[]
+
+  @@index([created_by_user_id])
+  @@index([organization_id])
+  @@index([manager_id])
+  @@index([status])
+  @@map("jobs")
+}
+
+
+
+
+
+model JobDetail {
+  job_detail_id String @id @default(uuid())
+  job_id        String @unique
+  description   String
+  skills        Json?
+
+  // Relations
+  job Job @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+
+  @@map("job_details")
+}
+
+model CompanyOffice {
+  company_office_id String  @id @default(uuid())
+  organization_id   String
+  office_name       String  
+  city              String
+  state             String
+  country           String
+  type              OfficeType
+  address           String
+  is_primary        Boolean @default(false)
+
+  // Relations
+  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@map("company_offices")
+}
+
+model JobOwner {
+  job_owner_id String    @id @default(uuid())
+  job_id       String
+  user_id      String
+  role_type    OwnerRole
+
+  // Relations
+  job  Job  @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [user_id])
+
+  @@index([job_id])
+  @@index([user_id])
+  @@map("job_owners")
+}
+
+model JobNote {
+  job_note_id String   @id @default(uuid())
+  job_id      String
+  note        String
+  created_at  DateTime @default(now())
+
+  // Relations
+  job Job @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+
+  @@index([job_id])
+  @@map("job_notes")
+}
+
+model JobPosting {
+  job_posting_id      String  @id @default(uuid())
+  job_id              String
+  channel             String
+  external_posting_id String
+  status              String
+
+  // Relations
+  job Job @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+
+  @@index([job_id])
+  @@map("job_postings")
+}
+
+// ============================================
+// PAY & BILL
+// ============================================
+
+model JobRate {
+  job_rate_id       String   @id @default(uuid())
+  job_id            String
+  pay_rate          Decimal?  @db.Decimal(10, 2)
+  bill_rate         Decimal  @db.Decimal(10, 2)
+  markup_percentage Decimal?  @db.Decimal(5, 2)
+  overtime_rule     String?
+  hours             Int
+  ot_pay_rate       Decimal? @db.Decimal(10, 2)
+  ot_bill_rate      Decimal? @db.Decimal(10, 2)
+
+  // Relations
+  job Job @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+
+  @@index([job_id])
+  @@map("job_rates")
+}
+
+// ============================================
+// TALENT & APPLICANTS
+// ============================================
+
+model Applicant {
+  applicant_id   String          @id @default(uuid())
+  full_name      String
+  status         ApplicantStatus @default(APPLIED)
+  last_active_at DateTime?
+  created_at     DateTime        @default(now())
+
+  // Relations
+  contact         ApplicantContact?
+  demographic     ApplicantDemographic?
+  documents       ApplicantDocument[]
+  social_profiles ApplicantSocialProfiles[]
+  references      ApplicantReferences[]
+  work_history    ApplicantWorkHistory[]
+  applications    Application[]
+
+  @@map("applicants")
+}
+
+model ApplicantContact {
+  applicant_contact_id String  @id @default(uuid())
+  applicant_id         String  @unique
+  email                String
+  phone                String
+  address              String?
+  city                 String?
+
+  // Relations
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@map("applicant_contacts")
+}
+
+model ApplicantDemographic {
+  applicant_demo_id    String    @id @default(uuid())
+  applicant_id         String    @unique
+  birth_date           DateTime?
+  gender               String?
+  race                 String?
+  disability           String?
+  work_authorization   String?
+  authorization_expiry DateTime?
+
+  // Relations
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@map("applicant_demographics")
+}
+
+model ApplicantDocument {
+  applicant_document_id String @id @default(uuid())
+  applicant_id          String
+  document_type         String
+  file_url              String
+
+  // Relations
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@index([applicant_id])
+  @@map("applicant_documents")
+}
+
+model ApplicantSocialProfiles {
+  applicant_social_profiles_id String @id @default(uuid())
+  applicant_id                 String
+  profile_title                String
+  profile_link                 String
+
+  // Relations
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@index([applicant_id])
+  @@map("applicant_social_profiles")
+}
+
+model ApplicantReferences {
+  applicant_references_id String @id @default(uuid())
+  applicant_id            String
+  user_id                 String
+
+  // Relations
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+  user      User      @relation(fields: [user_id], references: [user_id])
+
+  @@index([applicant_id])
+  @@index([user_id])
+  @@map("applicant_references")
+}
+
+model ApplicantWorkHistory {
+  applicant_work_history_id String  @id @default(uuid())
+  applicant_id              String
+  title                     String
+  description               String?
+
+  // Relations
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@index([applicant_id])
+  @@map("applicant_work_history")
+}
+
+// ============================================
+// APPLICATION PIPELINE
+// ============================================
+
+model Application {
+  application_id String            @id @default(uuid())
+  job_id         String
+  applicant_id   String
+  source         String?
+  status         ApplicationStatus @default(APPLIED)
+  applied_at     DateTime          @default(now())
+
+  // Relations
+  job             Job             @relation(fields: [job_id], references: [job_id])
+  applicant       Applicant       @relation(fields: [applicant_id], references: [applicant_id])
+  interviews      Interview[]
+  pipeline_stages PipelineStage[]
+  assignment      Assignment?
+  evaluations     ApplicationEvaluation?
+
+
+  @@index([job_id])
+  @@index([applicant_id])
+  @@index([status])
+  @@map("applications")
+}
+
+
+model ApplicationEvaluation {
+  evaluation_id   String   @id @default(uuid())
+  application_id  String   @unique
+  ai_score        Decimal  @db.Decimal(5, 2)
+  model_name      String
+  raw_response    Json?
+  evaluated_at    DateTime @default(now())
+
+  application Application @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
+
+  @@index([application_id])
+  @@map("application_evaluations")
+}
+
+
+
+model Interview {
+  interview_id   String   @id @default(uuid())
+  application_id String   @unique
+  interview_date DateTime
+  status         InterviewStatus
+
+  // Relations
+  application Application @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
+
+  @@index([application_id])
+  @@map("interviews")
+}
+
+model PipelineStage {
+  pipeline_stage_id                   String   @id @default(uuid())
+  application_id                      String
+  job_id                              String
+  stage_name                          String
+  pipeline_date                       DateTime @default(now())
+  credit_organization_user_id         String?
+  representative_organization_user_id String?
+
+  // Relations
+  application         Application @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
+  credit_user         User?       @relation("CreditUser", fields: [credit_organization_user_id], references: [user_id])
+  representative_user User?       @relation("RepresentativeUser", fields: [representative_organization_user_id], references: [user_id])
+  job                 Job         @relation(fields: [job_id], references: [job_id], onDelete: Cascade) 
+
+
+  @@index([application_id])
+  @@index([credit_organization_user_id])
+  @@index([representative_organization_user_id])
+  @@map("pipeline_stages")
+}
+
+// ============================================
+// ASSIGNMENT (POST-HIRE)
+// ============================================
+
+model Assignment {
+  assignment_id     String         @id @default(uuid())
+  application_id    String         @unique
+  start_date        DateTime
+  end_date          DateTime?
+  employment_type   EmploymentType
+  workers_comp_code String?
+
+  // Relations
+  application  Application @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
+  time_entries TimeEntry[]
+  payrolls     Payroll[]
+
+  @@map("assignments")
+}
+
+// ============================================
+// TIME & PAYROLL
+// ============================================
+
+model TimeEntry {
+  time_entry_id String          @id @default(uuid())
+  assignment_id String
+  work_date     DateTime
+  hours         Decimal         @db.Decimal(5, 2)
+  status        TimeEntryStatus @default(SUBMITTED)
+
+  // Relations
+  assignment Assignment @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+
+  @@index([assignment_id])
+  @@index([work_date])
+  @@map("time_entries")
+}
+
+model Payroll {
+  payroll_id    String   @id @default(uuid())
+  assignment_id String
+  pay_period    String
+  gross_pay     Decimal  @db.Decimal(10, 2)
+  net_pay       Decimal  @db.Decimal(10, 2)
+  processed_at  DateTime @default(now())
+
+  // Relations
+  assignment Assignment @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+
+  @@index([assignment_id])
+  @@map("payrolls")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum RoleName {
+  HCM_USER
+  MANAGER
+  CONTRACTOR
+  SUB_VENDOR
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AddressType {
+  WORKSITE
+  BILLING
+}
+
+enum ContactType {
+  PRIMARY
+  EMERGENCY
+}
+
+enum Privacy {
+  PUBLIC
+  PRIVATE
+}
+
+enum JobStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+enum JobType {
+  TEMPORARY
+  PERMANENT
+}
+
+enum OwnerRole {
+  SALES
+  RECRUITER
+}
+
+enum ApplicantStatus {
+  APPLIED
+  PLACED
+  REJECTED
+  SHORTLISTEDF
+  INTERVIEWING
+}
+
+enum ApplicationStatus {
+  APPLIED
+  SCREENED
+  OFFERED
+  HIRED
+}
+
+enum InterviewStatus {
+  PENDING
+  COMPLETED_RESULT_PENDING
+  REJECTED
+  ACCEPTED
+}
+
+enum EmploymentType {
+  W2
+  CONTRACTOR_1099 @map("1099")
+}
+
+enum TimeEntryStatus {
+  SUBMITTED
+  APPROVED
+}
+
+enum OfficeType {
+  REMOTE
+  HYBRID
+  ONSITE
+}
