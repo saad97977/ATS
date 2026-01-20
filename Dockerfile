@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for Node.js + TypeScript + Prisma
-# Optimized for production deployment on Fly.io
+# Optimized for production deployment on Railway with Neon Database
 
 # ===========================
 # Stage 1: Dependencies
@@ -61,12 +61,12 @@ RUN mkdir -p uploads/licenses && \
 # Use non-root user for security
 USER node
 
-# Expose port (Fly.io uses PORT env var)
-EXPOSE 8080
+# Expose port (Railway automatically sets PORT env var)
+EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 8080) + '/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); });"
+  CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 3000) + '/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); });"
 
 # Start the application
 CMD ["node", "dist/src/server.js"]
