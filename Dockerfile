@@ -40,12 +40,14 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# Install production dependencies only
+# Copy package files
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy Prisma schema for runtime migrations
+# Copy Prisma schema BEFORE npm ci (needed for postinstall prisma generate)
 COPY prisma ./prisma
+
+# Install production dependencies only
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
