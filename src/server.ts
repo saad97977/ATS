@@ -67,6 +67,8 @@ async function testAzureConnection() {
 testAzureConnection();
 
 
+console.log("Node version:", process.version);
+console.log("crypto exists:", typeof globalThis.crypto);
 
 
 

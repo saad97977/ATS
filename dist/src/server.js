@@ -57,6 +57,8 @@ async function testAzureConnection() {
 }
 // Call on server start
 testAzureConnection();
+console.log("Node version:", process.version);
+console.log("crypto exists:", typeof globalThis.crypto);
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 // Middleware
