@@ -117,13 +117,26 @@ const getOrganizationById = async (req: Request, res: Response) => {
           },
         },
 
-        // ✅ Full Organization Data
         addresses: true,
         accounting: true,
         company_offices: true,
         contacts: true,
-        organization_users : true,
 
+        organization_users: {
+          select: {
+            organization_user_id: true,
+            division: true,
+            department: true,
+            title: true,
+            work_phone: true,
+            user: {
+              select: {
+                name: true,
+                email: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -131,7 +144,21 @@ const getOrganizationById = async (req: Request, res: Response) => {
       return sendError(res, 'Organization not found', 404);
     }
 
-    return sendSuccess(res, organization);
+    // 🔹 Flatten organization_users (name & email at same level)
+    const formattedOrganization = {
+      ...organization,
+      organization_users: organization.organization_users.map((ou) => ({
+        organization_user_id: ou.organization_user_id,
+        division: ou.division,
+        department: ou.department,
+        title: ou.title,
+        work_phone: ou.work_phone,
+        name: ou.user?.name || null,
+        email: ou.user?.email || null,
+      })),
+    };
+
+    return sendSuccess(res, formattedOrganization);
   } catch (err) {
     console.error('Error fetching organization by id:', err);
     return sendError(res, 'Failed to fetch organization', 500);
@@ -212,7 +239,7 @@ const updateOrganizationCompleteSchema = z.object({
 });
 
 /**
- * PATCH /api/organizations/complete/:id
+ * PATCH /api/organizations/:id
  * Updates organization with all related data in a single transaction
  * 
  * Usage patterns:
