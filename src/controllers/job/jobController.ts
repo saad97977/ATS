@@ -145,6 +145,7 @@ const getJobById = async (req: Request, res: Response) => {
           include: {
             addresses: true,
             contacts: true,
+            company_offices: true, // ✅ Added: Include all company offices for the organization
           },
         },
         manager: {
@@ -152,6 +153,25 @@ const getJobById = async (req: Request, res: Response) => {
             user_id: true,
             name: true,
             email: true,
+          },
+        },
+        created_by: { // ✅ Added: Include job creator details
+          select: {
+            user_id: true,
+            name: true,
+            email: true,
+          },
+        },
+        company_office: { // ✅ Added: Include the specific company office linked to this job
+          select: {
+            company_office_id: true,
+            office_name: true,
+            city: true,
+            state: true,
+            country: true,
+            type: true,
+            address: true,
+            is_primary: true,
           },
         },
         job_detail: true,
@@ -292,7 +312,7 @@ const getJobsByOrganization = async (req: Request, res: Response) => {
 
 /**
  * Get jobs by status
- * GET /api/jobs/status/:status
+ * GET /api/jobs/status/:status (DRAFT, OPEN, CLOSED)
  */
 const getJobsByStatus = async (req: Request, res: Response) => {
   try {
@@ -355,7 +375,7 @@ const getJobsByStatus = async (req: Request, res: Response) => {
 
 /**
  * Get jobs by type
- * GET /api/jobs/type/:type
+ * GET /api/jobs/type/:type (TEMPORARY, PERMANENT)
  */
 const getJobsByType = async (req: Request, res: Response) => {
   try {
@@ -767,7 +787,6 @@ const getJobs = async (req: Request, res: Response) => {
 
 
 
-
 /**
  * Job Complete Update Controller
  * PATCH request to update Job with all related data in a single transaction
@@ -817,6 +836,7 @@ const updateJobCompleteSchema = z.object({
   // Job base fields (all optional for PATCH)
   organization_id: z.string().uuid('Valid organization ID is required').optional(),
   manager_id: z.string().uuid('Valid manager ID is required').optional().nullable(),
+  company_office_id: z.string().uuid('Valid company office ID is required').optional().nullable(),
   job_title: z.string().min(1, 'Job title is required').optional(),
   status: z.enum(['DRAFT', 'OPEN', 'CLOSED']).optional(),
   job_type: z.enum(['TEMPORARY', 'PERMANENT']).optional(),
@@ -827,6 +847,10 @@ const updateJobCompleteSchema = z.object({
   start_date: z.string().datetime().optional().nullable(),
   end_date: z.string().datetime().optional().nullable(),
   
+  // New fields
+  max_positions: z.number().int().min(1, 'Max positions must be at least 1').optional().nullable(),
+  open_positions: z.number().int().min(0, 'Open positions cannot be negative').optional().nullable(),
+  
   // Related entities
   job_detail: jobDetailUpdateSchema.optional(),
   job_notes: z.array(jobNoteUpdateSchema).optional(),
@@ -835,8 +859,14 @@ const updateJobCompleteSchema = z.object({
 });
 
 
+
+
+
+
+
+
 /**
- * PATCH /api/jobs/complete/:id
+ * PATCH /api/jobs/:id
  * Updates job with all related data in a single transaction
  * 
  * Usage patterns:
@@ -870,6 +900,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
     const { 
       organization_id,
       manager_id,
+      company_office_id,
       job_title,
       status,
       job_type,
@@ -879,6 +910,8 @@ const updateJobComplete = async (req: Request, res: Response) => {
       approved,
       start_date,
       end_date,
+      max_positions,
+      open_positions,
       job_detail,
       job_notes,
       job_rates,
@@ -919,6 +952,22 @@ const updateJobComplete = async (req: Request, res: Response) => {
 
       if (!managerExists) {
         return sendError(res, 'Manager user not found', 404);
+      }
+    }
+
+    // Check if company office exists and belongs to the organization (if updating)
+    if (company_office_id !== undefined && company_office_id !== null) {
+      const checkOrgId = organization_id || existingJob.organization_id;
+      
+      const companyOfficeExists = await prisma.companyOffice.findFirst({
+        where: { 
+          company_office_id,
+          organization_id: checkOrgId, // Ensure office belongs to the organization
+        },
+      });
+
+      if (!companyOfficeExists) {
+        return sendError(res, 'Company office not found or does not belong to the organization', 404);
       }
     }
 
@@ -971,6 +1020,16 @@ const updateJobComplete = async (req: Request, res: Response) => {
       }
     }
 
+    // Validate open_positions does not exceed max_positions (if updating either)
+    const finalMaxPositions = max_positions !== undefined ? max_positions : existingJob.max_positions;
+    const finalOpenPositions = open_positions !== undefined ? open_positions : existingJob.open_positions;
+
+    if (finalMaxPositions !== null && finalOpenPositions !== null) {
+      if (finalOpenPositions > finalMaxPositions) {
+        return sendError(res, 'Open positions cannot exceed max positions', 400);
+      }
+    }
+
     // Check for duplicate job title (if updating title or organization)
     const checkTitle = job_title || existingJob.job_title;
     const checkOrgId = organization_id || existingJob.organization_id;
@@ -1005,6 +1064,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
       const jobUpdateData: any = {};
       if (organization_id !== undefined) jobUpdateData.organization_id = organization_id;
       if (manager_id !== undefined) jobUpdateData.manager_id = manager_id;
+      if (company_office_id !== undefined) jobUpdateData.company_office_id = company_office_id;
       if (job_title !== undefined) jobUpdateData.job_title = job_title;
       if (status !== undefined) jobUpdateData.status = status;
       if (job_type !== undefined) jobUpdateData.job_type = job_type;
@@ -1014,6 +1074,8 @@ const updateJobComplete = async (req: Request, res: Response) => {
       if (approved !== undefined) jobUpdateData.approved = approved;
       if (start_date !== undefined) jobUpdateData.start_date = start_date ? new Date(start_date) : null;
       if (end_date !== undefined) jobUpdateData.end_date = end_date ? new Date(end_date) : null;
+      if (max_positions !== undefined) jobUpdateData.max_positions = max_positions;
+      if (open_positions !== undefined) jobUpdateData.open_positions = open_positions;
 
       const updatedJob = Object.keys(jobUpdateData).length > 0
         ? await tx.job.update({
@@ -1204,6 +1266,18 @@ const updateJobComplete = async (req: Request, res: Response) => {
             user_id: true,
             name: true,
             email: true,
+          },
+        },
+        company_office: {
+          select: {
+            company_office_id: true,
+            office_name: true,
+            city: true,
+            state: true,
+            country: true,
+            type: true,
+            address: true,
+            is_primary: true,
           },
         },
         job_detail: true,

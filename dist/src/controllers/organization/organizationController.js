@@ -25,38 +25,117 @@ const baseCrud = (0, crudFactory_1.createCrudController)({
 // ===============================
 // GET ALL (FLAT RESPONSE)
 // ===============================
+// const getAllOrganizations = async (req: Request, res: Response) => {
+//   try {
+//     const page = Math.max(1, parseInt(req.query.page as string) || 1);
+//     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+//     const skip = (page - 1) * limit;
+//     const [rows, total] = await Promise.all([
+//       prisma.organization.findMany({
+//         skip,
+//         take: limit,
+//         orderBy: { created_at: 'desc' },
+//         include: {
+//           created_by: {
+//             select: {
+//               user_id: true,
+//               name: true,
+//               email: true,
+//               user_role: {
+//                 select: {
+//                   role: {
+//                     select: {
+//                       role_name: true,
+//                     },
+//                   },
+//                 },
+//               },
+//             },
+//           },
+//         },
+//       }),
+//       prisma.organization.count(),
+//     ]);
+//     const data = rows.map(org => ({
+//       organization_id: org.organization_id,
+//       name: org.name,
+//       website: org.website,
+//       status: org.status,
+//       phone: org.phone,
+//       created_at: org.created_at,
+//       created_by_user_id: org.created_by_user_id,
+//       created_by_name: org.created_by?.name ?? null,
+//       created_by_email: org.created_by?.email ?? null,
+//       created_by_role: org.created_by?.user_role?.role?.role_name ?? null,
+//     }));
+//     return sendSuccess(res, {
+//       data,
+//       paging: {
+//         total,
+//         page,
+//         limit,
+//         totalPages: Math.ceil(total / limit),
+//       },
+//     });
+//   } catch (err) {
+//     console.error('Error fetching organizations:', err);
+//     return sendError(res, 'Failed to fetch organizations', 500);
+//   }
+// };
 const getAllOrganizations = async (req, res) => {
     try {
+        const getAll = req.query.all === 'true';
         const page = Math.max(1, parseInt(req.query.page) || 1);
-        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
-        const skip = (page - 1) * limit;
+        const limit = getAll
+            ? undefined
+            : Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+        const skip = getAll ? undefined : (page - 1) * limit;
         const [rows, total] = await Promise.all([
             prisma_config_1.default.organization.findMany({
                 skip,
                 take: limit,
                 orderBy: { created_at: 'desc' },
-                include: {
-                    created_by: {
-                        select: {
-                            user_id: true,
-                            name: true,
-                            email: true,
-                            user_role: {
-                                select: {
-                                    role: {
-                                        select: {
-                                            role_name: true,
+                select: getAll
+                    ? {
+                        organization_id: true,
+                        name: true,
+                    }
+                    : {
+                        organization_id: true,
+                        name: true,
+                        website: true,
+                        status: true,
+                        phone: true,
+                        created_at: true,
+                        created_by_user_id: true,
+                        created_by: {
+                            select: {
+                                name: true,
+                                email: true,
+                                user_role: {
+                                    select: {
+                                        role: {
+                                            select: {
+                                                role_name: true,
+                                            },
                                         },
                                     },
                                 },
                             },
                         },
                     },
-                },
             }),
             prisma_config_1.default.organization.count(),
         ]);
-        const data = rows.map(org => ({
+        // If all=true → data already in final shape
+        if (getAll) {
+            return (0, response_1.sendSuccess)(res, {
+                data: rows,
+                paging: null,
+            });
+        }
+        // Normal paginated response
+        const data = rows.map((org) => ({
             organization_id: org.organization_id,
             name: org.name,
             website: org.website,
@@ -209,7 +288,7 @@ const organizationContactUpdateSchema = zod_1.z.object({
 const updateOrganizationCompleteSchema = zod_1.z.object({
     // Organization base fields (all optional for PATCH)
     name: zod_1.z.string().min(1, 'Organization name is required').optional(),
-    website: zod_1.z.string().url('Valid URL is required').optional(),
+    website: zod_1.z.string().optional().or(zod_1.z.literal('')).or(zod_1.z.string().url('Valid URL is required')),
     status: zod_1.z.enum(['ACTIVE', 'INACTIVE']).optional(),
     phone: zod_1.z.string().optional(),
     // Related entities arrays

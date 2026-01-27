@@ -102,7 +102,6 @@ app.use('/api/job-rates', jobRateRoutes);
 app.use('/api/job-notes', jobNoteRoutes);
 app.use('/api/job-owners', jobOwnerRoutes);
 
-
 // Organization routes
 app.use('/api/organizations', organizationRoutes);
 app.use('/api/organization-addresses', organizationAddressRoutes);

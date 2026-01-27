@@ -7,11 +7,55 @@ exports.registerUser = exports.updateUserStatus = exports.updateUserAdminStatus 
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const userService_1 = require("../../services/userService");
 // CRUD factory not used here now
+// export const getAllUsers = async (req: Request, res: Response) => {
+//   try {
+//     const page = Math.max(1, parseInt(req.query.page as string) || 1);
+//     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+//     const skip = (page - 1) * limit;
+//     const [users, total] = await Promise.all([
+//       prisma.user.findMany({
+//         skip,
+//         take: limit,
+//         orderBy: { created_at: 'desc' },
+//         include: {
+//           user_role: {
+//             include: {
+//               role: true,
+//             },
+//           },
+//         },
+//       }),
+//       prisma.user.count(),
+//     ]);
+//     // Transform the data to only include required fields
+//     const transformedUsers = users.map(user => ({
+//       user_id: user.user_id,
+//       name: user.name,
+//       email: user.email,
+//       role_name: user.user_role?.role?.role_name || null,
+//     }));
+//     res.json({
+//       data: transformedUsers,
+//       paging: {
+//         total,
+//         page,
+//         limit,
+//         totalPages: Math.ceil(total / limit),
+//       },
+//     });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: 'Internal Server Error' });
+//   }
+// };
 const getAllUsers = async (req, res) => {
     try {
+        const getAll = req.query.all === 'true';
         const page = Math.max(1, parseInt(req.query.page) || 1);
-        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
-        const skip = (page - 1) * limit;
+        const limit = getAll
+            ? undefined
+            : Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+        const skip = getAll ? undefined : (page - 1) * limit;
         const [users, total] = await Promise.all([
             prisma_config_1.default.user.findMany({
                 skip,
@@ -27,7 +71,6 @@ const getAllUsers = async (req, res) => {
             }),
             prisma_config_1.default.user.count(),
         ]);
-        // Transform the data to only include required fields
         const transformedUsers = users.map(user => ({
             user_id: user.user_id,
             name: user.name,
@@ -36,12 +79,14 @@ const getAllUsers = async (req, res) => {
         }));
         res.json({
             data: transformedUsers,
-            paging: {
-                total,
-                page,
-                limit,
-                totalPages: Math.ceil(total / limit),
-            },
+            paging: getAll
+                ? null
+                : {
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit),
+                },
         });
     }
     catch (err) {

@@ -45,6 +45,7 @@ const createJobCompleteSchema = z.object({
   // Core Job fields
   organization_id: z.string().uuid('Valid organization ID is required'),
   manager_id: z.string().uuid('Valid manager ID is required').optional(),
+  company_office_id: z.string().uuid('Valid company office ID is required').optional(),
   job_title: z.string().min(1, 'Job title is required'),
   status: z.enum(['DRAFT', 'OPEN', 'CLOSED']).optional().default('DRAFT'),
   job_type: z.enum(['TEMPORARY', 'PERMANENT']),
@@ -55,6 +56,10 @@ const createJobCompleteSchema = z.object({
   start_date: z.string().datetime().optional(),
   end_date: z.string().datetime().optional(),
   created_by_user_id: z.string().uuid('Valid user ID is required'),
+  
+  // New fields
+  max_positions: z.number().int().min(1, 'Max positions must be at least 1').optional(),
+  open_positions: z.number().int().min(0, 'Open positions cannot be negative').optional(),
   
   // Related entities
   job_detail: jobDetailSchema.optional(),
@@ -83,6 +88,7 @@ const createJobComplete = async (req: Request, res: Response) => {
     const { 
       organization_id,
       manager_id,
+      company_office_id,
       job_title,
       status,
       job_type,
@@ -93,6 +99,8 @@ const createJobComplete = async (req: Request, res: Response) => {
       start_date,
       end_date,
       created_by_user_id,
+      max_positions,
+      open_positions,
       job_detail,
       job_notes,
       job_rates,
@@ -125,6 +133,20 @@ const createJobComplete = async (req: Request, res: Response) => {
 
       if (!managerExists) {
         return sendError(res, 'Manager user not found', 404);
+      }
+    }
+
+    // Check if company office exists and belongs to the organization (if provided)
+    if (company_office_id) {
+      const companyOfficeExists = await prisma.companyOffice.findFirst({
+        where: { 
+          company_office_id,
+          organization_id, // Ensure office belongs to the organization
+        },
+      });
+
+      if (!companyOfficeExists) {
+        return sendError(res, 'Company office not found or does not belong to the organization', 404);
       }
     }
 
@@ -163,6 +185,13 @@ const createJobComplete = async (req: Request, res: Response) => {
       }
     }
 
+    // Validate open_positions does not exceed max_positions (if both provided)
+    if (max_positions !== undefined && open_positions !== undefined) {
+      if (open_positions > max_positions) {
+        return sendError(res, 'Open positions cannot exceed max positions', 400);
+      }
+    }
+
     // Create job with all related data in a transaction with increased timeout
     const result = await prisma.$transaction(async (tx) => {
       // 1. Create Job
@@ -170,6 +199,7 @@ const createJobComplete = async (req: Request, res: Response) => {
         data: {
           organization_id,
           manager_id,
+          company_office_id,
           job_title,
           status,
           job_type,
@@ -180,6 +210,8 @@ const createJobComplete = async (req: Request, res: Response) => {
           start_date: start_date ? new Date(start_date) : undefined,
           end_date: end_date ? new Date(end_date) : undefined,
           created_by_user_id,
+          max_positions,
+          open_positions,
         },
       });
 
@@ -274,6 +306,17 @@ const createJobComplete = async (req: Request, res: Response) => {
             user_id: true,
             name: true,
             email: true,
+          },
+        },
+        company_office: {
+          select: {
+            company_office_id: true,
+            office_name: true,
+            city: true,
+            state: true,
+            country: true,
+            type: true,
+            address: true,
           },
         },
         job_detail: true,

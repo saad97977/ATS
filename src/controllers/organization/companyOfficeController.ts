@@ -315,15 +315,7 @@ const getOfficesByOrganization = async (req: Request, res: Response) => {
           { is_primary: 'desc' },
           { office_name: 'asc' },
         ],
-        include: {
-          organization: {
-            select: {
-              organization_id: true,
-              name: true,
-              website: true,
-            },
-          },
-        },
+        
       }),
       prisma.companyOffice.count({
         where: {

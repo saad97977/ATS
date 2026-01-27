@@ -1,1 +1,1 @@
-{"version":3,"file":"fullJobController.d.ts","sourceRoot":"","sources":["../../../../src/controllers/job/fullJobController.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,OAAO,EAAE,QAAQ,EAAE,MAAM,SAAS,CAAC;AA0U5C;;GAEG;AACH,eAAO,MAAM,qBAAqB;6BAxQI,OAAO,OAAO,QAAQ;CA0Q3D,CAAC"}
+{"version":3,"file":"fullJobController.d.ts","sourceRoot":"","sources":["../../../../src/controllers/job/fullJobController.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,OAAO,EAAE,QAAQ,EAAE,MAAM,SAAS,CAAC;AAqX5C;;GAEG;AACH,eAAO,MAAM,qBAAqB;6BA9SI,OAAO,OAAO,QAAQ;CAgT3D,CAAC"}

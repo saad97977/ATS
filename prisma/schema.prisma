@@ -110,6 +110,7 @@ model Organization {
   phone           String?
   created_by_user_id String
   created_at      DateTime           @default(now())
+  last_updated_at DateTime?          @updatedAt   // automatically set whenever the row is updated
 
   // Relations
   addresses          OrganizationAddress[]
@@ -298,6 +299,10 @@ model Job {
   end_date        DateTime?
   created_at      DateTime  @default(now())
   created_by_user_id String
+  max_positions     Int?
+  open_positions    Int?
+  company_office_id String?
+
 
 
   // Relations
@@ -311,6 +316,8 @@ model Job {
   job_rates     JobRate[]
   applications  Application[]
   pipeline_stages PipelineStage[]
+  company_office  CompanyOffice? @relation(fields: [company_office_id], references: [company_office_id])
+
 
   @@index([created_by_user_id])
   @@index([organization_id])
@@ -348,6 +355,8 @@ model CompanyOffice {
 
   // Relations
   organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  jobs         Job[]        // Add this reverse relation
+
 
   @@index([organization_id])
   @@map("company_offices")

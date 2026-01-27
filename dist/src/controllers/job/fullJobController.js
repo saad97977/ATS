@@ -44,6 +44,7 @@ const createJobCompleteSchema = zod_1.z.object({
     // Core Job fields
     organization_id: zod_1.z.string().uuid('Valid organization ID is required'),
     manager_id: zod_1.z.string().uuid('Valid manager ID is required').optional(),
+    company_office_id: zod_1.z.string().uuid('Valid company office ID is required').optional(),
     job_title: zod_1.z.string().min(1, 'Job title is required'),
     status: zod_1.z.enum(['DRAFT', 'OPEN', 'CLOSED']).optional().default('DRAFT'),
     job_type: zod_1.z.enum(['TEMPORARY', 'PERMANENT']),
@@ -54,6 +55,9 @@ const createJobCompleteSchema = zod_1.z.object({
     start_date: zod_1.z.string().datetime().optional(),
     end_date: zod_1.z.string().datetime().optional(),
     created_by_user_id: zod_1.z.string().uuid('Valid user ID is required'),
+    // New fields
+    max_positions: zod_1.z.number().int().min(1, 'Max positions must be at least 1').optional(),
+    open_positions: zod_1.z.number().int().min(0, 'Open positions cannot be negative').optional(),
     // Related entities
     job_detail: jobDetailSchema.optional(),
     job_notes: zod_1.z.array(jobNoteSchema).optional(),
@@ -75,7 +79,7 @@ const createJobComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { organization_id, manager_id, job_title, status, job_type, location, days_active, days_inactive, approved, start_date, end_date, created_by_user_id, job_detail, job_notes, job_rates, job_owners, } = validation.data;
+        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, approved, start_date, end_date, created_by_user_id, max_positions, open_positions, job_detail, job_notes, job_rates, job_owners, } = validation.data;
         // Check if organization exists
         const organizationExists = await prisma_config_1.default.organization.findUnique({
             where: { organization_id },
@@ -97,6 +101,18 @@ const createJobComplete = async (req, res) => {
             });
             if (!managerExists) {
                 return (0, response_1.sendError)(res, 'Manager user not found', 404);
+            }
+        }
+        // Check if company office exists and belongs to the organization (if provided)
+        if (company_office_id) {
+            const companyOfficeExists = await prisma_config_1.default.companyOffice.findFirst({
+                where: {
+                    company_office_id,
+                    organization_id, // Ensure office belongs to the organization
+                },
+            });
+            if (!companyOfficeExists) {
+                return (0, response_1.sendError)(res, 'Company office not found or does not belong to the organization', 404);
             }
         }
         // Validate job owner users exist (if provided)
@@ -125,6 +141,12 @@ const createJobComplete = async (req, res) => {
                 return (0, response_1.sendError)(res, 'Start date must be before end date', 400);
             }
         }
+        // Validate open_positions does not exceed max_positions (if both provided)
+        if (max_positions !== undefined && open_positions !== undefined) {
+            if (open_positions > max_positions) {
+                return (0, response_1.sendError)(res, 'Open positions cannot exceed max positions', 400);
+            }
+        }
         // Create job with all related data in a transaction with increased timeout
         const result = await prisma_config_1.default.$transaction(async (tx) => {
             // 1. Create Job
@@ -132,6 +154,7 @@ const createJobComplete = async (req, res) => {
                 data: {
                     organization_id,
                     manager_id,
+                    company_office_id,
                     job_title,
                     status,
                     job_type,
@@ -142,6 +165,8 @@ const createJobComplete = async (req, res) => {
                     start_date: start_date ? new Date(start_date) : undefined,
                     end_date: end_date ? new Date(end_date) : undefined,
                     created_by_user_id,
+                    max_positions,
+                    open_positions,
                 },
             });
             // 2. Create JobDetail (if provided)
@@ -230,6 +255,17 @@ const createJobComplete = async (req, res) => {
                         user_id: true,
                         name: true,
                         email: true,
+                    },
+                },
+                company_office: {
+                    select: {
+                        company_office_id: true,
+                        office_name: true,
+                        city: true,
+                        state: true,
+                        country: true,
+                        type: true,
+                        address: true,
                     },
                 },
                 job_detail: true,
