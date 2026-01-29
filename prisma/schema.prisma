@@ -243,7 +243,7 @@ model Contract {
 model OrganizationDocumentTitle {
   document_title_id String @id @default(uuid())
   organization_id   String 
-  document_title    String @unique
+  document_title    String
 
   // Relations
   organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
@@ -260,7 +260,7 @@ model OrganizationDocument {
   document_title_id String
   organization_id   String
   document_type     String
-  document_name     String    @unique
+  document_name     String    
   user_id           String
   file              String
   privacy           Privacy

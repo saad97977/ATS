@@ -25,69 +25,11 @@ const baseCrud = createCrudController({
 // ===============================
 // GET ALL (FLAT RESPONSE)
 // ===============================
-// const getAllOrganizations = async (req: Request, res: Response) => {
-//   try {
-//     const page = Math.max(1, parseInt(req.query.page as string) || 1);
-//     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
-//     const skip = (page - 1) * limit;
 
-//     const [rows, total] = await Promise.all([
-//       prisma.organization.findMany({
-//         skip,
-//         take: limit,
-//         orderBy: { created_at: 'desc' },
-//         include: {
-//           created_by: {
-//             select: {
-//               user_id: true,
-//               name: true,
-//               email: true,
-//               user_role: {
-//                 select: {
-//                   role: {
-//                     select: {
-//                       role_name: true,
-//                     },
-//                   },
-//                 },
-//               },
-//             },
-//           },
-//         },
-//       }),
-//       prisma.organization.count(),
-//     ]);
-
-//     const data = rows.map(org => ({
-//       organization_id: org.organization_id,
-//       name: org.name,
-//       website: org.website,
-//       status: org.status,
-//       phone: org.phone,
-//       created_at: org.created_at,
-//       created_by_user_id: org.created_by_user_id,
-//       created_by_name: org.created_by?.name ?? null,
-//       created_by_email: org.created_by?.email ?? null,
-//       created_by_role: org.created_by?.user_role?.role?.role_name ?? null,
-//     }));
-
-//     return sendSuccess(res, {
-//       data,
-//       paging: {
-//         total,
-//         page,
-//         limit,
-//         totalPages: Math.ceil(total / limit),
-//       },
-//     });
-//   } catch (err) {
-//     console.error('Error fetching organizations:', err);
-//     return sendError(res, 'Failed to fetch organizations', 500);
-//   }
-// };
 const getAllOrganizations = async (req: Request, res: Response) => {
   try {
     const getAll = req.query.all === 'true';
+    const statusFilter = req.query.status as string | undefined;
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = getAll
@@ -96,15 +38,38 @@ const getAllOrganizations = async (req: Request, res: Response) => {
 
     const skip = getAll ? undefined : (page - 1) * limit!;
 
-    const [rows, total] = await Promise.all([
+    // Build where clause for status filter
+    const whereClause: any = {};
+    if (statusFilter) {
+      whereClause.status = statusFilter.toUpperCase();
+    }
+
+    const [rows, total, totalActive] = await Promise.all([
       prisma.organization.findMany({
         skip,
         take: limit,
+        where: whereClause,
         orderBy: { created_at: 'desc' },
         select: getAll
           ? {
               organization_id: true,
               name: true,
+              status: true,
+              jobs: {
+                select: {
+                  _count: {
+                    select: {
+                      applications: true,
+                    },
+                  },
+                },
+              },
+              _count: {
+                select: {
+                  jobs: true,
+                  organization_users: true,
+                },
+              },
             }
           : {
               organization_id: true,
@@ -129,16 +94,46 @@ const getAllOrganizations = async (req: Request, res: Response) => {
                   },
                 },
               },
+              jobs: {
+                select: {
+                  _count: {
+                    select: {
+                      applications: true,
+                    },
+                  },
+                },
+              },
+              _count: {
+                select: {
+                  jobs: true,
+                  organization_users: true,
+                },
+              },
             },
       }),
-      prisma.organization.count(),
+      prisma.organization.count({ where: whereClause }),
+      prisma.organization.count({
+        where: {
+          status: 'ACTIVE',
+        },
+      }),
     ]);
 
-    // If all=true → data already in final shape
+    // If all=true → data already in final shape with counts
     if (getAll) {
+      const formattedData = rows.map((org: any) => ({
+        organization_id: org.organization_id,
+        name: org.name,
+        status: org.status,
+        jobs: org._count.jobs,
+        applicants: org.jobs.reduce((sum: number, job: any) => sum + job._count.applications, 0),
+        users: org._count.organization_users,
+      }));
+
       return sendSuccess(res, {
-        data: rows,
+        data: formattedData,
         paging: null,
+        totalActive,
       });
     }
 
@@ -154,6 +149,9 @@ const getAllOrganizations = async (req: Request, res: Response) => {
       created_by_name: org.created_by?.name ?? null,
       created_by_email: org.created_by?.email ?? null,
       created_by_role: org.created_by?.user_role?.role?.role_name ?? null,
+      jobs: org._count.jobs,
+      applicants: org.jobs.reduce((sum: number, job: any) => sum + job._count.applications, 0),
+      users: org._count.organization_users,
     }));
 
     return sendSuccess(res, {
@@ -164,14 +162,13 @@ const getAllOrganizations = async (req: Request, res: Response) => {
         limit,
         totalPages: Math.ceil(total / limit!),
       },
+      totalActive,
     });
   } catch (err) {
     console.error('Error fetching organizations:', err);
     return sendError(res, 'Failed to fetch organizations', 500);
   }
 };
-
-
 
 
 // ===============================
