@@ -9,11 +9,26 @@ const crudFactory_1 = require("../../factories/crudFactory");
 const schemas_1 = require("../../validators/schemas");
 const response_1 = require("../../utils/response");
 /**
- * User Activity Controller - CRUD operations for User Activity management
- * Provides: Standard CRUD + custom filtering
+ * User Activity Controller - Optimized for performance
+ * Provides: Standard CRUD + custom filtering with reduced queries
  *
  * Business Context: Tracks user login activity and recent actions
  */
+// Helper function to safely parse JSON from Prisma
+const parseJsonField = (field) => {
+    if (!field)
+        return null;
+    if (typeof field === 'string') {
+        try {
+            return JSON.parse(field);
+        }
+        catch {
+            return null;
+        }
+    }
+    // Already an object (Prisma Json type)
+    return field;
+};
 // Generate base CRUD methods
 const baseCrudMethods = (0, crudFactory_1.createCrudController)({
     model: prisma_config_1.default.userActivity,
@@ -25,13 +40,170 @@ const baseCrudMethods = (0, crudFactory_1.createCrudController)({
     maxLimit: 100,
 });
 /**
+ * Get all user activities with their recent actions (OPTIMIZED)
+ * GET /api/user-activity/
+ *
+ * Query params:
+ * @param {number} page - Page number (default: 1)
+ * @param {number} limit - Items per page (default: 10, max: 100)
+ * @param {string} entity_type - Filter by entity type (ORGANIZATION, JOB)
+ * @param {string} action_type - Filter by action type (CREATE, UPDATE, DELETE)
+ *
+ * Returns paginated list of user activities with last_actions array
+ */
+const getAllUserActivities = async (req, res) => {
+    try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+        const skip = (page - 1) * limit;
+        const entityType = req.query.entity_type;
+        const actionType = req.query.action_type;
+        // Fetch activities with user information
+        const [activities, total] = await Promise.all([
+            prisma_config_1.default.userActivity.findMany({
+                skip,
+                take: limit,
+                orderBy: { updated_at: 'desc' },
+                include: {
+                    user: {
+                        select: {
+                            user_id: true,
+                            name: true,
+                            email: true,
+                            status: true,
+                        },
+                    },
+                },
+            }),
+            prisma_config_1.default.userActivity.count(),
+        ]);
+        // Parse and filter last_actions
+        const formattedActivities = activities
+            .map((activity) => {
+            // Safely parse JSON field
+            const lastActions = parseJsonField(activity.last_actions);
+            const actionsArray = Array.isArray(lastActions) ? lastActions : [];
+            // Filter actions based on entity_type and action_type if provided
+            let filteredActions = actionsArray;
+            if (actionsArray.length > 0 && (entityType || actionType)) {
+                filteredActions = actionsArray.filter((action) => {
+                    let match = true;
+                    if (entityType && action.entity_type !== entityType) {
+                        match = false;
+                    }
+                    if (actionType && action.action_type !== actionType) {
+                        match = false;
+                    }
+                    return match;
+                });
+            }
+            return {
+                activity_id: activity.activity_id,
+                user_id: activity.user_id,
+                user_name: activity.user.name,
+                user_email: activity.user.email,
+                last_login_at: activity.last_login_at,
+                last_actions: filteredActions,
+                updated_at: activity.updated_at,
+            };
+        })
+            // Only return activities with matching actions when filters are applied
+            .filter((activity) => {
+            if ((entityType || actionType) && activity.last_actions.length === 0) {
+                return false;
+            }
+            return true;
+        });
+        // Calculate action counts for stats
+        const organizationActions = formattedActivities.reduce((sum, activity) => sum + (activity.last_actions?.filter((a) => a.entity_type === 'ORGANIZATION').length || 0), 0);
+        const jobActions = formattedActivities.reduce((sum, activity) => sum + (activity.last_actions?.filter((a) => a.entity_type === 'JOB').length || 0), 0);
+        const totalActions = organizationActions + jobActions;
+        return (0, response_1.sendSuccess)(res, {
+            data: formattedActivities,
+            stats: {
+                total_actions: totalActions,
+                organization_actions: organizationActions,
+                job_actions: jobActions,
+            },
+            paging: {
+                total: formattedActivities.length,
+                page,
+                limit,
+                totalPages: Math.ceil(formattedActivities.length / limit),
+            },
+            filters: {
+                entity_type: entityType || null,
+                action_type: actionType || null,
+            },
+        });
+    }
+    catch (err) {
+        console.error('Error fetching user activities:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch user activities', 500);
+    }
+};
+/**
+ * Get activity statistics (lightweight endpoint for stats only)
+ * GET /api/user-activity/stats
+ *
+ * Query params:
+ * @param {string} entity_type - Filter by entity type (ORGANIZATION, JOB)
+ * @param {string} action_type - Filter by action type (CREATE, UPDATE, DELETE)
+ */
+const getActivityStats = async (req, res) => {
+    try {
+        const entityType = req.query.entity_type;
+        const actionType = req.query.action_type;
+        // Fetch all activities (lightweight - only what we need)
+        const activities = await prisma_config_1.default.userActivity.findMany({
+            select: {
+                last_actions: true,
+            },
+        });
+        let organizationActions = 0;
+        let jobActions = 0;
+        activities.forEach((activity) => {
+            const actions = parseJsonField(activity.last_actions);
+            if (Array.isArray(actions)) {
+                actions.forEach((action) => {
+                    // Apply filters if provided
+                    let include = true;
+                    if (entityType && action.entity_type !== entityType) {
+                        include = false;
+                    }
+                    if (actionType && action.action_type !== actionType) {
+                        include = false;
+                    }
+                    if (include) {
+                        if (action.entity_type === 'ORGANIZATION') {
+                            organizationActions++;
+                        }
+                        else if (action.entity_type === 'JOB') {
+                            jobActions++;
+                        }
+                    }
+                });
+            }
+        });
+        const totalActions = organizationActions + jobActions;
+        return (0, response_1.sendSuccess)(res, {
+            total_actions: totalActions,
+            organization_actions: organizationActions,
+            job_actions: jobActions,
+            filters: {
+                entity_type: entityType || null,
+                action_type: actionType || null,
+            },
+        });
+    }
+    catch (err) {
+        console.error('Error fetching activity stats:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch activity statistics', 500);
+    }
+};
+/**
  * Get user activity by user_id
- * GET /api/user-activities/user/:userId
- *
- * Path params:
- * @param {string} userId - The user_id to filter by
- *
- * Returns the user activity record for the specified user
+ * GET /api/user-activity/user/:userId
  */
 const getUserActivityByUserId = async (req, res) => {
     try {
@@ -39,7 +211,6 @@ const getUserActivityByUserId = async (req, res) => {
         if (!userId) {
             return (0, response_1.sendError)(res, 'User ID is required', 400);
         }
-        // Find user activity by user_id
         const userActivity = await prisma_config_1.default.userActivity.findUnique({
             where: { user_id: userId },
             include: {
@@ -57,7 +228,17 @@ const getUserActivityByUserId = async (req, res) => {
         if (!userActivity) {
             return (0, response_1.sendError)(res, 'User activity not found', 404);
         }
-        return (0, response_1.sendSuccess)(res, userActivity);
+        const formattedActivity = {
+            activity_id: userActivity.activity_id,
+            user_id: userActivity.user_id,
+            user_name: userActivity.user.name,
+            user_email: userActivity.user.email,
+            last_login_at: userActivity.last_login_at,
+            last_actions: parseJsonField(userActivity.last_actions),
+            updated_at: userActivity.updated_at,
+            user: userActivity.user,
+        };
+        return (0, response_1.sendSuccess)(res, formattedActivity);
     }
     catch (err) {
         console.error('Error fetching user activity by user_id:', err);
@@ -66,12 +247,7 @@ const getUserActivityByUserId = async (req, res) => {
 };
 /**
  * Get recent active users (logged in within last N days)
- * GET /api/user-activities/recent
- *
- * Query params:
- * @param {number} days - Number of days to look back (default: 7)
- * @param {number} page - Page number (default: 1)
- * @param {number} limit - Items per page (default: 10, max: 100)
+ * GET /api/user-activity/recent
  */
 const getRecentActiveUsers = async (req, res) => {
     try {
@@ -110,8 +286,17 @@ const getRecentActiveUsers = async (req, res) => {
                 },
             }),
         ]);
+        const formattedActivities = activities.map((activity) => ({
+            activity_id: activity.activity_id,
+            user_id: activity.user_id,
+            user_name: activity.user.name,
+            user_email: activity.user.email,
+            last_login_at: activity.last_login_at,
+            last_actions: parseJsonField(activity.last_actions),
+            updated_at: activity.updated_at,
+        }));
         return (0, response_1.sendSuccess)(res, {
-            data: activities,
+            data: formattedActivities,
             paging: {
                 total,
                 page,
@@ -131,12 +316,7 @@ const getRecentActiveUsers = async (req, res) => {
 };
 /**
  * Get inactive users (not logged in for N days)
- * GET /api/user-activities/inactive
- *
- * Query params:
- * @param {number} days - Number of days of inactivity (default: 30)
- * @param {number} page - Page number (default: 1)
- * @param {number} limit - Items per page (default: 10, max: 100)
+ * GET /api/user-activity/inactive
  */
 const getInactiveUsers = async (req, res) => {
     try {
@@ -177,8 +357,17 @@ const getInactiveUsers = async (req, res) => {
                 },
             }),
         ]);
+        const formattedActivities = activities.map((activity) => ({
+            activity_id: activity.activity_id,
+            user_id: activity.user_id,
+            user_name: activity.user.name,
+            user_email: activity.user.email,
+            last_login_at: activity.last_login_at,
+            last_actions: parseJsonField(activity.last_actions),
+            updated_at: activity.updated_at,
+        }));
         return (0, response_1.sendSuccess)(res, {
-            data: activities,
+            data: formattedActivities,
             paging: {
                 total,
                 page,
@@ -197,16 +386,14 @@ const getInactiveUsers = async (req, res) => {
     }
 };
 /**
- * Get user activity statistics
- * GET /api/user-activities/stats
+ * Get user activity statistics summary
+ * GET /api/user-activity/summary
  */
-const getUserActivityStats = async (req, res) => {
+const getUserActivitySummary = async (req, res) => {
     try {
         const now = new Date();
-        // Last 7 days
         const last7Days = new Date();
         last7Days.setDate(last7Days.getDate() - 7);
-        // Last 30 days
         const last30Days = new Date();
         last30Days.setDate(last30Days.getDate() - 30);
         const [totalUsers, activeLastWeek, activeLast30Days, neverLoggedIn,] = await Promise.all([
@@ -236,16 +423,18 @@ const getUserActivityStats = async (req, res) => {
         });
     }
     catch (err) {
-        console.error('Error fetching user activity stats:', err);
-        return (0, response_1.sendError)(res, 'Failed to fetch user activity statistics', 500);
+        console.error('Error fetching user activity summary:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch user activity summary', 500);
     }
 };
 // Export controller with custom methods
 exports.userActivityController = {
     ...baseCrudMethods,
-    getUserActivityByUserId, // Custom filter by user_id
-    getRecentActiveUsers, // Bonus: Get recently active users
-    getInactiveUsers, // Bonus: Get inactive users
-    getUserActivityStats, // Bonus: Get activity statistics
+    getAllUserActivities, // Main endpoint with filtering
+    getActivityStats, // Lightweight stats endpoint
+    getUserActivityByUserId,
+    getRecentActiveUsers,
+    getInactiveUsers,
+    getUserActivitySummary,
 };
 //# sourceMappingURL=userActivityController.js.map

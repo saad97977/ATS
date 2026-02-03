@@ -33,6 +33,75 @@ const baseCrudMethods = (0, crudFactory_1.createCrudController)({
     maxLimit: 100,
 });
 /**
+ * Override getAll to include necessary relationships for table view
+ * GET /api/applications
+ */
+const getAllApplications = async (req, res) => {
+    try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+        const skip = (page - 1) * limit;
+        const [applications, total] = await Promise.all([
+            prisma_config_1.default.application.findMany({
+                skip,
+                take: limit,
+                orderBy: { applied_at: 'desc' },
+                include: {
+                    job: {
+                        select: {
+                            job_id: true,
+                            job_title: true,
+                            status: true,
+                            job_type: true,
+                            location: true,
+                            organization: {
+                                select: {
+                                    organization_id: true,
+                                    name: true,
+                                    website: true,
+                                },
+                            },
+                        },
+                    },
+                    applicant: {
+                        select: {
+                            applicant_id: true,
+                            full_name: true,
+                            status: true,
+                            contact: {
+                                select: {
+                                    email: true,
+                                    phone: true,
+                                },
+                            },
+                        },
+                    },
+                    evaluations: {
+                        select: {
+                            ai_score: true,
+                            evaluated_at: true,
+                        },
+                    },
+                },
+            }),
+            prisma_config_1.default.application.count(),
+        ]);
+        return (0, response_1.sendSuccess)(res, {
+            data: applications,
+            paging: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+    }
+    catch (err) {
+        console.error('Error fetching applications:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch applications', 500);
+    }
+};
+/**
  * Override getById to include full related data
  * GET /api/applications/:id
  */
@@ -127,6 +196,20 @@ const getApplicationsByJob = async (req, res) => {
                 take: limit,
                 orderBy: { applied_at: 'desc' },
                 include: {
+                    job: {
+                        select: {
+                            job_id: true,
+                            job_title: true,
+                            job_type: true,
+                            location: true,
+                            organization: {
+                                select: {
+                                    organization_id: true,
+                                    name: true,
+                                },
+                            },
+                        },
+                    },
                     applicant: {
                         select: {
                             applicant_id: true,
@@ -206,9 +289,27 @@ const getApplicationsByApplicant = async (req, res) => {
                             },
                         },
                     },
+                    applicant: {
+                        select: {
+                            applicant_id: true,
+                            full_name: true,
+                            contact: {
+                                select: {
+                                    email: true,
+                                    phone: true,
+                                },
+                            },
+                        },
+                    },
                     pipeline_stages: {
                         orderBy: { pipeline_date: 'desc' },
                         take: 1,
+                    },
+                    evaluations: {
+                        select: {
+                            ai_score: true,
+                            evaluated_at: true,
+                        },
                     },
                 },
             }),
@@ -264,9 +365,11 @@ const getApplicationsByStatus = async (req, res) => {
                         select: {
                             job_id: true,
                             job_title: true,
+                            job_type: true,
                             location: true,
                             organization: {
                                 select: {
+                                    organization_id: true,
                                     name: true,
                                 },
                             },
@@ -282,6 +385,12 @@ const getApplicationsByStatus = async (req, res) => {
                                     phone: true,
                                 },
                             },
+                        },
+                    },
+                    evaluations: {
+                        select: {
+                            ai_score: true,
+                            evaluated_at: true,
                         },
                     },
                 },
@@ -310,6 +419,7 @@ const getApplicationsByStatus = async (req, res) => {
 /**
  * Custom create method to check for duplicate applications
  * Prevents same applicant from applying to same job multiple times
+ * POST /api/applications
  */
 const createApplication = async (req, res) => {
     try {
@@ -344,6 +454,12 @@ const createApplication = async (req, res) => {
                     select: {
                         job_id: true,
                         job_title: true,
+                        organization: {
+                            select: {
+                                organization_id: true,
+                                name: true,
+                            },
+                        },
                     },
                 },
                 applicant: {
@@ -368,6 +484,76 @@ const createApplication = async (req, res) => {
             return (0, response_1.sendError)(res, 'Related job or applicant not found', 404);
         }
         return (0, response_1.sendError)(res, 'Failed to create application', 500);
+    }
+};
+/**
+ * Update application (PATCH)
+ * Only allows updating source and status fields
+ * PATCH /api/applications/:id
+ */
+const updateApplication = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id) {
+            return (0, response_1.sendError)(res, 'Application ID is required', 400);
+        }
+        // Validate request body
+        const validation = schemas_1.updateApplicationSchema.safeParse(req.body);
+        if (!validation.success) {
+            const errors = validation.error.issues.map((err) => ({
+                field: err.path.join('.'),
+                message: err.message,
+            }));
+            return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
+        }
+        // Check if application exists
+        const existing = await prisma_config_1.default.application.findUnique({
+            where: { application_id: id },
+        });
+        if (!existing) {
+            return (0, response_1.sendError)(res, 'Application not found', 404);
+        }
+        // Only allow updating source and status
+        const { source, status } = req.body;
+        const updateData = {};
+        if (source !== undefined)
+            updateData.source = source;
+        if (status !== undefined)
+            updateData.status = status;
+        const application = await prisma_config_1.default.application.update({
+            where: { application_id: id },
+            data: updateData,
+            include: {
+                job: {
+                    select: {
+                        job_id: true,
+                        job_title: true,
+                        organization: {
+                            select: {
+                                organization_id: true,
+                                name: true,
+                            },
+                        },
+                    },
+                },
+                applicant: {
+                    select: {
+                        applicant_id: true,
+                        full_name: true,
+                        contact: {
+                            select: {
+                                email: true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        return (0, response_1.sendSuccess)(res, application);
+    }
+    catch (err) {
+        console.error('Error updating application:', err);
+        return (0, response_1.sendError)(res, 'Failed to update application', 500);
     }
 };
 /**
@@ -407,8 +593,10 @@ const getApplicationStatsByJob = async (req, res) => {
 // Export controller with custom methods
 exports.applicationController = {
     ...baseCrudMethods,
+    getAll: getAllApplications, // Override with proper includes
     getById: getApplicationById, // Override with full details
     create: createApplication, // Override with duplicate check
+    update: updateApplication, // Override with field restrictions
     getApplicationsByJob, // Custom query by job
     getApplicationsByApplicant, // Custom query by applicant
     getApplicationsByStatus, // Custom query by status

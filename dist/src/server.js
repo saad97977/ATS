@@ -37,6 +37,7 @@ const userActivityRoutes_1 = __importDefault(require("./routes/user/userActivity
 const taskRoutes_1 = __importDefault(require("./routes/user/taskRoutes"));
 const fullOrganizationRoutes_1 = __importDefault(require("./routes/organization/fullOrganizationRoutes"));
 const fullJobRoutes_1 = __importDefault(require("./routes/job/fullJobRoutes"));
+const publicRoutes_1 = __importDefault(require("./routes/public_application/publicRoutes"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -105,6 +106,8 @@ app.use('/api/applicant-documents', applicantDocumentsRoutes_1.default);
 app.use('/api/applications', applicationRoutes_1.default);
 app.use('/api/interviews', interviewRoutes_1.default);
 app.use('/api/assignments', assignmentRoutes_1.default);
+// Public Application and Job Board Routes
+app.use('/api/public', publicRoutes_1.default);
 // For Complete Data:
 app.use('/organizations/complete', fullOrganizationRoutes_1.default);
 app.use('/jobs/complete', fullJobRoutes_1.default);
