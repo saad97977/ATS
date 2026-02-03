@@ -602,4 +602,5 @@ exports.applicationController = {
     getApplicationsByStatus, // Custom query by status
     getApplicationStatsByJob, // Get statistics for a job
 };
+// redeploy
 //# sourceMappingURL=applicationController.js.map
