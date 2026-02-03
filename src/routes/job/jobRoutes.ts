@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { jobController } from '../../controllers/job/jobController';
 import { filterJobs } from '../../controllers/job/jobFilterController';
+import { close } from 'inspector/promises';
 
 
 const router = Router();
@@ -26,6 +27,23 @@ router.get('/user/:userId', jobController.getJobsByUser);
 router.get('/user/:userId/organizations', jobController.getUserOrganizations);
 
 
+
+// Manager-specific status queries (must be before generic /:id route)
+router.get('/manager/:managerId/pending', jobController.getPendingJobsByManager);
+router.get('/manager/:managerId/approved', jobController.getApprovedJobsByManager);
+router.get('/manager/:managerId/declined', jobController.getDeclinedJobsByManager);
+router.get('/manager/:managerId/closed', jobController.getClosedJobsByManager);
+router.get('/manager/:managerId/draft', jobController.getDraftJobsByManager);
+
+
+// Job approval/decline actions
+router.patch('/:id/approve', jobController.approveJob);
+router.patch('/:id/decline', jobController.declineJob);
+
+// Auto-close expired jobs (CRON or manual trigger)
+router.patch('/auto-close', jobController.autoCloseExpiredJobs);
+
+
 /**
  * Job Filter Routes
  * Base path: /api/jobs/filter
@@ -42,9 +60,9 @@ router.get('/user/:userId/organizations', jobController.getUserOrganizations);
  * @queryparam {string} [search] - Global search across job_title, location, organization
  * @queryparam {string} [job_title] - Filter by job title
  * @queryparam {string} [location] - Filter by location
- * @queryparam {string|string[]} [status] - Filter by status (DRAFT, OPEN, CLOSED)
+ * @queryparam {string|string[]} [status] - Filter by status (DRAFT, PENDING, OPEN, CLOSED, DECLINED)
  * @queryparam {string|string[]} [job_type] - Filter by type (TEMPORARY, PERMANENT)
- * @queryparam {boolean} [approved] - Filter by approval status
+ * @queryparam {boolean} [approved] - Filter by approval status (true = OPEN, false = not OPEN)
  * @queryparam {string|string[]} [organization_id] - Filter by organization ID(s)
  * @queryparam {string} [organization_name] - Filter by organization name
  * @queryparam {string|string[]} [manager_id] - Filter by manager ID(s)
@@ -87,6 +105,12 @@ router.get('/user/:userId/organizations', jobController.getUserOrganizations);
  * GET /api/jobs/filter?status=OPEN&approved=true&page=1&limit=20
  * 
  * @example
+ * // Filter by status (including PENDING and DECLINED)
+ * GET /api/jobs/filter?status=PENDING
+ * GET /api/jobs/filter?status=DECLINED
+ * GET /api/jobs/filter?status=OPEN,CLOSED
+ * 
+ * @example
  * // Date range with organization filter
  * GET /api/jobs/filter?organization_id=123&created_from=2024-01-01&created_to=2024-12-31
  * 
@@ -95,12 +119,6 @@ router.get('/user/:userId/organizations', jobController.getUserOrganizations);
  * GET /api/jobs/filter?status=OPEN&applications_count_min=5&sort_by=applications_count&sort_order=desc
  */
 router.get('/filter', filterJobs);
-
-
-
-
-
-
 
 
 // Standard CRUD operations

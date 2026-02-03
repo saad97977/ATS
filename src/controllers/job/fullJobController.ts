@@ -192,6 +192,29 @@ const createJobComplete = async (req: Request, res: Response) => {
       }
     }
 
+    // Check for duplicate job (same title and organization, excluding CLOSED and DECLINED)
+    const existingJob = await prisma.job.findFirst({
+      where: {
+        organization_id,
+        job_title,
+        status: {
+          in: ['OPEN', 'PENDING', 'DRAFT'],
+        },
+      },
+    });
+
+    if (existingJob) {
+      return sendError(
+        res,
+        'Active job with this title already exists for this organization',
+        409,
+        [{
+          field: 'duplicate',
+          message: `Job already exists with job_id: ${existingJob.job_id}`,
+        }]
+      );
+    }
+    
     // Create job with all related data in a transaction with increased timeout
     const result = await prisma.$transaction(async (tx) => {
       // 1. Create Job
@@ -201,12 +224,12 @@ const createJobComplete = async (req: Request, res: Response) => {
           manager_id,
           company_office_id,
           job_title,
-          status,
+          status: 'PENDING', // Always start with PENDING
           job_type,
           location,
           days_active,
           days_inactive,
-          approved,
+          approved: false, // Not approved until status is OPEN
           start_date: start_date ? new Date(start_date) : undefined,
           end_date: end_date ? new Date(end_date) : undefined,
           created_by_user_id,

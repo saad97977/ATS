@@ -5,7 +5,8 @@ import { createJobSchema, updateJobSchema } from '../../validators/schemas';
 import { sendSuccess, sendError } from '../../utils/response';
 import { z } from 'zod';
 import { updateUserActivity } from '../../services/activityService';
-import { get } from 'http';
+
+
 /**
  * Job Controller - Custom CRUD for Job management
  * Provides: GET all, GET by id, GET by organization, GET by status, POST, PATCH, DELETE
@@ -14,12 +15,13 @@ import { get } from 'http';
  * - organization_id: Required UUID
  * - manager_id: Optional UUID
  * - job_title: Required string
- * - status: Enum (DRAFT, OPEN, CLOSED)
+ * - status: Enum (DRAFT, PENDING, OPEN, CLOSED, DECLINED)
  * - job_type: Enum (TEMPORARY, PERMANENT)
  * - location: Required string
- * - approved: Boolean (default: false)
+ * - approved: Boolean (derived from status: OPEN = approved)
  *
  * Business Context: Manages job postings and their lifecycle
+ * Status Flow: DRAFT -> PENDING (on create) -> OPEN (on approve) / DECLINED (on decline) -> CLOSED (auto/manual)
  */
 
 // Generate base CRUD methods
@@ -35,6 +37,7 @@ const baseCrudMethods = createCrudController({
 
 /**
  * Custom create method with validation and duplicate check
+ * New jobs are created with PENDING status by default
  */
 const createJob = async (req: Request, res: Response) => {
   try {
@@ -70,13 +73,13 @@ const createJob = async (req: Request, res: Response) => {
       }
     }
 
-    // Check for duplicate job (same title and organization)
+    // Check for duplicate job (same title and organization, excluding CLOSED and DECLINED)
     const existingJob = await prisma.job.findFirst({
       where: {
         organization_id,
         job_title,
         status: {
-          not: 'CLOSED',
+          in: ['OPEN', 'PENDING', 'DRAFT'],
         },
       },
     });
@@ -93,9 +96,13 @@ const createJob = async (req: Request, res: Response) => {
       );
     }
 
-    // Create new job
+    // Create new job with PENDING status by default
     const job = await prisma.job.create({
-      data: req.body,
+      data: {
+        ...req.body,
+        status: 'PENDING', // Always start with PENDING
+        approved: false, // Not approved until status is OPEN
+      },
       include: {
         organization: {
           select: {
@@ -127,6 +134,285 @@ const createJob = async (req: Request, res: Response) => {
 };
 
 /**
+ * Approve a job - Changes status from PENDING to OPEN
+ * PATCH /api/jobs/:id/approve
+ */
+const approveJob = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return sendError(res, 'Job ID is required', 400);
+    }
+
+    // Check if job exists
+    const existingJob = await prisma.job.findUnique({
+      where: { job_id: id },
+    });
+
+    if (!existingJob) {
+      return sendError(res, 'Job not found', 404);
+    }
+
+    // Check if job is in PENDING status
+    if (existingJob.status !== 'PENDING') {
+      return sendError(
+        res, 
+        `Cannot approve job. Current status is ${existingJob.status}. Only PENDING jobs can be approved.`, 
+        400
+      );
+    }
+
+    // Update job status to OPEN
+    const updatedJob = await prisma.job.update({
+      where: { job_id: id },
+      data: {
+        status: 'OPEN',
+        approved: true,
+      },
+      include: {
+        organization: {
+          select: {
+            organization_id: true,
+            name: true,
+            status: true,
+          },
+        },
+        manager: {
+          select: {
+            user_id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    // Log user activity
+    if (existingJob.created_by_user_id) {
+      await updateUserActivity(existingJob.created_by_user_id, {
+        action_type: 'APPROVE',
+        entity_type: 'JOB',
+        entity_id: id,
+        entity_name: updatedJob.job_title,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    return sendSuccess(res, updatedJob);
+  } catch (err: any) {
+    console.error('Error approving job:', err);
+    return sendError(res, 'Failed to approve job', 500);
+  }
+};
+
+/**
+ * Decline a job - Changes status from PENDING to DECLINED
+ * PATCH /api/jobs/:id/decline
+ */
+const declineJob = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {}; // Optional decline reason
+
+    if (!id) {
+      return sendError(res, 'Job ID is required', 400);
+    }
+
+    // Check if job exists
+    const existingJob = await prisma.job.findUnique({
+      where: { job_id: id },
+    });
+
+    if (!existingJob) {
+      return sendError(res, 'Job not found', 404);
+    }
+
+    // Check if job is in PENDING status
+    if (existingJob.status !== 'PENDING') {
+      return sendError(
+        res, 
+        `Cannot decline job. Current status is ${existingJob.status}. Only PENDING jobs can be declined.`, 
+        400
+      );
+    }
+
+    // Update job status to DECLINED
+    const updatedJob = await prisma.job.update({
+      where: { job_id: id },
+      data: {
+        status: 'DECLINED',
+        approved: false,
+      },
+      include: {
+        organization: {
+          select: {
+            organization_id: true,
+            name: true,
+            status: true,
+          },
+        },
+        manager: {
+          select: {
+            user_id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    // Log user activity
+    if (existingJob.created_by_user_id) {
+      await updateUserActivity(existingJob.created_by_user_id, {
+        action_type: 'DECLINE',
+        entity_type: 'JOB',
+        entity_id: id,
+        entity_name: updatedJob.job_title,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    return sendSuccess(res, updatedJob);
+  } catch (err: any) {
+    console.error('Error declining job:', err);
+    return sendError(res, 'Failed to decline job', 500);
+  }
+};
+
+/**
+ * Auto-close jobs past end_date
+ * CRON job or manual trigger: PATCH /api/jobs/auto-close
+ */
+const autoCloseExpiredJobs = async (req: Request, res: Response) => {
+  try {
+    const now = new Date();
+
+    // Find jobs that are past their end_date and still OPEN
+    const expiredJobs = await prisma.job.findMany({
+      where: {
+        status: 'OPEN',
+        end_date: {
+          lte: now,
+        },
+      },
+    });
+
+    if (expiredJobs.length === 0) {
+      return sendSuccess(res, {
+        message: 'No expired jobs found',
+        closed_count: 0,
+      });
+    }
+
+    // Close all expired jobs
+    const result = await prisma.job.updateMany({
+      where: {
+        job_id: {
+          in: expiredJobs.map(job => job.job_id),
+        },
+      },
+      data: {
+        status: 'CLOSED',
+        approved: false, // Closed jobs are no longer considered approved
+      },
+    });
+
+    return sendSuccess(res, {
+      message: 'Expired jobs closed successfully',
+      closed_count: result.count,
+      jobs_closed: expiredJobs.map(job => ({
+        job_id: job.job_id,
+        job_title: job.job_title,
+        end_date: job.end_date,
+      })),
+    });
+  } catch (err: any) {
+    console.error('Error auto-closing expired jobs:', err);
+    return sendError(res, 'Failed to auto-close expired jobs', 500);
+  }
+};
+
+/**
+ * Get jobs by status
+ * GET /api/jobs/status/:status (DRAFT, PENDING, OPEN, CLOSED, DECLINED)
+ */
+const getJobsByStatus = async (req: Request, res: Response) => {
+  try {
+    const { status } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+
+    if (!status) {
+      return sendError(res, 'Status is required', 400);
+    }
+
+    const validStatuses = ['DRAFT', 'PENDING', 'OPEN', 'CLOSED', 'DECLINED'];
+    if (!validStatuses.includes(status.toUpperCase())) {
+      return sendError(res, 'Invalid status. Must be DRAFT, PENDING, OPEN, CLOSED, or DECLINED', 400);
+    }
+
+    const [jobs, total] = await Promise.all([
+      prisma.job.findMany({
+        where: {
+          status: status.toUpperCase() as any,
+        },
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          organization: {
+            select: {
+              organization_id: true,
+              name: true,
+              status: true,
+            },
+          },
+          manager: {
+            select: {
+              user_id: true,
+              name: true,
+              email: true,
+            },
+          },
+          created_by: {
+            select: {
+              user_id: true,
+              name: true,
+              email: true,
+            },
+          },
+          _count: {
+            select: {
+              applications: true,
+            },
+          },
+        },
+      }),
+      prisma.job.count({
+        where: {
+          status: status.toUpperCase() as any,
+        },
+      }),
+    ]);
+
+    return sendSuccess(res, {
+      data: jobs,
+      paging: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    console.error('Error fetching jobs by status:', err);
+    return sendError(res, 'Failed to fetch jobs', 500);
+  }
+};
+
+/**
  * Override getById to include full related data
  * GET /api/jobs/:id
  */
@@ -145,7 +431,7 @@ const getJobById = async (req: Request, res: Response) => {
           include: {
             addresses: true,
             contacts: true,
-            company_offices: true, // ✅ Added: Include all company offices for the organization
+            company_offices: true,
           },
         },
         manager: {
@@ -155,14 +441,14 @@ const getJobById = async (req: Request, res: Response) => {
             email: true,
           },
         },
-        created_by: { // ✅ Added: Include job creator details
+        created_by: {
           select: {
             user_id: true,
             name: true,
             email: true,
           },
         },
-        company_office: { // ✅ Added: Include the specific company office linked to this job
+        company_office: {
           select: {
             company_office_id: true,
             office_name: true,
@@ -311,69 +597,6 @@ const getJobsByOrganization = async (req: Request, res: Response) => {
 };
 
 /**
- * Get jobs by status
- * GET /api/jobs/status/:status (DRAFT, OPEN, CLOSED)
- */
-const getJobsByStatus = async (req: Request, res: Response) => {
-  try {
-    const { status } = req.params;
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
-    const skip = (page - 1) * limit;
-
-    if (!status) {
-      return sendError(res, 'Status is required', 400);
-    }
-
-    const [jobs, total] = await Promise.all([
-      prisma.job.findMany({
-        where: {
-          status: status.toUpperCase() as any,
-        },
-        skip,
-        take: limit,
-        orderBy: { created_at: 'desc' },
-        include: {
-          organization: {
-            select: {
-              name: true,
-            },
-          },
-          manager: {
-            select: {
-              name: true,
-            },
-          },
-          _count: {
-            select: {
-              applications: true,
-            },
-          },
-        },
-      }),
-      prisma.job.count({
-        where: {
-          status: status.toUpperCase() as any,
-        },
-      }),
-    ]);
-
-    return sendSuccess(res, {
-      data: jobs,
-      paging: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    });
-  } catch (err: any) {
-    console.error('Error fetching jobs by status:', err);
-    return sendError(res, 'Failed to fetch jobs', 500);
-  }
-};
-
-/**
  * Get jobs by type
  * GET /api/jobs/type/:type (TEMPORARY, PERMANENT)
  */
@@ -433,10 +656,6 @@ const getJobsByType = async (req: Request, res: Response) => {
 
 /**
  * Get jobs by manager
- * GET /api/jobs/manager/:managerId
- */
-/**
- * Get jobs by manager
  * GET /api/jobs/manager/:managerId?approved=true/false
  */
 const getJobsByManager = async (req: Request, res: Response) => {
@@ -458,14 +677,15 @@ const getJobsByManager = async (req: Request, res: Response) => {
       manager_id: managerId,
     };
 
-    // Add approved filter if provided
+    // Add approved filter if provided (approved means status is OPEN)
     if (approvedQuery !== undefined) {
       if (approvedQuery === 'true') {
-        whereClause.approved = true;
+        whereClause.status = 'OPEN';
       } else if (approvedQuery === 'false') {
-        whereClause.approved = false;
+        whereClause.status = {
+          not: 'OPEN',
+        };
       }
-      // If approvedQuery is neither 'true' nor 'false', ignore it (fetch all)
     }
 
     const [jobs, total] = await Promise.all([
@@ -503,10 +723,8 @@ const getJobsByManager = async (req: Request, res: Response) => {
   }
 };
 
-
-
 /**
- * Get approved jobs
+ * Get approved jobs (status = OPEN)
  * GET /api/jobs/approved
  */
 const getApprovedJobs = async (req: Request, res: Response) => {
@@ -518,7 +736,7 @@ const getApprovedJobs = async (req: Request, res: Response) => {
     const [jobs, total] = await Promise.all([
       prisma.job.findMany({
         where: {
-          approved: true,
+          status: 'OPEN',
         },
         skip,
         take: limit,
@@ -538,7 +756,7 @@ const getApprovedJobs = async (req: Request, res: Response) => {
       }),
       prisma.job.count({
         where: {
-          approved: true,
+          status: 'OPEN',
         },
       }),
     ]);
@@ -559,7 +777,7 @@ const getApprovedJobs = async (req: Request, res: Response) => {
 };
 
 /**
- * Get active jobs (OPEN status and approved)
+ * Get active jobs (OPEN status)
  * GET /api/jobs/active
  */
 const getActiveJobs = async (req: Request, res: Response) => {
@@ -572,7 +790,6 @@ const getActiveJobs = async (req: Request, res: Response) => {
       prisma.job.findMany({
         where: {
           status: 'OPEN',
-          approved: true,
         },
         skip,
         take: limit,
@@ -599,7 +816,6 @@ const getActiveJobs = async (req: Request, res: Response) => {
       prisma.job.count({
         where: {
           status: 'OPEN',
-          approved: true,
         },
       }),
     ]);
@@ -634,8 +850,8 @@ const getJobStats = async (req: Request, res: Response) => {
       totalJobs,
       byStatus,
       byType,
-      approvedCount,
-      activeCount,
+      openCount,
+      pendingCount,
     ] = await Promise.all([
       prisma.job.count({ where: whereClause }),
       prisma.job.groupBy({
@@ -649,17 +865,17 @@ const getJobStats = async (req: Request, res: Response) => {
         _count: { job_id: true },
       }),
       prisma.job.count({
-        where: { ...whereClause, approved: true },
+        where: { ...whereClause, status: 'OPEN' },
       }),
       prisma.job.count({
-        where: { ...whereClause, status: 'OPEN', approved: true },
+        where: { ...whereClause, status: 'PENDING' },
       }),
     ]);
 
     return sendSuccess(res, {
       total: totalJobs,
-      approved: approvedCount,
-      active: activeCount,
+      open: openCount,
+      pending: pendingCount,
       by_status: byStatus.map(s => ({
         status: s.status,
         count: s._count.job_id,
@@ -674,9 +890,6 @@ const getJobStats = async (req: Request, res: Response) => {
     return sendError(res, 'Failed to fetch job statistics', 500);
   }
 };
-
-
-
 
 /**
  * Get all jobs with detailed information for table view
@@ -694,7 +907,10 @@ const getJobs = async (req: Request, res: Response) => {
     const whereClause: any = {};
     if (status) whereClause.status = (status as string).toUpperCase();
     if (job_type) whereClause.job_type = (job_type as string).toUpperCase();
-    if (approved !== undefined) whereClause.approved = approved === 'true';
+    // approved filter: true = OPEN, false = not OPEN
+    if (approved !== undefined) {
+      whereClause.status = approved === 'true' ? 'OPEN' : { not: 'OPEN' };
+    }
     if (organization_id) whereClause.organization_id = organization_id as string;
 
     const [jobs, total] = await Promise.all([
@@ -780,23 +996,9 @@ const getJobs = async (req: Request, res: Response) => {
   }
 };
 
-
-
-
-
-
-
-
 /**
  * Job Complete Update Controller
  * PATCH request to update Job with all related data in a single transaction
- * 
- * Updates:
- * - Job (base fields)
- * - JobDetail - create or update
- * - JobNote(s) - create, update, or delete
- * - JobRate(s) - create, update, or delete
- * - JobOwner(s) - create, update, or delete
  */
 
 // Validation Schemas for nested updates
@@ -838,12 +1040,11 @@ const updateJobCompleteSchema = z.object({
   manager_id: z.string().uuid('Valid manager ID is required').optional().nullable(),
   company_office_id: z.string().uuid('Valid company office ID is required').optional().nullable(),
   job_title: z.string().min(1, 'Job title is required').optional(),
-  status: z.enum(['DRAFT', 'OPEN', 'CLOSED']).optional(),
+  status: z.enum(['DRAFT', 'PENDING', 'OPEN', 'CLOSED', 'DECLINED']).optional(),
   job_type: z.enum(['TEMPORARY', 'PERMANENT']).optional(),
   location: z.string().min(1, 'Location is required').optional(),
   days_active: z.number().int().optional().nullable(),
   days_inactive: z.number().int().optional().nullable(),
-  approved: z.boolean().optional(),
   start_date: z.string().datetime().optional().nullable(),
   end_date: z.string().datetime().optional().nullable(),
   
@@ -858,25 +1059,9 @@ const updateJobCompleteSchema = z.object({
   job_owners: z.array(jobOwnerUpdateSchema).optional(),
 });
 
-
-
-
-
-
-
-
 /**
  * PATCH /api/jobs/:id
  * Updates job with all related data in a single transaction
- * 
- * Usage patterns:
- * 1. Update job base fields only: { job_title: "New Title" }
- * 2. Create job detail: { job_detail: { description: "...", _action: "create" } }
- * 3. Update job detail: { job_detail: { job_detail_id: "uuid", description: "...", _action: "update" } }
- * 4. Create new nested records: { job_notes: [{ note: "...", _action: "create" }] }
- * 5. Update existing nested records: { job_notes: [{ job_note_id: "uuid", note: "...", _action: "update" }] }
- * 6. Delete nested records: { job_rates: [{ job_rate_id: "uuid", _action: "delete" }] }
- * 7. Mixed operations: Combine create, update, delete in same request
  */
 const updateJobComplete = async (req: Request, res: Response) => {
   try {
@@ -907,7 +1092,6 @@ const updateJobComplete = async (req: Request, res: Response) => {
       location,
       days_active,
       days_inactive,
-      approved,
       start_date,
       end_date,
       max_positions,
@@ -962,7 +1146,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
       const companyOfficeExists = await prisma.companyOffice.findFirst({
         where: { 
           company_office_id,
-          organization_id: checkOrgId, // Ensure office belongs to the organization
+          organization_id: checkOrgId,
         },
       });
 
@@ -993,7 +1177,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
           );
         }
 
-        // Check for duplicate user_id in job_owners (excluding deletes)
+        // Check for duplicate user_id in job_owners
         const existingOwnerUserIds = existingJob.job_owners
           .filter(owner => !job_owners.some(jo => jo.job_owner_id === owner.job_owner_id && jo._action === 'delete'))
           .map(owner => owner.user_id);
@@ -1020,7 +1204,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
       }
     }
 
-    // Validate open_positions does not exceed max_positions (if updating either)
+    // Validate open_positions does not exceed max_positions
     const finalMaxPositions = max_positions !== undefined ? max_positions : existingJob.max_positions;
     const finalOpenPositions = open_positions !== undefined ? open_positions : existingJob.open_positions;
 
@@ -1030,7 +1214,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
       }
     }
 
-    // Check for duplicate job title (if updating title or organization)
+    // Check for duplicate job title (excluding CLOSED and DECLINED)
     const checkTitle = job_title || existingJob.job_title;
     const checkOrgId = organization_id || existingJob.organization_id;
 
@@ -1040,7 +1224,9 @@ const updateJobComplete = async (req: Request, res: Response) => {
         where: {
           organization_id: checkOrgId,
           job_title: checkTitle,
-          status: { not: 'CLOSED' },
+          status: { 
+            notIn: ['CLOSED', 'DECLINED']
+          },
           job_id: { not: id },
         },
       });
@@ -1058,6 +1244,15 @@ const updateJobComplete = async (req: Request, res: Response) => {
       }
     }
 
+    // Sync approved boolean with status
+    let syncedApproved = existingJob.approved;
+    const finalStatus = status || existingJob.status;
+
+    // If status is changing, update approved accordingly
+    if (status !== undefined) {
+      syncedApproved = status === 'OPEN';
+    }
+
     // Perform update in a transaction
     const result = await prisma.$transaction(async (tx) => {
       // 1. Update Job base fields
@@ -1066,12 +1261,14 @@ const updateJobComplete = async (req: Request, res: Response) => {
       if (manager_id !== undefined) jobUpdateData.manager_id = manager_id;
       if (company_office_id !== undefined) jobUpdateData.company_office_id = company_office_id;
       if (job_title !== undefined) jobUpdateData.job_title = job_title;
-      if (status !== undefined) jobUpdateData.status = status;
+      if (status !== undefined) {
+        jobUpdateData.status = status;
+        jobUpdateData.approved = status === 'OPEN';
+      }
       if (job_type !== undefined) jobUpdateData.job_type = job_type;
       if (location !== undefined) jobUpdateData.location = location;
       if (days_active !== undefined) jobUpdateData.days_active = days_active;
       if (days_inactive !== undefined) jobUpdateData.days_inactive = days_inactive;
-      if (approved !== undefined) jobUpdateData.approved = approved;
       if (start_date !== undefined) jobUpdateData.start_date = start_date ? new Date(start_date) : null;
       if (end_date !== undefined) jobUpdateData.end_date = end_date ? new Date(end_date) : null;
       if (max_positions !== undefined) jobUpdateData.max_positions = max_positions;
@@ -1088,7 +1285,6 @@ const updateJobComplete = async (req: Request, res: Response) => {
       let jobDetailResult = null;
       if (job_detail) {
         if (job_detail._action === 'update' && job_detail.job_detail_id) {
-          // Update existing job detail
           const updateData: any = {};
           if (job_detail.description !== undefined) updateData.description = job_detail.description;
           if (job_detail.skills !== undefined) updateData.skills = job_detail.skills;
@@ -1098,7 +1294,6 @@ const updateJobComplete = async (req: Request, res: Response) => {
             data: updateData,
           });
         } else if (job_detail._action === 'create' || !job_detail.job_detail_id) {
-          // Create new job detail (if none exists)
           if (!existingJob.job_detail) {
             jobDetailResult = await tx.jobDetail.create({
               data: {
@@ -1301,14 +1496,16 @@ const updateJobComplete = async (req: Request, res: Response) => {
       },
     });
 
-    // ✅ UPDATE USER ACTIVITY - Log job update
-    await updateUserActivity(existingJob.created_by_user_id, {
-      action_type: 'UPDATE',
-      entity_type: 'JOB',
-      entity_id: id,
-      entity_name: completeJob?.job_title || existingJob.job_title,
-      timestamp: new Date().toISOString(),
-    });
+    // Update user activity
+    if (existingJob.created_by_user_id) {
+      await updateUserActivity(existingJob.created_by_user_id, {
+        action_type: 'UPDATE',
+        entity_type: 'JOB',
+        entity_id: id,
+        entity_name: completeJob?.job_title || existingJob.job_title,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     return sendSuccess(res, {
       job: completeJob,
@@ -1335,7 +1532,6 @@ const updateJobComplete = async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Error updating job with complete data:', err);
 
-    // Handle Prisma errors
     if (err.code === 'P2002') {
       return sendError(res, 'Duplicate entry found', 409);
     }
@@ -1356,17 +1552,9 @@ const updateJobComplete = async (req: Request, res: Response) => {
   }
 };
 
-
-
-
-
-
-
-
 /**
  * Get jobs by user's organizations
  * GET /api/jobs/user/:userId
- * Returns all jobs from organizations where the user is an organization_user
  */
 const getJobsByUser = async (req: Request, res: Response) => {
   try {
@@ -1379,7 +1567,6 @@ const getJobsByUser = async (req: Request, res: Response) => {
       return sendError(res, 'User ID is required', 400);
     }
 
-    // Check if user exists
     const userExists = await prisma.user.findUnique({
       where: { user_id: userId },
     });
@@ -1388,7 +1575,6 @@ const getJobsByUser = async (req: Request, res: Response) => {
       return sendError(res, 'User not found', 404);
     }
 
-    // Get all organizations where user is an organization_user
     const userOrganizations = await prisma.organizationUser.findMany({
       where: {
         user_id: userId,
@@ -1398,7 +1584,6 @@ const getJobsByUser = async (req: Request, res: Response) => {
       },
     });
 
-    // If user is not associated with any organizations
     if (userOrganizations.length === 0) {
       return sendSuccess(res, {
         data: [],
@@ -1411,10 +1596,8 @@ const getJobsByUser = async (req: Request, res: Response) => {
       });
     }
 
-    // Extract organization IDs
     const organizationIds = userOrganizations.map(org => org.organization_id);
 
-    // Optional filters
     const { status, job_type, approved } = req.query;
     
     const whereClause: any = {
@@ -1425,9 +1608,11 @@ const getJobsByUser = async (req: Request, res: Response) => {
 
     if (status) whereClause.status = (status as string).toUpperCase();
     if (job_type) whereClause.job_type = (job_type as string).toUpperCase();
-    if (approved !== undefined) whereClause.approved = approved === 'true';
+    // approved filter: true = OPEN, false = not OPEN
+    if (approved !== undefined) {
+      whereClause.status = approved === 'true' ? 'OPEN' : { not: 'OPEN' };
+    }
 
-    // Fetch jobs and total count
     const [jobs, total] = await Promise.all([
       prisma.job.findMany({
         where: whereClause,
@@ -1462,7 +1647,6 @@ const getJobsByUser = async (req: Request, res: Response) => {
       }),
     ]);
 
-    // Transform data for response
     const transformedJobs = jobs.map(job => ({
       job_id: job.job_id,
       job_title: job.job_title,
@@ -1501,11 +1685,9 @@ const getJobsByUser = async (req: Request, res: Response) => {
   }
 };
 
-
 /**
  * Get user's organizations
  * GET /api/jobs/user/:userId/organizations
- * Returns all organizations where the user is an organization_user
  */
 const getUserOrganizations = async (req: Request, res: Response) => {
   try {
@@ -1515,7 +1697,6 @@ const getUserOrganizations = async (req: Request, res: Response) => {
       return sendError(res, 'User ID is required', 400);
     }
 
-    // Check if user exists
     const userExists = await prisma.user.findUnique({
       where: { user_id: userId },
     });
@@ -1524,7 +1705,6 @@ const getUserOrganizations = async (req: Request, res: Response) => {
       return sendError(res, 'User not found', 404);
     }
 
-    // Get all organizations where user is an organization_user
     const organizations = await prisma.organizationUser.findMany({
       where: {
         user_id: userId,
@@ -1556,6 +1736,361 @@ const getUserOrganizations = async (req: Request, res: Response) => {
 
 
 
+/**
+ * Get pending jobs by manager
+ * GET /api/jobs/manager/:managerId/pending
+ */
+const getPendingJobsByManager = async (req: Request, res: Response) => {
+  try {
+    const { managerId } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+
+    if (!managerId) {
+      return sendError(res, 'Manager ID is required', 400);
+    }
+
+    const [jobs, total] = await Promise.all([
+      prisma.job.findMany({
+        where: {
+          manager_id: managerId,
+          status: 'PENDING',
+        },
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          organization: {
+            select: {
+              organization_id: true,
+              name: true,
+              status: true,
+            },
+          },
+          manager: {
+            select: {
+              user_id: true,
+              name: true,
+              email: true,
+            },
+          },
+          job_detail: true,
+          _count: {
+            select: {
+              applications: true,
+              job_owners: true,
+            },
+          },
+        },
+      }),
+      prisma.job.count({
+        where: {
+          manager_id: managerId,
+          status: 'PENDING',
+        },
+      }),
+    ]);
+
+    return sendSuccess(res, {
+      data: jobs,
+      paging: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    console.error('Error fetching pending jobs by manager:', err);
+    return sendError(res, 'Failed to fetch pending jobs', 500);
+  }
+};
+
+/**
+ * Get approved/open jobs by manager
+ * GET /api/jobs/manager/:managerId/approved
+ */
+const getApprovedJobsByManager = async (req: Request, res: Response) => {
+  try {
+    const { managerId } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+
+    if (!managerId) {
+      return sendError(res, 'Manager ID is required', 400);
+    }
+
+    const [jobs, total] = await Promise.all([
+      prisma.job.findMany({
+        where: {
+          manager_id: managerId,
+          status: 'OPEN',
+        },
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          organization: {
+            select: {
+              organization_id: true,
+              name: true,
+              status: true,
+            },
+          },
+          manager: {
+            select: {
+              user_id: true,
+              name: true,
+              email: true,
+            },
+          },
+          job_detail: true,
+          _count: {
+            select: {
+              applications: true,
+              job_owners: true,
+            },
+          },
+        },
+      }),
+      prisma.job.count({
+        where: {
+          manager_id: managerId,
+          status: 'OPEN',
+        },
+      }),
+    ]);
+
+    return sendSuccess(res, {
+      data: jobs,
+      paging: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    console.error('Error fetching approved jobs by manager:', err);
+    return sendError(res, 'Failed to fetch approved jobs', 500);
+  }
+};
+
+/**
+ * Get declined jobs by manager
+ * GET /api/jobs/manager/:managerId/declined
+ */
+const getDeclinedJobsByManager = async (req: Request, res: Response) => {
+  try {
+    const { managerId } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+
+    if (!managerId) {
+      return sendError(res, 'Manager ID is required', 400);
+    }
+
+    const [jobs, total] = await Promise.all([
+      prisma.job.findMany({
+        where: {
+          manager_id: managerId,
+          status: 'DECLINED',
+        },
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          organization: {
+            select: {
+              organization_id: true,
+              name: true,
+              status: true,
+            },
+          },
+          manager: {
+            select: {
+              user_id: true,
+              name: true,
+              email: true,
+            },
+          },
+          job_detail: true,
+          _count: {
+            select: {
+              applications: true,
+              job_owners: true,
+            },
+          },
+        },
+      }),
+      prisma.job.count({
+        where: {
+          manager_id: managerId,
+          status: 'DECLINED',
+        },
+      }),
+    ]);
+
+    return sendSuccess(res, {
+      data: jobs,
+      paging: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    console.error('Error fetching declined jobs by manager:', err);
+    return sendError(res, 'Failed to fetch declined jobs', 500);
+  }
+};
+
+/**
+ * Get closed jobs by manager
+ * GET /api/jobs/manager/:managerId/closed
+ */
+const getClosedJobsByManager = async (req: Request, res: Response) => {
+  try {
+    const { managerId } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+
+    if (!managerId) {
+      return sendError(res, 'Manager ID is required', 400);
+    }
+
+    const [jobs, total] = await Promise.all([
+      prisma.job.findMany({
+        where: {
+          manager_id: managerId,
+          status: 'CLOSED',
+        },
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          organization: {
+            select: {
+              organization_id: true,
+              name: true,
+              status: true,
+            },
+          },
+          manager: {
+            select: {
+              user_id: true,
+              name: true,
+              email: true,
+            },
+          },
+          job_detail: true,
+          _count: {
+            select: {
+              applications: true,
+              job_owners: true,
+            },
+          },
+        },
+      }),
+      prisma.job.count({
+        where: {
+          manager_id: managerId,
+          status: 'CLOSED',
+        },
+      }),
+    ]);
+
+    return sendSuccess(res, {
+      data: jobs,
+      paging: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    console.error('Error fetching closed jobs by manager:', err);
+    return sendError(res, 'Failed to fetch closed jobs', 500);
+  }
+};
+
+/**
+ * Get draft jobs by manager
+ * GET /api/jobs/manager/:managerId/draft
+ */
+const getDraftJobsByManager = async (req: Request, res: Response) => {
+  try {
+    const { managerId } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+
+    if (!managerId) {
+      return sendError(res, 'Manager ID is required', 400);
+    }
+
+    const [jobs, total] = await Promise.all([
+      prisma.job.findMany({
+        where: {
+          manager_id: managerId,
+          status: 'DRAFT',
+        },
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          organization: {
+            select: {
+              organization_id: true,
+              name: true,
+              status: true,
+            },
+          },
+          manager: {
+            select: {
+              user_id: true,
+              name: true,
+              email: true,
+            },
+          },
+          job_detail: true,
+          _count: {
+            select: {
+              applications: true,
+              job_owners: true,
+            },
+          },
+        },
+      }),
+      prisma.job.count({
+        where: {
+          manager_id: managerId,
+          status: 'DRAFT',
+        },
+      }),
+    ]);
+
+    return sendSuccess(res, {
+      data: jobs,
+      paging: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    console.error('Error fetching draft jobs by manager:', err);
+    return sendError(res, 'Failed to fetch draft jobs', 500);
+  }
+};
+
 
 // Export controller with custom methods
 export const jobController = {
@@ -1563,7 +2098,7 @@ export const jobController = {
   create: createJob,
   getById: getJobById,
   update: updateJobComplete,
-  getAll : getJobs,
+  getAll: getJobs,
   getJobsByOrganization,
   getJobsByStatus,
   getJobsByType,
@@ -1572,6 +2107,14 @@ export const jobController = {
   getActiveJobs,
   getJobStats,
   getJobsByUser,
-  getUserOrganizations, 
+  getUserOrganizations,
+  approveJob,
+  declineJob,
+  autoCloseExpiredJobs,
+  getPendingJobsByManager,
+  getApprovedJobsByManager,
+  getDeclinedJobsByManager,
+  getClosedJobsByManager,
+  getDraftJobsByManager,
 
 };

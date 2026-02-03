@@ -305,6 +305,7 @@ model Job {
 
 
 
+
   // Relations
   organization  Organization   @relation(fields: [organization_id], references: [organization_id])
   manager       User?          @relation("JobManager", fields: [manager_id], references: [user_id])
@@ -703,8 +704,10 @@ enum Privacy {
 
 enum JobStatus {
   DRAFT
+  PENDING
   OPEN
   CLOSED
+  DECLINED
 }
 
 enum JobType {
@@ -721,7 +724,7 @@ enum ApplicantStatus {
   APPLIED
   PLACED
   REJECTED
-  SHORTLISTEDF
+  SHORTLISTED
   INTERVIEWING
 }
 
