@@ -132,9 +132,17 @@ const getApplicationById = async (req: Request, res: Response) => {
           include: {
             contact: true,
             demographic: true,
-            documents: true,
+            documents: {
+              where: {
+                application_id: id,  // Only documents for THIS application
+              },
+            },
             social_profiles: true,
-            work_history: true,
+            work_history: {
+              where: {
+                application_id: id,  // Only work history for THIS application
+              },
+            },
           },
         },
         interviews: {

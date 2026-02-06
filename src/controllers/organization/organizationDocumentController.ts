@@ -567,130 +567,130 @@ export const getAllOrganizationDocuments = async (req: Request, res: Response) =
 
 
 
-/**
- * View Organization Document Inline (like classroom - opens in browser)
- * UPDATED WITH PROPER CORS HEADERS
- */
-export const viewOrganizationDocument = async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    // Get document from database
-    const document = await prisma.organizationDocument.findUnique({
-      where: { document_id: id },
-    });
-
-    if (!document) {
-      return sendError(res, 'Organization Document not found', 404);
-    }
-
-    if (!document.file) {
-      return sendError(res, 'Document file not found', 404);
-    }
-
+  /**
+   * View Organization Document Inline (like classroom - opens in browser)
+   * UPDATED WITH PROPER CORS HEADERS
+   */
+  export const viewOrganizationDocument = async (req: Request, res: Response) => {
     try {
-      // Parse file metadata
-      const fileMetadata = JSON.parse(document.file);
-      
-      if (!fileMetadata.blobName) {
-        return sendError(res, 'Document blob reference not found', 404);
+      const { id } = req.params;
+
+      // Get document from database
+      const document = await prisma.organizationDocument.findUnique({
+        where: { document_id: id },
+      });
+
+      if (!document) {
+        return sendError(res, 'Organization Document not found', 404);
       }
 
-      // Download from Azure Blob Storage
-      const containerClient = await getContainerClient();
-      const blockBlobClient = containerClient.getBlockBlobClient(fileMetadata.blobName);
-
-      // Check if blob exists
-      const exists = await blockBlobClient.exists();
-      if (!exists) {
-        return sendError(res, 'Document file not found in storage', 404);
+      if (!document.file) {
+        return sendError(res, 'Document file not found', 404);
       }
 
-      // Download blob
-      const downloadResponse = await blockBlobClient.download();
-      
-      if (!downloadResponse.readableStreamBody) {
+      try {
+        // Parse file metadata
+        const fileMetadata = JSON.parse(document.file);
+        
+        if (!fileMetadata.blobName) {
+          return sendError(res, 'Document blob reference not found', 404);
+        }
+
+        // Download from Azure Blob Storage
+        const containerClient = await getContainerClient();
+        const blockBlobClient = containerClient.getBlockBlobClient(fileMetadata.blobName);
+
+        // Check if blob exists
+        const exists = await blockBlobClient.exists();
+        if (!exists) {
+          return sendError(res, 'Document file not found in storage', 404);
+        }
+
+        // Download blob
+        const downloadResponse = await blockBlobClient.download();
+        
+        if (!downloadResponse.readableStreamBody) {
+          return sendError(res, 'Failed to view document', 500);
+        }
+
+        // Set response headers for inline viewing
+        const originalFileName = fileMetadata.originalFileName || `${document.document_name}.pdf`;
+        const sanitizedFileName = originalFileName
+          .replace(/[^a-zA-Z0-9._\- ]/g, '')
+          .replace(/\s+/g, '_')
+          .trim();
+
+        const mimeType = fileMetadata.mimeType || 'application/pdf';
+
+        // IMPORTANT: Set CORS headers to allow cross-origin requests
+        res.setHeader('Access-Control-Allow-Origin', '*'); // Or specify your frontend domain
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length');
+        
+        res.setHeader('Content-Type', mimeType);
+        // Use 'inline' instead of 'attachment' to view in browser
+        res.setHeader('Content-Disposition', `inline; filename="${sanitizedFileName}"`);
+        if (downloadResponse.contentLength) {
+          res.setHeader('Content-Length', downloadResponse.contentLength);
+        }
+        // Allow browser to cache for better performance
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        // Security headers - DO NOT use X-Frame-Options or use ALLOWALL
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        // REMOVE or comment out X-Frame-Options to allow iframe embedding
+        // res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+
+        // Stream the blob to response
+        downloadResponse.readableStreamBody.pipe(res);
+
+      } catch (err: any) {
+        console.error('Error viewing from Azure:', err);
         return sendError(res, 'Failed to view document', 500);
       }
-
-      // Set response headers for inline viewing
-      const originalFileName = fileMetadata.originalFileName || `${document.document_name}.pdf`;
-      const sanitizedFileName = originalFileName
-        .replace(/[^a-zA-Z0-9._\- ]/g, '')
-        .replace(/\s+/g, '_')
-        .trim();
-
-      const mimeType = fileMetadata.mimeType || 'application/pdf';
-
-      // IMPORTANT: Set CORS headers to allow cross-origin requests
-      res.setHeader('Access-Control-Allow-Origin', '*'); // Or specify your frontend domain
-      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length');
-      
-      res.setHeader('Content-Type', mimeType);
-      // Use 'inline' instead of 'attachment' to view in browser
-      res.setHeader('Content-Disposition', `inline; filename="${sanitizedFileName}"`);
-      if (downloadResponse.contentLength) {
-        res.setHeader('Content-Length', downloadResponse.contentLength);
-      }
-      // Allow browser to cache for better performance
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      // Security headers - DO NOT use X-Frame-Options or use ALLOWALL
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      // REMOVE or comment out X-Frame-Options to allow iframe embedding
-      // res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-
-      // Stream the blob to response
-      downloadResponse.readableStreamBody.pipe(res);
-
     } catch (err: any) {
-      console.error('Error viewing from Azure:', err);
+      console.error('Error viewing document:', err);
       return sendError(res, 'Failed to view document', 500);
     }
-  } catch (err: any) {
-    console.error('Error viewing document:', err);
-    return sendError(res, 'Failed to view document', 500);
-  }
-};
+  };
 
 
 
-/**
- * Get Single Organization Document by ID (without file data)
- */
-export const getOrganizationDocumentById = async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
+  /**
+   * Get Single Organization Document by ID (without file data)
+   */
+  export const getOrganizationDocumentById = async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
 
-    const document = await prisma.organizationDocument.findUnique({
-      where: { document_id: id },
-      select: {
-        document_id: true,
-        organization_id: true,
-        document_title_id: true,
-        document_type: true,
-        document_name: true,
-        user_id: true,
-        privacy: true,
-        expiration_date: true,
-        upload_date: true,
-        // Exclude file to reduce response size
-      },
-    });
+      const document = await prisma.organizationDocument.findUnique({
+        where: { document_id: id },
+        select: {
+          document_id: true,
+          organization_id: true,
+          document_title_id: true,
+          document_type: true,
+          document_name: true,
+          user_id: true,
+          privacy: true,
+          expiration_date: true,
+          upload_date: true,
+          // Exclude file to reduce response size
+        },
+      });
 
-    if (!document) {
-      return sendError(res, 'Organization Document not found', 404);
+      if (!document) {
+        return sendError(res, 'Organization Document not found', 404);
+      }
+
+      return sendSuccess(res, {
+        data: document,
+      });
+    } catch (err: any) {
+      console.error('Error fetching document:', err);
+      return sendError(res, 'Failed to fetch document', 500);
     }
-
-    return sendSuccess(res, {
-      data: document,
-    });
-  } catch (err: any) {
-    console.error('Error fetching document:', err);
-    return sendError(res, 'Failed to fetch document', 500);
-  }
-};
+  };
 
 /**
  * Delete Organization Document (also deletes from Azure Blob)

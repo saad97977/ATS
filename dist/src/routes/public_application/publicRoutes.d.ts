@@ -17,8 +17,8 @@ declare const router: import("express-serve-static-core").Router;
  * - POST   /api/public/jobs/:jobId/apply
  * - GET    /api/public/applications/:applicationId
  * - GET    /api/public/applications/:applicationId/resume
- * - DELETE /api/public/applications/:applicationId/withdraw
  * - GET    /api/public/applicants/applications
+ * - DELETE /api/public/applications/:applicationId/withdraw
  */
 export default router;
 //# sourceMappingURL=publicRoutes.d.ts.map

@@ -34,7 +34,7 @@ import taskRoutes from './routes/user/taskRoutes';
 import organizationCompleteRoutes from './routes/organization/fullOrganizationRoutes';
 import jobCompleteRoutes from './routes/job/fullJobRoutes';
 import publicRoutes from './routes/public_application/publicRoutes';
-
+import applicantProfileRoutes from './routes/applicant/applicantProfileRoutes';
 
 dotenv.config();
 
@@ -117,6 +117,9 @@ app.use('/api/company-offices', companyOfficeRoutes);
 app.use('/api/organization-contracts', organizationContractorRoutes);
 
 
+
+// Applicant Profile Routes
+app.use('/api/applicantsprofiles', applicantProfileRoutes);
 
 
 // Applicant routes

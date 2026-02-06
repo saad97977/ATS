@@ -101,6 +101,12 @@ router.get('/jobs/:jobId/check-application', publicApplicationsController_1.chec
 // Body: { full_name, email, phone, resume: File, ... }
 router.post('/jobs/:jobId/apply', upload.single('resume'), // 'resume' is the field name in form-data
 handleMulterError, publicApplicationsController_1.submitApplication);
+// View resume for an application
+// GET /api/public/applications/:applicationId/resume/view
+router.get('/applications/:applicationId/resume/view', publicApplicationsController_1.viewApplicationResume);
+// View cover letter for an application
+// GET /api/public/applications/:applicationId/cover-letter/view
+router.get('/applications/:applicationId/cover-letter/view', publicApplicationsController_1.viewApplicationCoverLetter);
 // Get application status
 // GET /api/public/applications/:applicationId
 router.get('/applications/:applicationId', publicApplicationsController_1.getApplicationStatus);
@@ -132,8 +138,8 @@ router.get('/applicants/applications', publicApplicationsController_1.getApplica
  * - POST   /api/public/jobs/:jobId/apply
  * - GET    /api/public/applications/:applicationId
  * - GET    /api/public/applications/:applicationId/resume
- * - DELETE /api/public/applications/:applicationId/withdraw
  * - GET    /api/public/applicants/applications
+ * - DELETE /api/public/applications/:applicationId/withdraw
  */
 exports.default = router;
 //# sourceMappingURL=publicRoutes.js.map

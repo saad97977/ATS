@@ -19,6 +19,8 @@ import {
   downloadApplicationResume,
   withdrawApplication,
   getApplicantApplications,
+  viewApplicationResume,
+  viewApplicationCoverLetter
 } from '../../controllers/public_applications/publicApplicationsController';
 
 const router = Router();
@@ -129,6 +131,17 @@ router.post(
   submitApplication
 );
 
+// View resume for an application
+// GET /api/public/applications/:applicationId/resume/view
+router.get('/applications/:applicationId/resume/view', viewApplicationResume);
+
+
+// View cover letter for an application
+// GET /api/public/applications/:applicationId/cover-letter/view
+router.get('/applications/:applicationId/cover-letter/view', viewApplicationCoverLetter);
+
+
+
 // Get application status
 // GET /api/public/applications/:applicationId
 router.get('/applications/:applicationId', getApplicationStatus);
@@ -164,8 +177,8 @@ router.get('/applicants/applications', getApplicantApplications);
  * - POST   /api/public/jobs/:jobId/apply
  * - GET    /api/public/applications/:applicationId
  * - GET    /api/public/applications/:applicationId/resume
- * - DELETE /api/public/applications/:applicationId/withdraw
  * - GET    /api/public/applicants/applications
+ * - DELETE /api/public/applications/:applicationId/withdraw
  */
 
 export default router;
