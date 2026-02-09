@@ -8,6 +8,9 @@ export declare const applicationController: {
     getApplicationsByApplicant: (req: Request, res: Response) => Promise<void>;
     getApplicationsByStatus: (req: Request, res: Response) => Promise<void>;
     getApplicationStatsByJob: (req: Request, res: Response) => Promise<void>;
+    getOverallStats: (req: Request, res: Response) => Promise<void>;
+    searchApplications: (req: Request, res: Response) => Promise<void>;
+    getApplicationsDropdownData: (req: Request, res: Response) => Promise<void>;
     delete: (req: Request, res: Response) => Promise<void>;
 };
 //# sourceMappingURL=applicationController.d.ts.map

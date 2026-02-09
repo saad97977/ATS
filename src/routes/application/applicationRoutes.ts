@@ -16,6 +16,29 @@ const router = express.Router();
 router.get('/', applicationController.getAll);
 
 /**
+ * GET /api/applications/stats
+ * Get overall application statistics (grouped by status)
+ * Must be before /:id to avoid route conflict
+ */
+router.get('/stats', applicationController.getOverallStats);
+
+/**
+ * GET /api/applications/search
+ * Search applications by job title, applicant name, or organization name
+ * Query params: ?q=searchTerm&page=1&limit=10&status=APPLIED
+ * Must be before /:id to avoid route conflict
+ */
+router.get('/search', applicationController.searchApplications);
+
+/**
+ * GET /api/applications/dropdown-data
+ * Get dropdown data for filtering (all jobs and organizations with applications)
+ * Returns: { jobs: [...], organizations: [...] }
+ * Must be before /:id to avoid route conflict
+ */
+router.get('/dropdown-data', applicationController.getApplicationsDropdownData);
+
+/**
  * GET /api/applications/job/:jobId/stats
  * Get application statistics for a specific job (grouped by status)
  * Must be before /job/:jobId to avoid route conflict

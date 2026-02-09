@@ -736,7 +736,7 @@ const submitApplication = async (req, res) => {
                 data: {
                     job_id: jobId,
                     applicant_id: applicant.applicant_id,
-                    source: data.source || 'PUBLIC_JOB_BOARD',
+                    source: data.source || 'WEB_APPLICANT',
                     status: 'APPLIED',
                 },
             });

@@ -440,6 +440,203 @@ const getApplicationsByStatus = async (req: Request, res: Response) => {
 };
 
 /**
+ * Search applications by job title, applicant name, or organization name
+ * GET /api/applications/search?q=searchTerm
+ * Query params:
+ * - q: search term (required)
+ * - page: page number (optional, default: 1)
+ * - limit: items per page (optional, default: 10, max: 100)
+ * - status: filter by application status (optional)
+ */
+const searchApplications = async (req: Request, res: Response) => {
+  try {
+    const searchTerm = req.query.q as string;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+    const status = req.query.status as string | undefined;
+
+    if (!searchTerm || searchTerm.trim() === '') {
+      return sendError(res, 'Search term (q) is required', 400);
+    }
+
+    // Build where clause for search
+    const whereClause: any = {
+      OR: [
+        {
+          job: {
+            job_title: {
+              contains: searchTerm,
+              mode: 'insensitive',
+            },
+          },
+        },
+        {
+          job: {
+            organization: {
+              name: {
+                contains: searchTerm,
+                mode: 'insensitive',
+              },
+            },
+          },
+        },
+        {
+          applicant: {
+            full_name: {
+              contains: searchTerm,
+              mode: 'insensitive',
+            },
+          },
+        },
+      ],
+    };
+
+    // Add status filter if provided
+    if (status) {
+      const validStatuses = ['APPLIED', 'SCREENED', 'OFFERED', 'HIRED'];
+      if (!validStatuses.includes(status.toUpperCase())) {
+        return sendError(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`, 400);
+      }
+      whereClause.status = status.toUpperCase();
+    }
+
+    const [applications, total] = await Promise.all([
+      prisma.application.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        orderBy: { applied_at: 'desc' },
+        include: {
+          job: {
+            select: {
+              job_id: true,
+              job_title: true,
+              status: true,
+              job_type: true,
+              location: true,
+              organization: {
+                select: {
+                  organization_id: true,
+                  name: true,
+                  website: true,
+                },
+              },
+            },
+          },
+          applicant: {
+            select: {
+              applicant_id: true,
+              full_name: true,
+              status: true,
+              contact: {
+                select: {
+                  email: true,
+                  phone: true,
+                },
+              },
+            },
+          },
+          evaluations: {
+            select: {
+              ai_score: true,
+              evaluated_at: true,
+            },
+          },
+        },
+      }),
+      prisma.application.count({ where: whereClause }),
+    ]);
+
+    return sendSuccess(res, {
+      data: applications,
+      paging: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+      search: {
+        term: searchTerm,
+        status: status || null,
+      },
+    });
+  } catch (err: any) {
+    console.error('Error searching applications:', err);
+    return sendError(res, 'Failed to search applications', 500);
+  }
+};
+
+/**
+ * Get dropdown data for filtering applications
+ * Returns all unique job titles and organizations with their IDs
+ * GET /api/applications/dropdown-data
+ */
+const getApplicationsDropdownData = async (req: Request, res: Response) => {
+  try {
+    // Get all unique jobs with their organizations
+    const jobs = await prisma.job.findMany({
+      distinct: ['job_id'],
+      select: {
+        job_id: true,
+        job_title: true,
+        organization: {
+          select: {
+            organization_id: true,
+            name: true,
+          },
+        },
+      },
+      where: {
+        applications: {
+          some: {}, // Only include jobs that have applications
+        },
+      },
+      orderBy: {
+        job_title: 'asc',
+      },
+    });
+
+    // Get unique organizations
+    const organizations = await prisma.organization.findMany({
+      distinct: ['organization_id'],
+      select: {
+        organization_id: true,
+        name: true,
+      },
+      where: {
+        jobs: {
+          some: {
+            applications: {
+              some: {}, // Only include organizations with jobs that have applications
+            },
+          },
+        },
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    // Format jobs data
+    const jobsData = jobs.map(job => ({
+      job_id: job.job_id,
+      job_title: job.job_title,
+      organization_name: job.organization.name,
+      organization_id: job.organization.organization_id,
+    }));
+
+    return sendSuccess(res, {
+      jobs: jobsData,
+      organizations: organizations,
+    });
+  } catch (err: any) {
+    console.error('Error fetching dropdown data:', err);
+    return sendError(res, 'Failed to fetch dropdown data', 500);
+  }
+};
+
+/**
  * Custom create method to check for duplicate applications
  * Prevents same applicant from applying to same job multiple times
  * POST /api/applications
@@ -635,6 +832,36 @@ const getApplicationStatsByJob = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Get overall application statistics (all applications)
+ * GET /api/applications/stats
+ */
+const getOverallStats = async (req: Request, res: Response) => {
+  try {
+    const stats = await prisma.application.groupBy({
+      by: ['status'],
+      _count: {
+        application_id: true,
+      },
+    });
+
+    const formattedStats = stats.map(stat => ({
+      status: stat.status,
+      count: stat._count.application_id,
+    }));
+
+    const total = formattedStats.reduce((sum, stat) => sum + stat.count, 0);
+
+    return sendSuccess(res, {
+      total,
+      by_status: formattedStats,
+    });
+  } catch (err: any) {
+    console.error('Error fetching overall stats:', err);
+    return sendError(res, 'Failed to fetch overall statistics', 500);
+  }
+};
+
 // Export controller with custom methods
 export const applicationController = {
   ...baseCrudMethods,
@@ -646,7 +873,7 @@ export const applicationController = {
   getApplicationsByApplicant, // Custom query by applicant
   getApplicationsByStatus, // Custom query by status
   getApplicationStatsByJob, // Get statistics for a job
+  getOverallStats, // NEW: Get overall statistics for all applications
+  searchApplications, // NEW: Search applications by job title, applicant name, or organization
+  getApplicationsDropdownData, // NEW: Get dropdown data for filtering
 };
-
-
-// redeploy
