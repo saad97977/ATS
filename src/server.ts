@@ -35,6 +35,8 @@ import organizationCompleteRoutes from './routes/organization/fullOrganizationRo
 import jobCompleteRoutes from './routes/job/fullJobRoutes';
 import publicRoutes from './routes/public_application/publicRoutes';
 import applicantProfileRoutes from './routes/applicant/applicantProfileRoutes';
+import pipelineRoutes from './routes/application/pipelineRoutes';
+import initializeCronJobs from '../src/services/cronJobService'
 
 dotenv.config();
 
@@ -136,6 +138,7 @@ app.use('/api/applicant-documents', applicantDocumentsRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/interviews', interviewRoutes);
 app.use('/api/assignments', assignmentRoutes);
+app.use('/api/pipeline', pipelineRoutes);
 
 
 // Public Application and Job Board Routes
@@ -162,7 +165,10 @@ app.get('/health', (req, res) => {
 app.use(errorHandler);
 
 // Start server
-const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`)
+  initializeCronJobs(); // Initialize cron jobs after server starts
+});
 
 // Graceful shutdown handling
 const shutdown = (signal: string) => {

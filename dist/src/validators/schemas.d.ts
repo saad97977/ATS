@@ -521,19 +521,24 @@ export declare const updateInterviewSchema: z.ZodObject<{
 }, z.core.$strict>;
 export declare const createPipelineStageSchema: z.ZodObject<{
     application_id: z.ZodString;
-    job_id: z.ZodString;
-    stage_name: z.ZodString;
+    stage_name: z.ZodOptional<z.ZodEnum<{
+        PIPELINED: "PIPELINED";
+        INTERVIEWED: "INTERVIEWED";
+        ONBOARDED: "ONBOARDED";
+    }>>;
     pipeline_date: z.ZodOptional<z.ZodPipe<z.ZodString, z.ZodTransform<Date, string>>>;
     credit_organization_user_id: z.ZodOptional<z.ZodString>;
     representative_organization_user_id: z.ZodOptional<z.ZodString>;
 }, z.core.$strict>;
 export declare const updatePipelineStageSchema: z.ZodObject<{
-    application_id: z.ZodOptional<z.ZodString>;
-    job_id: z.ZodOptional<z.ZodString>;
-    stage_name: z.ZodOptional<z.ZodString>;
+    stage_name: z.ZodOptional<z.ZodOptional<z.ZodEnum<{
+        PIPELINED: "PIPELINED";
+        INTERVIEWED: "INTERVIEWED";
+        ONBOARDED: "ONBOARDED";
+    }>>>;
     pipeline_date: z.ZodOptional<z.ZodOptional<z.ZodPipe<z.ZodString, z.ZodTransform<Date, string>>>>;
-    credit_organization_user_id: z.ZodOptional<z.ZodOptional<z.ZodString>>;
-    representative_organization_user_id: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+    credit_organization_user_id: z.ZodOptional<z.ZodNullable<z.ZodOptional<z.ZodString>>>;
+    representative_organization_user_id: z.ZodOptional<z.ZodNullable<z.ZodOptional<z.ZodString>>>;
 }, z.core.$strict>;
 export declare const createAssignmentSchema: z.ZodObject<{
     application_id: z.ZodString;

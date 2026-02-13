@@ -355,13 +355,17 @@ exports.updateInterviewSchema = exports.createInterviewSchema.partial();
 // ============================================
 exports.createPipelineStageSchema = zod_1.z.object({
     application_id: zod_1.z.string().uuid('Invalid application ID'),
-    job_id: zod_1.z.string().uuid('Invalid job ID'),
-    stage_name: zod_1.z.string().min(1, 'Stage name is required'),
+    stage_name: zod_1.z.enum(['PIPELINED', 'INTERVIEWED', 'ONBOARDED']).optional(), // Optional since it's set automatically
     pipeline_date: zod_1.z.string().transform((val) => new Date(val)).optional(),
     credit_organization_user_id: zod_1.z.string().uuid('Invalid user ID').optional(),
     representative_organization_user_id: zod_1.z.string().uuid('Invalid user ID').optional(),
 }).strict();
-exports.updatePipelineStageSchema = exports.createPipelineStageSchema.partial();
+exports.updatePipelineStageSchema = zod_1.z.object({
+    stage_name: zod_1.z.enum(['PIPELINED', 'INTERVIEWED', 'ONBOARDED']).optional(),
+    pipeline_date: zod_1.z.string().transform((val) => new Date(val)).optional(),
+    credit_organization_user_id: zod_1.z.string().uuid('Invalid user ID').optional().nullable(),
+    representative_organization_user_id: zod_1.z.string().uuid('Invalid user ID').optional().nullable(),
+}).strict().partial();
 // ============================================
 // ASSIGNMENT SCHEMAS
 // ============================================

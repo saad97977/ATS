@@ -39,6 +39,8 @@ const fullOrganizationRoutes_1 = __importDefault(require("./routes/organization/
 const fullJobRoutes_1 = __importDefault(require("./routes/job/fullJobRoutes"));
 const publicRoutes_1 = __importDefault(require("./routes/public_application/publicRoutes"));
 const applicantProfileRoutes_1 = __importDefault(require("./routes/applicant/applicantProfileRoutes"));
+const pipelineRoutes_1 = __importDefault(require("./routes/application/pipelineRoutes"));
+const cronJobService_1 = __importDefault(require("../src/services/cronJobService"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -109,6 +111,7 @@ app.use('/api/applicant-documents', applicantDocumentsRoutes_1.default);
 app.use('/api/applications', applicationRoutes_1.default);
 app.use('/api/interviews', interviewRoutes_1.default);
 app.use('/api/assignments', assignmentRoutes_1.default);
+app.use('/api/pipeline', pipelineRoutes_1.default);
 // Public Application and Job Board Routes
 app.use('/api/public', publicRoutes_1.default);
 // For Complete Data:
@@ -121,7 +124,10 @@ app.get('/health', (req, res) => {
 // Error handling middleware (must be last)
 app.use(errorHandler_1.errorHandler);
 // Start server
-const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const server = app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    (0, cronJobService_1.default)(); // Initialize cron jobs after server starts
+});
 // Graceful shutdown handling
 const shutdown = (signal) => {
     console.log(`${signal} received. Starting graceful shutdown...`);

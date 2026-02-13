@@ -316,7 +316,6 @@ model Job {
   job_postings  JobPosting[]
   job_rates     JobRate[]
   applications  Application[]
-  pipeline_stages PipelineStage[]
   company_office  CompanyOffice? @relation(fields: [company_office_id], references: [company_office_id])
 
 
@@ -613,8 +612,7 @@ model Interview {
 model PipelineStage {
   pipeline_stage_id                   String   @id @default(uuid())
   application_id                      String
-  job_id                              String
-  stage_name                          String
+  stage_name                          PipelineStageName  @default(PIPELINED)
   pipeline_date                       DateTime @default(now())
   credit_organization_user_id         String?
   representative_organization_user_id String?
@@ -623,7 +621,6 @@ model PipelineStage {
   application         Application @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
   credit_user         User?       @relation("CreditUser", fields: [credit_organization_user_id], references: [user_id])
   representative_user User?       @relation("RepresentativeUser", fields: [representative_organization_user_id], references: [user_id])
-  job                 Job         @relation(fields: [job_id], references: [job_id], onDelete: Cascade) 
 
 
   @@index([application_id])
@@ -762,6 +759,12 @@ enum InterviewStatus {
   ACCEPTED
 }
 
+enum PipelineStageName {
+  PIPELINED
+  INTERVIEWED
+  ONBOARDED
+}
+
 enum EmploymentType {
   W2
   CONTRACTOR_1099 @map("1099")
@@ -777,3 +780,5 @@ enum OfficeType {
   HYBRID
   ONSITE
 }
+
+

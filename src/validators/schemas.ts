@@ -447,14 +447,18 @@ export const updateInterviewSchema = createInterviewSchema.partial();
 
 export const createPipelineStageSchema = z.object({
   application_id: z.string().uuid('Invalid application ID'),
-  job_id: z.string().uuid('Invalid job ID'),
-  stage_name: z.string().min(1, 'Stage name is required'),
+  stage_name: z.enum(['PIPELINED', 'INTERVIEWED', 'ONBOARDED']).optional(), // Optional since it's set automatically
   pipeline_date: z.string().transform((val) => new Date(val)).optional(),
   credit_organization_user_id: z.string().uuid('Invalid user ID').optional(),
   representative_organization_user_id: z.string().uuid('Invalid user ID').optional(),
 }).strict();
 
-export const updatePipelineStageSchema = createPipelineStageSchema.partial();
+export const updatePipelineStageSchema = z.object({
+  stage_name: z.enum(['PIPELINED', 'INTERVIEWED', 'ONBOARDED']).optional(),
+  pipeline_date: z.string().transform((val) => new Date(val)).optional(),
+  credit_organization_user_id: z.string().uuid('Invalid user ID').optional().nullable(),
+  representative_organization_user_id: z.string().uuid('Invalid user ID').optional().nullable(),
+}).strict().partial();
 
 // ============================================
 // ASSIGNMENT SCHEMAS
