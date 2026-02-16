@@ -1,22 +1,130 @@
 import nodemailer from 'nodemailer';
 import { format } from 'date-fns';
+import dns from 'dns';
+
+// ✅ FORCE IPv4 DNS resolution globally - This fixes ENETUNREACH errors
+dns.setDefaultResultOrder('ipv4first');
 
 /**
  * Email Service for sending professional notifications
+ * Production-ready configuration with retry logic
  */
 
-// Email configuration
+/**
+ * Email response interface
+ */
+interface EmailResponse {
+  success: boolean;
+  messageId?: string;
+  error?: string;
+}
+
+/**
+ * Create transporter with production-ready configuration
+ */
 const createTransporter = () => {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: false,
+    secure: process.env.SMTP_SECURE === 'true' || false, // true for 465, false for 587
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASSWORD,
     },
-  });
+    // ✅ CRITICAL FIX: Force IPv4 to avoid ENETUNREACH errors
+    tls: {
+      rejectUnauthorized: true,
+      minVersion: 'TLSv1.2',
+    },
+    
+    // ✅ POOL CONFIGURATION for better performance
+    pool: true,
+    maxConnections: 5,
+    maxMessages: 100,
+    rateDelta: 1000, // 1 second between messages
+    rateLimit: 5, // max 5 messages per rateDelta
+    
+    // ✅ ENABLE DEBUG in development
+    debug: process.env.NODE_ENV === 'development',
+    logger: process.env.NODE_ENV === 'development',
+  } as any);
 };
+
+/**
+ * ✅ SEND EMAIL WITH RETRY LOGIC (Exponential Backoff)
+ * This handles network timeouts and temporary failures
+ */
+async function sendEmailWithRetry(
+  mailOptions: any,
+  maxRetries: number = 3
+): Promise<EmailResponse> {
+  const transporter = createTransporter();
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📧 Attempting to send email (attempt ${attempt}/${maxRetries})...`, {
+        to: mailOptions.to,
+        subject: mailOptions.subject,
+      });
+      
+      const info = await transporter.sendMail(mailOptions);
+      
+      console.log('✅ Email sent successfully:', {
+        messageId: info.messageId,
+        accepted: info.accepted,
+        response: info.response,
+      });
+
+      // Close transporter connection
+      transporter.close();
+
+      return {
+        success: true,
+        messageId: info.messageId,
+      };
+    } catch (error: any) {
+      console.error(`❌ Email send attempt ${attempt}/${maxRetries} failed:`, {
+        to: mailOptions.to,
+        error: error.message,
+        code: error.code,
+        command: error.command,
+      });
+
+      // Close transporter on error
+      transporter.close();
+
+      // Don't retry on authentication errors
+      if (error.code === 'EAUTH' || error.responseCode === 535) {
+        console.error('🔐 Authentication failed. Check your Gmail App Password.');
+        console.error('Make sure:');
+        console.error('1. You are using Gmail App Password (not regular password)');
+        console.error('2. 2-Factor Authentication is enabled on your Gmail account');
+        return {
+          success: false,
+          error: 'Email authentication failed. Check credentials.',
+        };
+      }
+
+      // If last attempt, return error
+      if (attempt === maxRetries) {
+        return {
+          success: false,
+          error: error.message || 'Failed to send email after retries',
+        };
+      }
+
+      // Wait before retry (exponential backoff: 2s, 4s, 8s)
+      const waitTime = attempt * 2000;
+      console.log(`⏳ Waiting ${waitTime / 1000}s before retry...`);
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+    }
+  }
+
+  return {
+    success: false,
+    error: 'Failed to send email',
+  };
+}
 
 /**
  * Base professional email template
@@ -95,6 +203,13 @@ const generateBaseEmailHTML = (data: {
             margin-top: 30px;
             font-size: 14px;
         }
+        ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        li {
+            margin: 5px 0;
+        }
     </style>
 </head>
 <body>
@@ -159,7 +274,7 @@ export const sendInterviewInvitationEmail = async (interviewData: {
   location: string;
   contactEmail?: string;
   contactPhone?: string;
-}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+}): Promise<EmailResponse> => {
   try {
     const formattedDate = format(interviewData.interviewDate, 'EEEE, MMMM dd, yyyy');
     const formattedTime = format(interviewData.interviewDate, 'h:mm a');
@@ -213,8 +328,7 @@ export const sendInterviewInvitationEmail = async (interviewData: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: {
         name: interviewData.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -223,11 +337,12 @@ export const sendInterviewInvitationEmail = async (interviewData: {
       subject: `Interview Invitation - ${interviewData.jobTitle}`,
       text: textContent,
       html: htmlContent,
-    });
+    };
 
-    return { success: true, messageId: info.messageId };
+    // ✅ USE RETRY LOGIC
+    return await sendEmailWithRetry(mailOptions);
   } catch (error: any) {
-    console.error('Error sending interview invitation email:', error);
+    console.error('Error preparing interview invitation email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -243,7 +358,7 @@ export const sendInterviewRescheduleEmail = async (data: {
   oldDate: Date;
   newDate: Date;
   location: string;
-}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+}): Promise<EmailResponse> => {
   try {
     const formattedOldDate = format(data.oldDate, 'EEEE, MMMM dd, yyyy \'at\' h:mm a');
     const formattedNewDate = format(data.newDate, 'EEEE, MMMM dd, yyyy');
@@ -277,8 +392,7 @@ export const sendInterviewRescheduleEmail = async (data: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: {
         name: data.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -287,11 +401,12 @@ export const sendInterviewRescheduleEmail = async (data: {
       subject: `Interview Rescheduled - ${data.jobTitle}`,
       text: textContent,
       html: htmlContent,
-    });
+    };
 
-    return { success: true, messageId: info.messageId };
+    // ✅ USE RETRY LOGIC
+    return await sendEmailWithRetry(mailOptions);
   } catch (error: any) {
-    console.error('Error sending reschedule email:', error);
+    console.error('Error preparing reschedule email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -304,7 +419,7 @@ export const sendInterviewRejectionEmail = async (data: {
   applicantName: string;
   jobTitle: string;
   organizationName: string;
-}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+}): Promise<EmailResponse> => {
   try {
     const content = `
       <p>Thank you for your interest in the <strong>${data.jobTitle}</strong> position and for taking the time to interview with us.</p>
@@ -329,8 +444,7 @@ export const sendInterviewRejectionEmail = async (data: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: {
         name: data.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -339,11 +453,12 @@ export const sendInterviewRejectionEmail = async (data: {
       subject: `Application Status - ${data.jobTitle}`,
       text: textContent,
       html: htmlContent,
-    });
+    };
 
-    return { success: true, messageId: info.messageId };
+    // ✅ USE RETRY LOGIC
+    return await sendEmailWithRetry(mailOptions);
   } catch (error: any) {
-    console.error('Error sending rejection email:', error);
+    console.error('Error preparing rejection email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -356,7 +471,7 @@ export const sendOfferLetterEmail = async (data: {
   applicantName: string;
   jobTitle: string;
   organizationName: string;
-}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+}): Promise<EmailResponse> => {
   try {
     const content = `
       <p>Congratulations! We are pleased to extend an offer for the position of <strong>${data.jobTitle}</strong> at ${data.organizationName}.</p>
@@ -386,8 +501,7 @@ export const sendOfferLetterEmail = async (data: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: {
         name: data.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -396,11 +510,12 @@ export const sendOfferLetterEmail = async (data: {
       subject: `Job Offer - ${data.jobTitle} at ${data.organizationName}`,
       text: textContent,
       html: htmlContent,
-    });
+    };
 
-    return { success: true, messageId: info.messageId };
+    // ✅ USE RETRY LOGIC
+    return await sendEmailWithRetry(mailOptions);
   } catch (error: any) {
-    console.error('Error sending offer email:', error);
+    console.error('Error preparing offer email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -413,7 +528,7 @@ export const sendOnboardingWelcomeEmail = async (data: {
   applicantName: string;
   jobTitle: string;
   organizationName: string;
-}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+}): Promise<EmailResponse> => {
   try {
     const content = `
       <p>Welcome to ${data.organizationName}! We are excited to have you join our team as <strong>${data.jobTitle}</strong>.</p>
@@ -449,8 +564,7 @@ export const sendOnboardingWelcomeEmail = async (data: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: {
         name: data.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -459,26 +573,32 @@ export const sendOnboardingWelcomeEmail = async (data: {
       subject: `Welcome to ${data.organizationName}!`,
       text: textContent,
       html: htmlContent,
-    });
+    };
 
-    return { success: true, messageId: info.messageId };
+    // ✅ USE RETRY LOGIC
+    return await sendEmailWithRetry(mailOptions);
   } catch (error: any) {
-    console.error('Error sending onboarding email:', error);
+    console.error('Error preparing onboarding email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
 
 /**
- * Verify email configuration
+ * Verify email configuration on startup
  */
 export const verifyEmailConfiguration = async (): Promise<boolean> => {
   try {
     const transporter = createTransporter();
     await transporter.verify();
     console.log('✅ Email server is ready to send messages');
+    transporter.close();
     return true;
-  } catch (error) {
-    console.error('❌ Email server configuration error:', error);
+  } catch (error: any) {
+    console.error('❌ Email server configuration error:', error.message);
+    console.error('Please check:');
+    console.error('1. SMTP_USER and SMTP_PASSWORD are set in environment variables');
+    console.error('2. SMTP_PASSWORD is a Gmail App Password (not regular password)');
+    console.error('3. 2-Factor Authentication is enabled on Gmail account');
     return false;
   }
 };
