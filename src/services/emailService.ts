@@ -3,22 +3,15 @@ import { format } from 'date-fns';
 import dns from 'dns/promises';
 
 /**
- * Production-ready Email Service with IPv4-only enforcement
+ * Email Service for sending professional notifications
+ * Production-ready with IPv4 enforcement and Railway compatibility
  */
 
-interface EmailResponse {
-  success: boolean;
-  messageId?: string;
-  error?: string;
-}
-
 /**
- * ✅ CRITICAL: Custom DNS resolver that ONLY returns IPv4 addresses
- * This prevents nodemailer from ever attempting IPv6 connections
+ * ✅ Resolve hostname to IPv4 only (prevents IPv6 issues)
  */
 async function resolveIPv4Only(hostname: string): Promise<string> {
   try {
-    // Force resolve to IPv4 addresses only
     const addresses = await dns.resolve4(hostname);
     if (addresses && addresses.length > 0) {
       const selectedIP = addresses[0];
@@ -27,36 +20,35 @@ async function resolveIPv4Only(hostname: string): Promise<string> {
     }
     throw new Error(`No IPv4 address found for ${hostname}`);
   } catch (error) {
-    // Fallback to hardcoded Gmail IPv4 addresses if DNS fails
+    // Fallback to hardcoded Gmail IPv4 addresses
     const fallbackIPs = [
       '142.250.153.108',
-      '142.250.153.109',
+      '142.251.10.108',
       '74.125.133.108',
-      '64.233.170.108',
     ];
-    const fallbackIP = fallbackIPs[Math.floor(Math.random() * fallbackIPs.length)];
+    const fallbackIP = fallbackIPs[0];
     console.log(`⚠️ DNS failed, using fallback IPv4: ${fallbackIP}`);
     return fallbackIP;
   }
 }
 
 /**
- * ✅ Create transporter with IPv4-only connection
+ * ✅ Create transporter with IPv4-only and SSL (port 465)
  */
-async function createTransporter() {
+const createTransporter = async () => {
   // Resolve Gmail SMTP to IPv4 address only
-  const smtpHost = await resolveIPv4Only('smtp.gmail.com');
+  const smtpHost = await resolveIPv4Only(process.env.SMTP_HOST || 'smtp.gmail.com');
 
   return nodemailer.createTransport({
-    host: smtpHost, // ✅ Use resolved IPv4 address directly
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: false,
+    host: smtpHost, // Use resolved IPv4 IP
+    port: 465, // ✅ Port 465 (SSL) - less likely to be blocked than 587
+    secure: true, // ✅ Must be true for port 465
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASSWORD,
     },
     
-    // ✅ Required when using IP address instead of hostname
+    // ✅ Required when using IP address directly
     name: 'smtp.gmail.com',
     
     // ✅ Increase timeouts for cloud environments
@@ -71,13 +63,10 @@ async function createTransporter() {
       servername: 'smtp.gmail.com', // Must match certificate
     },
     
-    // ✅ Disable connection pooling to avoid caching issues
-    pool: false,
-    
     debug: process.env.NODE_ENV === 'development',
     logger: process.env.NODE_ENV === 'development',
-  } as any);
-}
+  });
+};
 
 /**
  * ✅ Send email with retry logic
@@ -85,7 +74,7 @@ async function createTransporter() {
 async function sendEmailWithRetry(
   mailOptions: any,
   maxRetries: number = 3
-): Promise<EmailResponse> {
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     let transporter;
     
@@ -95,9 +84,7 @@ async function sendEmailWithRetry(
         subject: mailOptions.subject,
       });
 
-      // Create fresh transporter for each attempt (ensures new IPv4 resolution)
       transporter = await createTransporter();
-      
       const info = await transporter.sendMail(mailOptions);
       
       console.log('✅ Email sent successfully:', {
@@ -299,7 +286,7 @@ export const sendInterviewInvitationEmail = async (interviewData: {
   location: string;
   contactEmail?: string;
   contactPhone?: string;
-}): Promise<EmailResponse> => {
+}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
     const formattedDate = format(interviewData.interviewDate, 'EEEE, MMMM dd, yyyy');
     const formattedTime = format(interviewData.interviewDate, 'h:mm a');
@@ -380,7 +367,7 @@ export const sendInterviewRescheduleEmail = async (data: {
   oldDate: Date;
   newDate: Date;
   location: string;
-}): Promise<EmailResponse> => {
+}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
     const formattedOldDate = format(data.oldDate, 'EEEE, MMMM dd, yyyy \'at\' h:mm a');
     const formattedNewDate = format(data.newDate, 'EEEE, MMMM dd, yyyy');
@@ -438,7 +425,7 @@ export const sendInterviewRejectionEmail = async (data: {
   applicantName: string;
   jobTitle: string;
   organizationName: string;
-}): Promise<EmailResponse> => {
+}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
     const content = `
       <p>Thank you for your interest in the <strong>${data.jobTitle}</strong> position and for taking the time to interview with us.</p>
@@ -487,7 +474,7 @@ export const sendOfferLetterEmail = async (data: {
   applicantName: string;
   jobTitle: string;
   organizationName: string;
-}): Promise<EmailResponse> => {
+}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
     const content = `
       <p>Congratulations! We are pleased to extend an offer for the position of <strong>${data.jobTitle}</strong> at ${data.organizationName}.</p>
@@ -541,7 +528,7 @@ export const sendOnboardingWelcomeEmail = async (data: {
   applicantName: string;
   jobTitle: string;
   organizationName: string;
-}): Promise<EmailResponse> => {
+}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
     const content = `
       <p>Welcome to ${data.organizationName}! We are excited to have you join our team as <strong>${data.jobTitle}</strong>.</p>
