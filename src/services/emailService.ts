@@ -1,19 +1,11 @@
 import nodemailer from 'nodemailer';
 import { format } from 'date-fns';
-import dns from 'dns';
-import { promisify } from 'util';
+import dns from 'dns/promises';
 
 /**
- * Email Service for sending professional notifications
- * Production-ready with IPv4 enforcement and retry logic
+ * Production-ready Email Service with IPv4-only enforcement
  */
 
-// ✅ FORCE IPv4 DNS resolution globally
-dns.setDefaultResultOrder('ipv4first');
-
-/**
- * Email response interface
- */
 interface EmailResponse {
   success: boolean;
   messageId?: string;
@@ -21,147 +13,125 @@ interface EmailResponse {
 }
 
 /**
- * ✅ CUSTOM DNS LOOKUP - Forces IPv4 only resolution
- * This completely bypasses IPv6 to prevent ENETUNREACH errors
+ * ✅ CRITICAL: Custom DNS resolver that ONLY returns IPv4 addresses
+ * This prevents nodemailer from ever attempting IPv6 connections
  */
-const dnsResolve4 = promisify(dns.resolve4);
-
-const customDnsLookup = async (hostname: string, options: any, callback: any) => {
+async function resolveIPv4Only(hostname: string): Promise<string> {
   try {
-    console.log(`🔍 DNS Lookup for ${hostname} (forcing IPv4)...`);
-    
-    // Force resolve to IPv4 only
-    const addresses = await dnsResolve4(hostname);
-    
+    // Force resolve to IPv4 addresses only
+    const addresses = await dns.resolve4(hostname);
     if (addresses && addresses.length > 0) {
-      const ipv4Address = addresses[0];
-      console.log(`✅ Resolved ${hostname} to IPv4: ${ipv4Address}`);
-      callback(null, ipv4Address, 4);
-    } else {
-      callback(new Error(`Could not resolve ${hostname} to IPv4`));
+      const selectedIP = addresses[0];
+      console.log(`🔍 Resolved ${hostname} to IPv4: ${selectedIP}`);
+      return selectedIP;
     }
-  } catch (error: any) {
-    console.error(`❌ DNS lookup failed for ${hostname}:`, error.message);
-    
+    throw new Error(`No IPv4 address found for ${hostname}`);
+  } catch (error) {
     // Fallback to hardcoded Gmail IPv4 addresses if DNS fails
-    const gmailIPv4Fallbacks = [
+    const fallbackIPs = [
       '142.250.153.108',
       '142.250.153.109',
       '74.125.133.108',
-      '74.125.133.109',
+      '64.233.170.108',
     ];
-    const fallbackIP = gmailIPv4Fallbacks[Math.floor(Math.random() * gmailIPv4Fallbacks.length)];
-    console.log(`⚠️  Using fallback IP: ${fallbackIP}`);
-    callback(null, fallbackIP, 4);
+    const fallbackIP = fallbackIPs[Math.floor(Math.random() * fallbackIPs.length)];
+    console.log(`⚠️ DNS failed, using fallback IPv4: ${fallbackIP}`);
+    return fallbackIP;
   }
-};
+}
 
 /**
- * ✅ CREATE TRANSPORTER with production-ready configuration
+ * ✅ Create transporter with IPv4-only connection
  */
-const createTransporter = () => {
+async function createTransporter() {
+  // Resolve Gmail SMTP to IPv4 address only
+  const smtpHost = await resolveIPv4Only('smtp.gmail.com');
+
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    host: smtpHost, // ✅ Use resolved IPv4 address directly
     port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: false, // true for 465, false for 587
+    secure: false,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASSWORD,
     },
     
-    // ✅ CRITICAL: Custom DNS lookup to FORCE IPv4 only
-    dnsLookup: customDnsLookup as any,
+    // ✅ Required when using IP address instead of hostname
+    name: 'smtp.gmail.com',
     
-    // ✅ Also set family to 4 as backup
-    family: 4 as any,
+    // ✅ Increase timeouts for cloud environments
+    connectionTimeout: 60000,
+    greetingTimeout: 30000,
+    socketTimeout: 60000,
     
-    // ✅ INCREASE TIMEOUTS for production environments
-    connectionTimeout: 60000, // 60 seconds
-    greetingTimeout: 30000,   // 30 seconds
-    socketTimeout: 60000,     // 60 seconds
-    
-    // ✅ TLS CONFIGURATION
+    // ✅ TLS configuration (required when using direct IP)
     tls: {
       rejectUnauthorized: true,
       minVersion: 'TLSv1.2',
+      servername: 'smtp.gmail.com', // Must match certificate
     },
     
-    // ✅ POOL CONFIGURATION for better performance
-    pool: true,
-    maxConnections: 5,
-    maxMessages: 100,
-    rateDelta: 1000, // 1 second between messages
-    rateLimit: 5, // max 5 messages per rateDelta
+    // ✅ Disable connection pooling to avoid caching issues
+    pool: false,
     
-    // ✅ ENABLE DEBUG in development
     debug: process.env.NODE_ENV === 'development',
     logger: process.env.NODE_ENV === 'development',
   } as any);
-};
+}
 
 /**
- * ✅ SEND EMAIL WITH RETRY LOGIC (Exponential Backoff)
- * Handles network timeouts and temporary failures
+ * ✅ Send email with retry logic
  */
 async function sendEmailWithRetry(
   mailOptions: any,
   maxRetries: number = 3
 ): Promise<EmailResponse> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const transporter = createTransporter();
+    let transporter;
     
     try {
-      console.log(`📧 Attempting to send email (attempt ${attempt}/${maxRetries})...`, {
+      console.log(`📧 Sending email (attempt ${attempt}/${maxRetries})...`, {
         to: mailOptions.to,
         subject: mailOptions.subject,
       });
+
+      // Create fresh transporter for each attempt (ensures new IPv4 resolution)
+      transporter = await createTransporter();
       
       const info = await transporter.sendMail(mailOptions);
       
       console.log('✅ Email sent successfully:', {
         messageId: info.messageId,
         accepted: info.accepted,
-        response: info.response,
       });
 
-      // Close transporter connection
       transporter.close();
-
+      
       return {
         success: true,
         messageId: info.messageId,
       };
     } catch (error: any) {
-      console.error(`❌ Email send attempt ${attempt}/${maxRetries} failed:`, {
-        to: mailOptions.to,
-        subject: mailOptions.subject,
+      console.error(`❌ Email attempt ${attempt}/${maxRetries} failed:`, {
         error: error.message,
         code: error.code,
-        command: error.command,
-        errno: error.errno,
-        address: error.address,
-        port: error.port,
       });
 
-      // Close transporter on error
-      transporter.close();
+      if (transporter) {
+        transporter.close();
+      }
 
       // Don't retry on authentication errors
       if (error.code === 'EAUTH' || error.responseCode === 535) {
-        console.error('🔐 Authentication failed. Check your Gmail App Password.');
-        console.error('Make sure:');
-        console.error('1. You are using Gmail App Password (not regular password)');
-        console.error('2. 2-Factor Authentication is enabled on your Gmail account');
-        console.error('3. SMTP_USER and SMTP_PASSWORD are correctly set');
+        console.error('🔐 Authentication failed. Check Gmail App Password.');
         return {
           success: false,
-          error: 'Email authentication failed. Check credentials.',
+          error: 'Authentication failed. Check email credentials.',
         };
       }
 
       // If last attempt, return error
       if (attempt === maxRetries) {
-        console.error(`❌ All ${maxRetries} attempts failed. Giving up.`);
         return {
           success: false,
           error: error.message || 'Failed to send email after retries',
@@ -383,7 +353,7 @@ export const sendInterviewInvitationEmail = async (interviewData: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const mailOptions = {
+    return await sendEmailWithRetry({
       from: {
         name: interviewData.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -392,10 +362,7 @@ export const sendInterviewInvitationEmail = async (interviewData: {
       subject: `Interview Invitation - ${interviewData.jobTitle}`,
       text: textContent,
       html: htmlContent,
-    };
-
-    // ✅ USE RETRY LOGIC
-    return await sendEmailWithRetry(mailOptions);
+    });
   } catch (error: any) {
     console.error('Error preparing interview invitation email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
@@ -447,7 +414,7 @@ export const sendInterviewRescheduleEmail = async (data: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const mailOptions = {
+    return await sendEmailWithRetry({
       from: {
         name: data.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -456,10 +423,7 @@ export const sendInterviewRescheduleEmail = async (data: {
       subject: `Interview Rescheduled - ${data.jobTitle}`,
       text: textContent,
       html: htmlContent,
-    };
-
-    // ✅ USE RETRY LOGIC
-    return await sendEmailWithRetry(mailOptions);
+    });
   } catch (error: any) {
     console.error('Error preparing reschedule email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
@@ -499,7 +463,7 @@ export const sendInterviewRejectionEmail = async (data: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const mailOptions = {
+    return await sendEmailWithRetry({
       from: {
         name: data.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -508,10 +472,7 @@ export const sendInterviewRejectionEmail = async (data: {
       subject: `Application Status - ${data.jobTitle}`,
       text: textContent,
       html: htmlContent,
-    };
-
-    // ✅ USE RETRY LOGIC
-    return await sendEmailWithRetry(mailOptions);
+    });
   } catch (error: any) {
     console.error('Error preparing rejection email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
@@ -556,7 +517,7 @@ export const sendOfferLetterEmail = async (data: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const mailOptions = {
+    return await sendEmailWithRetry({
       from: {
         name: data.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -565,10 +526,7 @@ export const sendOfferLetterEmail = async (data: {
       subject: `Job Offer - ${data.jobTitle} at ${data.organizationName}`,
       text: textContent,
       html: htmlContent,
-    };
-
-    // ✅ USE RETRY LOGIC
-    return await sendEmailWithRetry(mailOptions);
+    });
   } catch (error: any) {
     console.error('Error preparing offer email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
@@ -619,7 +577,7 @@ export const sendOnboardingWelcomeEmail = async (data: {
       content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
     });
 
-    const mailOptions = {
+    return await sendEmailWithRetry({
       from: {
         name: data.organizationName,
         address: process.env.SMTP_USER || 'noreply@company.com',
@@ -628,10 +586,7 @@ export const sendOnboardingWelcomeEmail = async (data: {
       subject: `Welcome to ${data.organizationName}!`,
       text: textContent,
       html: htmlContent,
-    };
-
-    // ✅ USE RETRY LOGIC
-    return await sendEmailWithRetry(mailOptions);
+    });
   } catch (error: any) {
     console.error('Error preparing onboarding email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
@@ -639,23 +594,23 @@ export const sendOnboardingWelcomeEmail = async (data: {
 };
 
 /**
- * Verify email configuration on startup
+ * Verify email configuration
  */
 export const verifyEmailConfiguration = async (): Promise<boolean> => {
   try {
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
+      console.error('❌ SMTP credentials not set in environment variables');
+      return false;
+    }
+    
     console.log('🔍 Verifying email configuration...');
-    const transporter = createTransporter();
+    const transporter = await createTransporter();
     await transporter.verify();
     console.log('✅ Email server is ready to send messages');
     transporter.close();
     return true;
   } catch (error: any) {
-    console.error('❌ Email server configuration error:', error.message);
-    console.error('Please check:');
-    console.error('1. SMTP_USER and SMTP_PASSWORD are set in environment variables');
-    console.error('2. SMTP_PASSWORD is a Gmail App Password (not regular password)');
-    console.error('3. 2-Factor Authentication is enabled on Gmail account');
-    console.error('4. Port 587 is allowed in your firewall/security groups');
+    console.error('❌ Email configuration error:', error.message);
     return false;
   }
 };
