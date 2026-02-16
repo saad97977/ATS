@@ -1,14 +1,15 @@
 import nodemailer from 'nodemailer';
 import { format } from 'date-fns';
 import dns from 'dns';
-
-// ✅ FORCE IPv4 DNS resolution globally - This fixes ENETUNREACH errors
-dns.setDefaultResultOrder('ipv4first');
+import { promisify } from 'util';
 
 /**
  * Email Service for sending professional notifications
- * Production-ready configuration with retry logic
+ * Production-ready with IPv4 enforcement and retry logic
  */
+
+// ✅ FORCE IPv4 DNS resolution globally
+dns.setDefaultResultOrder('ipv4first');
 
 /**
  * Email response interface
@@ -20,18 +21,66 @@ interface EmailResponse {
 }
 
 /**
- * Create transporter with production-ready configuration
+ * ✅ CUSTOM DNS LOOKUP - Forces IPv4 only resolution
+ * This completely bypasses IPv6 to prevent ENETUNREACH errors
+ */
+const dnsResolve4 = promisify(dns.resolve4);
+
+const customDnsLookup = async (hostname: string, options: any, callback: any) => {
+  try {
+    console.log(`🔍 DNS Lookup for ${hostname} (forcing IPv4)...`);
+    
+    // Force resolve to IPv4 only
+    const addresses = await dnsResolve4(hostname);
+    
+    if (addresses && addresses.length > 0) {
+      const ipv4Address = addresses[0];
+      console.log(`✅ Resolved ${hostname} to IPv4: ${ipv4Address}`);
+      callback(null, ipv4Address, 4);
+    } else {
+      callback(new Error(`Could not resolve ${hostname} to IPv4`));
+    }
+  } catch (error: any) {
+    console.error(`❌ DNS lookup failed for ${hostname}:`, error.message);
+    
+    // Fallback to hardcoded Gmail IPv4 addresses if DNS fails
+    const gmailIPv4Fallbacks = [
+      '142.250.153.108',
+      '142.250.153.109',
+      '74.125.133.108',
+      '74.125.133.109',
+    ];
+    const fallbackIP = gmailIPv4Fallbacks[Math.floor(Math.random() * gmailIPv4Fallbacks.length)];
+    console.log(`⚠️  Using fallback IP: ${fallbackIP}`);
+    callback(null, fallbackIP, 4);
+  }
+};
+
+/**
+ * ✅ CREATE TRANSPORTER with production-ready configuration
  */
 const createTransporter = () => {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: process.env.SMTP_SECURE === 'true' || false, // true for 465, false for 587
+    secure: false, // true for 465, false for 587
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASSWORD,
     },
-    // ✅ CRITICAL FIX: Force IPv4 to avoid ENETUNREACH errors
+    
+    // ✅ CRITICAL: Custom DNS lookup to FORCE IPv4 only
+    dnsLookup: customDnsLookup as any,
+    
+    // ✅ Also set family to 4 as backup
+    family: 4 as any,
+    
+    // ✅ INCREASE TIMEOUTS for production environments
+    connectionTimeout: 60000, // 60 seconds
+    greetingTimeout: 30000,   // 30 seconds
+    socketTimeout: 60000,     // 60 seconds
+    
+    // ✅ TLS CONFIGURATION
     tls: {
       rejectUnauthorized: true,
       minVersion: 'TLSv1.2',
@@ -52,15 +101,15 @@ const createTransporter = () => {
 
 /**
  * ✅ SEND EMAIL WITH RETRY LOGIC (Exponential Backoff)
- * This handles network timeouts and temporary failures
+ * Handles network timeouts and temporary failures
  */
 async function sendEmailWithRetry(
   mailOptions: any,
   maxRetries: number = 3
 ): Promise<EmailResponse> {
-  const transporter = createTransporter();
-  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const transporter = createTransporter();
+    
     try {
       console.log(`📧 Attempting to send email (attempt ${attempt}/${maxRetries})...`, {
         to: mailOptions.to,
@@ -85,9 +134,13 @@ async function sendEmailWithRetry(
     } catch (error: any) {
       console.error(`❌ Email send attempt ${attempt}/${maxRetries} failed:`, {
         to: mailOptions.to,
+        subject: mailOptions.subject,
         error: error.message,
         code: error.code,
         command: error.command,
+        errno: error.errno,
+        address: error.address,
+        port: error.port,
       });
 
       // Close transporter on error
@@ -99,6 +152,7 @@ async function sendEmailWithRetry(
         console.error('Make sure:');
         console.error('1. You are using Gmail App Password (not regular password)');
         console.error('2. 2-Factor Authentication is enabled on your Gmail account');
+        console.error('3. SMTP_USER and SMTP_PASSWORD are correctly set');
         return {
           success: false,
           error: 'Email authentication failed. Check credentials.',
@@ -107,6 +161,7 @@ async function sendEmailWithRetry(
 
       // If last attempt, return error
       if (attempt === maxRetries) {
+        console.error(`❌ All ${maxRetries} attempts failed. Giving up.`);
         return {
           success: false,
           error: error.message || 'Failed to send email after retries',
@@ -588,6 +643,7 @@ export const sendOnboardingWelcomeEmail = async (data: {
  */
 export const verifyEmailConfiguration = async (): Promise<boolean> => {
   try {
+    console.log('🔍 Verifying email configuration...');
     const transporter = createTransporter();
     await transporter.verify();
     console.log('✅ Email server is ready to send messages');
@@ -599,6 +655,7 @@ export const verifyEmailConfiguration = async (): Promise<boolean> => {
     console.error('1. SMTP_USER and SMTP_PASSWORD are set in environment variables');
     console.error('2. SMTP_PASSWORD is a Gmail App Password (not regular password)');
     console.error('3. 2-Factor Authentication is enabled on Gmail account');
+    console.error('4. Port 587 is allowed in your firewall/security groups');
     return false;
   }
 };
