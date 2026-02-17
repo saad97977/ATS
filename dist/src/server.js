@@ -22,6 +22,7 @@ const organizationAccountingRoutes_1 = __importDefault(require("./routes/organiz
 const organizationUserRoutes_1 = __importDefault(require("./routes/organization/organizationUserRoutes"));
 const organizationDocumentTitleRoutes_1 = __importDefault(require("./routes/organization/organizationDocumentTitleRoutes"));
 const organizationDocumentRoutes_1 = __importDefault(require("./routes/organization/organizationDocumentRoutes"));
+const organizationDocumentSignatureRoutes_1 = __importDefault(require("./routes/organization/organizationDocumentSignatureRoutes"));
 const applicantRoutes_1 = __importDefault(require("./routes/applicant/applicantRoutes"));
 const applicantContactRoutes_1 = __importDefault(require("./routes/applicant/applicantContactRoutes"));
 const applicantDemographicRoutes_1 = __importDefault(require("./routes/applicant/applicantDemographicRoutes"));
@@ -95,6 +96,7 @@ app.use('/api/organization-accounting', organizationAccountingRoutes_1.default);
 app.use('/api/organization-users', organizationUserRoutes_1.default);
 app.use('/api/organization-document-titles', organizationDocumentTitleRoutes_1.default);
 app.use('/api/organization-documents', organizationDocumentRoutes_1.default);
+app.use('/api/organization-document-signatures', organizationDocumentSignatureRoutes_1.default);
 app.use('/api/company-offices', companyOfficeRoutes_1.default);
 app.use('/api/organization-contracts', organizationContractRoutes_1.default);
 // Applicant Profile Routes

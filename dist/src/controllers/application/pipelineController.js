@@ -327,7 +327,8 @@ const createInterviewForPipeline = async (req, res) => {
             const interview = await tx.interview.create({
                 data: {
                     application_id: pipelineStage.application_id,
-                    interview_date: new Date(interview_date),
+                    // Force UTC interpretation
+                    interview_date: new Date(new Date(interview_date).toISOString()),
                     status: 'PENDING',
                 },
                 select: {
@@ -457,7 +458,9 @@ const updateInterviewDate = async (req, res) => {
             return (0, response_1.sendError)(res, 'interview_date is required', 400);
         }
         const selectedDate = new Date(interview_date);
-        if (selectedDate < new Date()) {
+        const nowUTC = new Date();
+        // Normalize both to UTC for comparison
+        if (selectedDate.getTime() < nowUTC.getTime()) {
             return (0, response_1.sendError)(res, 'Interview date must be in the future', 400);
         }
         const interview = await prisma_config_1.default.interview.findUnique({
@@ -493,7 +496,7 @@ const updateInterviewDate = async (req, res) => {
         const oldInterviewDate = interview.interview_date;
         const updatedInterview = await prisma_config_1.default.interview.update({
             where: { interview_id: interviewId },
-            data: { interview_date: new Date(interview_date) },
+            data: { interview_date: new Date(selectedDate.toISOString()) },
             include: {
                 application: {
                     include: {
@@ -713,13 +716,14 @@ const getInterviewByApplication = async (req, res) => {
  */
 const autoUpdateCompletedInterviews = async (req, res) => {
     try {
-        const now = new Date();
+        // Get current UTC time explicitly
+        const nowUTC = new Date(new Date().toISOString());
         // Find all PENDING interviews past their date
         const pendingInterviews = await prisma_config_1.default.interview.findMany({
             where: {
                 status: 'PENDING',
                 interview_date: {
-                    lt: now,
+                    lt: nowUTC,
                 },
             },
             include: {
