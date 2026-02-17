@@ -1,22 +1,89 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import { format } from 'date-fns';
 
 /**
- * Email Service for sending professional notifications
+ * Email Service using Resend (HTTP API - works on Railway)
+ * Free tier: 3,000 emails/month, no credit card required
  */
 
-// Email configuration
-const createTransporter = () => {
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: false,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASSWORD,
-    },
-  });
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+/**
+ * Get sender email
+ */
+const getSenderEmail = (): string => {
+  // Use onboarding@resend.dev for testing (no domain verification needed)
+  // Or use your verified domain email in production
+  return process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
 };
+
+/**
+ * Send email with retry logic
+ */
+async function sendEmailWithRetry(
+  emailData: {
+    to: string;
+    subject: string;
+    html: string;
+  },
+  maxRetries: number = 3
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📧 Sending email via Resend (attempt ${attempt}/${maxRetries})...`, {
+        to: emailData.to,
+        subject: emailData.subject,
+      });
+
+      const { data, error } = await resend.emails.send({
+        from: getSenderEmail(),
+        to: emailData.to,
+        subject: emailData.subject,
+        html: emailData.html,
+      });
+
+      if (error) {
+        console.error(`❌ Resend error (attempt ${attempt}/${maxRetries}):`, error);
+        
+        if (attempt === maxRetries) {
+          return {
+            success: false,
+            error: error.message || 'Failed to send email',
+          };
+        }
+        
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+        continue;
+      }
+
+      console.log('✅ Email sent successfully via Resend:', {
+        messageId: data?.id,
+        to: emailData.to,
+      });
+
+      return {
+        success: true,
+        messageId: data?.id,
+      };
+    } catch (error: any) {
+      console.error(`❌ Email attempt ${attempt}/${maxRetries} failed:`, error);
+
+      if (attempt === maxRetries) {
+        return {
+          success: false,
+          error: error.message || 'Failed to send email',
+        };
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    }
+  }
+
+  return {
+    success: false,
+    error: 'Failed to send email',
+  };
+}
 
 /**
  * Base professional email template
@@ -95,6 +162,13 @@ const generateBaseEmailHTML = (data: {
             margin-top: 30px;
             font-size: 14px;
         }
+        ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        li {
+            margin: 5px 0;
+        }
     </style>
 </head>
 <body>
@@ -121,28 +195,6 @@ const generateBaseEmailHTML = (data: {
     </div>
 </body>
 </html>
-  `;
-};
-
-/**
- * Generate plain text version
- */
-const generateBaseEmailText = (data: {
-  applicantName: string;
-  organizationName: string;
-  content: string;
-}) => {
-  return `
-Dear ${data.applicantName},
-
-${data.content}
-
-Best regards,
-${data.organizationName} Hiring Team
-
----
-This is an automated notification.
-© ${new Date().getFullYear()} ${data.organizationName}. All rights reserved.
   `;
 };
 
@@ -207,27 +259,13 @@ export const sendInterviewInvitationEmail = async (interviewData: {
       content,
     });
 
-    const textContent = generateBaseEmailText({
-      applicantName: interviewData.applicantName,
-      organizationName: interviewData.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
-
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
-      from: {
-        name: interviewData.organizationName,
-        address: process.env.SMTP_USER || 'noreply@company.com',
-      },
+    return await sendEmailWithRetry({
       to: interviewData.applicantEmail,
       subject: `Interview Invitation - ${interviewData.jobTitle}`,
-      text: textContent,
       html: htmlContent,
     });
-
-    return { success: true, messageId: info.messageId };
   } catch (error: any) {
-    console.error('Error sending interview invitation email:', error);
+    console.error('Error preparing interview invitation email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -271,27 +309,13 @@ export const sendInterviewRescheduleEmail = async (data: {
       content,
     });
 
-    const textContent = generateBaseEmailText({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
-
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
-      from: {
-        name: data.organizationName,
-        address: process.env.SMTP_USER || 'noreply@company.com',
-      },
+    return await sendEmailWithRetry({
       to: data.applicantEmail,
       subject: `Interview Rescheduled - ${data.jobTitle}`,
-      text: textContent,
       html: htmlContent,
     });
-
-    return { success: true, messageId: info.messageId };
   } catch (error: any) {
-    console.error('Error sending reschedule email:', error);
+    console.error('Error preparing reschedule email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -323,27 +347,13 @@ export const sendInterviewRejectionEmail = async (data: {
       content,
     });
 
-    const textContent = generateBaseEmailText({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
-
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
-      from: {
-        name: data.organizationName,
-        address: process.env.SMTP_USER || 'noreply@company.com',
-      },
+    return await sendEmailWithRetry({
       to: data.applicantEmail,
       subject: `Application Status - ${data.jobTitle}`,
-      text: textContent,
       html: htmlContent,
     });
-
-    return { success: true, messageId: info.messageId };
   } catch (error: any) {
-    console.error('Error sending rejection email:', error);
+    console.error('Error preparing rejection email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -380,27 +390,13 @@ export const sendOfferLetterEmail = async (data: {
       content,
     });
 
-    const textContent = generateBaseEmailText({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
-
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
-      from: {
-        name: data.organizationName,
-        address: process.env.SMTP_USER || 'noreply@company.com',
-      },
+    return await sendEmailWithRetry({
       to: data.applicantEmail,
       subject: `Job Offer - ${data.jobTitle} at ${data.organizationName}`,
-      text: textContent,
       html: htmlContent,
     });
-
-    return { success: true, messageId: info.messageId };
   } catch (error: any) {
-    console.error('Error sending offer email:', error);
+    console.error('Error preparing offer email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -443,27 +439,13 @@ export const sendOnboardingWelcomeEmail = async (data: {
       content,
     });
 
-    const textContent = generateBaseEmailText({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
-
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
-      from: {
-        name: data.organizationName,
-        address: process.env.SMTP_USER || 'noreply@company.com',
-      },
+    return await sendEmailWithRetry({
       to: data.applicantEmail,
       subject: `Welcome to ${data.organizationName}!`,
-      text: textContent,
       html: htmlContent,
     });
-
-    return { success: true, messageId: info.messageId };
   } catch (error: any) {
-    console.error('Error sending onboarding email:', error);
+    console.error('Error preparing onboarding email:', error);
     return { success: false, error: error.message || 'Failed to send email' };
   }
 };
@@ -473,12 +455,15 @@ export const sendOnboardingWelcomeEmail = async (data: {
  */
 export const verifyEmailConfiguration = async (): Promise<boolean> => {
   try {
-    const transporter = createTransporter();
-    await transporter.verify();
-    console.log('✅ Email server is ready to send messages');
+    if (!process.env.RESEND_API_KEY) {
+      console.error('❌ RESEND_API_KEY not set in environment variables');
+      return false;
+    }
+    
+    console.log('✅ Resend email service is configured');
     return true;
-  } catch (error) {
-    console.error('❌ Email server configuration error:', error);
+  } catch (error: any) {
+    console.error('❌ Email configuration error:', error.message);
     return false;
   }
 };

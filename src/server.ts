@@ -17,6 +17,7 @@ import organizationAccountingRoutes from './routes/organization/organizationAcco
 import organizationUserRoutes from './routes/organization/organizationUserRoutes';
 import organizationDocumentTitleRoutes from './routes/organization/organizationDocumentTitleRoutes';
 import organizationDocumentRoutes from './routes/organization/organizationDocumentRoutes';
+import organizationDocumentSignatureRoutes from './routes/organization/organizationDocumentSignatureRoutes';
 import { jobOwnerController } from './controllers/job/jobOwnerController';
 import applicantRoutes from './routes/applicant/applicantRoutes';
 import applicantContactRoutes from './routes/applicant/applicantContactRoutes';
@@ -37,6 +38,9 @@ import publicRoutes from './routes/public_application/publicRoutes';
 import applicantProfileRoutes from './routes/applicant/applicantProfileRoutes';
 import pipelineRoutes from './routes/application/pipelineRoutes';
 import initializeCronJobs from '../src/services/cronJobService'
+
+
+
 
 dotenv.config();
 
@@ -115,6 +119,7 @@ app.use('/api/organization-accounting', organizationAccountingRoutes);
 app.use('/api/organization-users', organizationUserRoutes);
 app.use('/api/organization-document-titles', organizationDocumentTitleRoutes);
 app.use('/api/organization-documents', organizationDocumentRoutes);
+app.use('/api/organization-document-signatures', organizationDocumentSignatureRoutes);
 app.use('/api/company-offices', companyOfficeRoutes);
 app.use('/api/organization-contracts', organizationContractorRoutes);
 
@@ -132,6 +137,7 @@ app.use('/api/applicant-references', applicantReferencesRoutes);
 app.use('/api/applicant-social-profiles', applicantSocialProfilesRoutes);
 app.use('/api/applicant-work-history', applicantWorkHistoryRoutes);
 app.use('/api/applicant-documents', applicantDocumentsRoutes);
+
 
 
 // Application routes

@@ -38,6 +38,7 @@ model User {
   managed_jobs         Job[]                  @relation("JobManager")
   created_jobs         Job[]                  @relation("JobCreatedBy")
   created_organizations Organization[]        @relation("OrganizationCreatedBy")
+  document_signatures  DocumentSignature[]
 
 
 
@@ -271,12 +272,60 @@ model OrganizationDocument {
   organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
   user         User         @relation(fields: [user_id], references: [user_id])
   title        OrganizationDocumentTitle @relation(fields: [document_title_id], references: [document_title_id], onDelete: Cascade)
+  document_signatures DocumentSignature[]
+  signature_requests  SignatureRequest[]
 
   @@index([organization_id])
   @@index([user_id])
   @@index([document_title_id])
   @@map("organization_documents")
 }
+
+
+
+model DocumentSignature {
+  signature_id        String   @id @default(uuid())
+  document_id         String
+  user_id             String
+  signer_name         String
+  signer_email        String
+  signature_image_url String
+  signature_type      String   // DRAWN, TYPED, UPLOADED
+  signed_at           DateTime @default(now())
+  ip_address          String?
+  user_agent          String?
+  verification_hash   String
+  position            String?  // JSON
+  status              String   @default("COMPLETED")
+  is_verified         Boolean  @default(false)   // ← ADD THIS
+
+  
+  document            OrganizationDocument @relation(fields: [document_id], references: [document_id], onDelete: Cascade)
+  user                User @relation(fields: [user_id], references: [user_id])
+  
+  @@index([document_id])
+  @@index([user_id])
+}
+
+
+model SignatureRequest {
+  request_id       String   @id @default(uuid())
+  document_id      String
+  recipient_email  String
+  recipient_name   String
+  message          String?
+  status           String   @default("PENDING")
+  request_token    String   @unique
+  expires_at       DateTime
+  created_at       DateTime @default(now())
+  completed_at     DateTime?
+  
+  document         OrganizationDocument @relation(fields: [document_id], references: [document_id], onDelete: Cascade)
+  
+  @@index([document_id])
+  @@index([request_token])
+}
+
 
 
 // ============================================
