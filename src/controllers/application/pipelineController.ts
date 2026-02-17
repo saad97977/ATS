@@ -805,37 +805,36 @@ const autoUpdateCompletedInterviews = async (req: Request, res: Response) => {
       });
     }
 
-    // Update each interview and pipeline stage
-    const updateResults = await Promise.all(
-      pendingInterviews.map(async (interview) => {
-        return prisma.$transaction(async (tx) => {
-          // Update interview status
-          await tx.interview.update({
-            where: { interview_id: interview.interview_id },
-            data: { status: 'COMPLETED_RESULT_PENDING' },
-          });
+    // ✅ Single transaction for all updates
+    const updateResults = await prisma.$transaction(async (tx) => {
+      const interviewUpdate = await tx.interview.updateMany({
+        where: {
+          status: 'PENDING',
+          interview_date: { lt: nowUTC },
+        },
+        data: { status: 'COMPLETED_RESULT_PENDING' },
+      });
 
-          // Update pipeline stage to INTERVIEWED
-          const pipelineStage = await tx.pipelineStage.findFirst({
-            where: { application_id: interview.application_id },
-          });
+      await tx.pipelineStage.updateMany({
+        where: {
+          application: {
+            interviews: {
+              some: {
+                status: 'COMPLETED_RESULT_PENDING',
+                interview_date: { lt: nowUTC },
+              },
+            },
+          },
+        },
+        data: { stage_name: 'INTERVIEWED' },
+      });
 
-          if (pipelineStage) {
-            await tx.pipelineStage.update({
-              where: { pipeline_stage_id: pipelineStage.pipeline_stage_id },
-              data: { stage_name: 'INTERVIEWED' },
-            });
-          }
-
-          return interview.interview_id;
-        });
-      })
-    );
+      return interviewUpdate.count;
+    });
 
     return sendSuccess(res, {
-      message: `Successfully updated ${updateResults.length} interviews`,
-      updated_count: updateResults.length,
-      updated_interview_ids: updateResults,
+      message: `Successfully updated ${updateResults} interviews`,
+      updated_count: updateResults,
     });
   } catch (err: any) {
     console.error('Error auto-updating interviews:', err);
@@ -1244,12 +1243,17 @@ const onboardCandidate = async (req: Request, res: Response) => {
     // Send onboarding welcome email
     const applicantEmail = result!.application.applicant.contact?.email;
     if (applicantEmail) {
-      sendOnboardingWelcomeEmail({
-        applicantEmail,
-        applicantName: result!.application.applicant.full_name,
-        jobTitle: result!.application.job.job_title,
-        organizationName: result!.application.job.organization.name,
-      })
+          sendOnboardingWelcomeEmail({
+            applicantEmail,
+            applicantName: result!.application.applicant.full_name,
+            jobTitle: result!.application.job.job_title,
+            organizationName: result!.application.job.organization.name,
+            // Add these four:
+            startDate: startDate,
+            endDate: end_date ? new Date(end_date) : null,
+            employmentType: employment_type,
+            workersCompCode: workers_comp_code || null,
+          })
         .then((emailResult) => {
           if (emailResult.success) {
             console.log('✅ Onboarding welcome email sent successfully');

@@ -60,12 +60,19 @@ export declare const sendOfferLetterEmail: (data: {
 }>;
 /**
  * Send onboarding welcome email
+ *
+ * Now includes full assignment details:
+ * start_date, end_date, employment_type, workers_comp_code
  */
 export declare const sendOnboardingWelcomeEmail: (data: {
     applicantEmail: string;
     applicantName: string;
     jobTitle: string;
     organizationName: string;
+    startDate: Date;
+    endDate?: Date | null;
+    employmentType: string;
+    workersCompCode?: string | null;
 }) => Promise<{
     success: boolean;
     messageId?: string;
@@ -129,6 +136,10 @@ declare const _default: {
         applicantName: string;
         jobTitle: string;
         organizationName: string;
+        startDate: Date;
+        endDate?: Date | null;
+        employmentType: string;
+        workersCompCode?: string | null;
     }) => Promise<{
         success: boolean;
         messageId?: string;
