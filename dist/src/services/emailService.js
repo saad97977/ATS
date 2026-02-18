@@ -8,10 +8,20 @@ const nodemailer_1 = __importDefault(require("nodemailer"));
 /**
  * Email Service
  *
- * Dates are formatted using native JS getUTC*() methods so they always reflect
- * the exact UTC value stored in the database — no library dependencies, no
- * timezone drift.
+ * ─── TIMEZONE CONFIGURATION ───────────────────────────────────────────────────
+ * Change TIMEZONE_OFFSET_HOURS to shift all displayed dates in emails.
+ * Examples:
+ *   -5   → EST  (Eastern Standard Time)
+ *   -4   → EDT  (Eastern Daylight Time)
+ *    0   → UTC
+ *   +5   → PKT  (Pakistan Standard Time)
+ *   +5.5 → IST  (India Standard Time)
+ * ─────────────────────────────────────────────────────────────────────────────
  */
+const TIMEZONE_OFFSET_HOURS = -5;
+/** Label appended to times in emails e.g. "EST", "UTC", "PKT" */
+const TIMEZONE_LABEL = 'EST';
+// ─────────────────────────────────────────────────────────────────────────────
 const createTransporter = () => {
     return nodemailer_1.default.createTransport({
         host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -23,24 +33,45 @@ const createTransporter = () => {
         },
     });
 };
-// ─── UTC Date Formatting Helpers ─────────────────────────────────────────────
+// ─── Date Formatting Helpers ──────────────────────────────────────────────────
 const MONTHS = [
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December',
 ];
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const pad = (n) => String(n).padStart(2, '0');
-/** "Monday, March 17, 2025" */
-const fmtDate = (d) => `${DAYS[d.getUTCDay()]}, ${MONTHS[d.getUTCMonth()]} ${pad(d.getUTCDate())}, ${d.getUTCFullYear()}`;
-/** "10:26 PM" */
-const fmtTime = (d) => {
-    const h24 = d.getUTCHours();
-    const ampm = h24 >= 12 ? 'PM' : 'AM';
-    const h12 = h24 % 12 || 12;
-    return `${h12}:${pad(d.getUTCMinutes())} ${ampm}`;
+/**
+ * Shifts a UTC Date by TIMEZONE_OFFSET_HOURS and returns a plain object
+ * with adjusted year / month / day / weekday / hours / minutes.
+ * All arithmetic is done in UTC so the result is independent of the
+ * server's local timezone.
+ */
+const toOffsetParts = (d) => {
+    const offsetMs = TIMEZONE_OFFSET_HOURS * 60 * 60 * 1000;
+    const shifted = new Date(d.getTime() + offsetMs);
+    return {
+        year: shifted.getUTCFullYear(),
+        month: shifted.getUTCMonth(), // 0-based
+        day: shifted.getUTCDate(),
+        weekday: shifted.getUTCDay(), // 0 = Sunday
+        hours: shifted.getUTCHours(),
+        minutes: shifted.getUTCMinutes(),
+    };
 };
-/** "Monday, March 17, 2025 at 10:26 PM (UTC)" */
-const fmtDateTime = (d) => `${fmtDate(d)} at ${fmtTime(d)} (UTC)`;
+/** "Monday, March 17, 2025" */
+const fmtDate = (d) => {
+    const p = toOffsetParts(d);
+    return `${DAYS[p.weekday]}, ${MONTHS[p.month]} ${pad(p.day)}, ${p.year}`;
+};
+/** "10:26 PM (EST)" */
+const fmtTime = (d) => {
+    const p = toOffsetParts(d);
+    const ampm = p.hours >= 12 ? 'PM' : 'AM';
+    const h12 = p.hours % 12 || 12;
+    return `${h12}:${pad(p.minutes)} ${ampm} (${TIMEZONE_LABEL})`;
+};
+/** "Monday, March 17, 2025 at 10:26 PM (EST)" */
+const fmtDateTime = (d) => `${fmtDate(d)} at ${fmtTime(d)}`;
 /** "W2 Employee" | "1099 Contractor" */
 const fmtEmploymentType = (type) => ({ W2: 'W2 Employee', CONTRACTOR_1099: '1099 Contractor' }[type] ?? type);
 // ─── Base Templates ──────────────────────────────────────────────────────────
@@ -103,7 +134,7 @@ const sendInterviewInvitationEmail = async (data) => {
       <div class="info-box">
         <p><strong>Position:</strong> ${data.jobTitle}</p>
         <p><strong>Date:</strong> ${fmtDate(data.interviewDate)}</p>
-        <p><strong>Time:</strong> ${fmtTime(data.interviewDate)} (UTC)</p>
+        <p><strong>Time:</strong> ${fmtTime(data.interviewDate)}</p>
         <p><strong>Location:</strong> ${data.location}</p>
         ${data.organizationWebsite ? `<p><strong>Company Website:</strong> <a href="${data.organizationWebsite}">${data.organizationWebsite}</a></p>` : ''}
       </div>
@@ -155,7 +186,7 @@ const sendInterviewRescheduleEmail = async (data) => {
       <div class="info-box">
         <p><strong>Previous Date:</strong> ${fmtDateTime(data.oldDate)}</p>
         <p style="color: #dc3545;"><strong>New Date:</strong> ${fmtDate(data.newDate)}</p>
-        <p style="color: #dc3545;"><strong>New Time:</strong> ${fmtTime(data.newDate)} (UTC)</p>
+        <p style="color: #dc3545;"><strong>New Time:</strong> ${fmtTime(data.newDate)}</p>
         <p><strong>Location:</strong> ${data.location}</p>
       </div>
 
@@ -232,22 +263,6 @@ const sendOfferLetterEmail = async (data) => {
     }
 };
 exports.sendOfferLetterEmail = sendOfferLetterEmail;
-/**
- * Send onboarding welcome email with assignment details.
- *
- * Update the call in pipelineController.ts → onboardCandidate:
- *
- *   sendOnboardingWelcomeEmail({
- *     applicantEmail,
- *     applicantName:    result!.application.applicant.full_name,
- *     jobTitle:         result!.application.job.job_title,
- *     organizationName: result!.application.job.organization.name,
- *     startDate:        startDate,
- *     endDate:          end_date ? new Date(end_date) : null,
- *     employmentType:   employment_type,
- *     workersCompCode:  workers_comp_code ?? null,
- *   })
- */
 const sendOnboardingWelcomeEmail = async (data) => {
     try {
         const content = `

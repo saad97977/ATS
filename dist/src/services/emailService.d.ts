@@ -46,22 +46,6 @@ export declare const sendOfferLetterEmail: (data: {
     messageId?: string;
     error?: string;
 }>;
-/**
- * Send onboarding welcome email with assignment details.
- *
- * Update the call in pipelineController.ts → onboardCandidate:
- *
- *   sendOnboardingWelcomeEmail({
- *     applicantEmail,
- *     applicantName:    result!.application.applicant.full_name,
- *     jobTitle:         result!.application.job.job_title,
- *     organizationName: result!.application.job.organization.name,
- *     startDate:        startDate,
- *     endDate:          end_date ? new Date(end_date) : null,
- *     employmentType:   employment_type,
- *     workersCompCode:  workers_comp_code ?? null,
- *   })
- */
 export declare const sendOnboardingWelcomeEmail: (data: {
     applicantEmail: string;
     applicantName: string;
