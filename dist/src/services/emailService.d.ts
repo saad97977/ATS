@@ -1,7 +1,4 @@
-/**
- * Send interview invitation email
- */
-export declare const sendInterviewInvitationEmail: (interviewData: {
+export declare const sendInterviewInvitationEmail: (data: {
     applicantEmail: string;
     applicantName: string;
     jobTitle: string;
@@ -16,9 +13,6 @@ export declare const sendInterviewInvitationEmail: (interviewData: {
     messageId?: string;
     error?: string;
 }>;
-/**
- * Send interview reschedule email
- */
 export declare const sendInterviewRescheduleEmail: (data: {
     applicantEmail: string;
     applicantName: string;
@@ -32,9 +26,6 @@ export declare const sendInterviewRescheduleEmail: (data: {
     messageId?: string;
     error?: string;
 }>;
-/**
- * Send interview rejection email
- */
 export declare const sendInterviewRejectionEmail: (data: {
     applicantEmail: string;
     applicantName: string;
@@ -45,9 +36,6 @@ export declare const sendInterviewRejectionEmail: (data: {
     messageId?: string;
     error?: string;
 }>;
-/**
- * Send offer letter email
- */
 export declare const sendOfferLetterEmail: (data: {
     applicantEmail: string;
     applicantName: string;
@@ -59,10 +47,20 @@ export declare const sendOfferLetterEmail: (data: {
     error?: string;
 }>;
 /**
- * Send onboarding welcome email
+ * Send onboarding welcome email with assignment details.
  *
- * Now includes full assignment details:
- * start_date, end_date, employment_type, workers_comp_code
+ * Update the call in pipelineController.ts → onboardCandidate:
+ *
+ *   sendOnboardingWelcomeEmail({
+ *     applicantEmail,
+ *     applicantName:    result!.application.applicant.full_name,
+ *     jobTitle:         result!.application.job.job_title,
+ *     organizationName: result!.application.job.organization.name,
+ *     startDate:        startDate,
+ *     endDate:          end_date ? new Date(end_date) : null,
+ *     employmentType:   employment_type,
+ *     workersCompCode:  workers_comp_code ?? null,
+ *   })
  */
 export declare const sendOnboardingWelcomeEmail: (data: {
     applicantEmail: string;
@@ -78,12 +76,9 @@ export declare const sendOnboardingWelcomeEmail: (data: {
     messageId?: string;
     error?: string;
 }>;
-/**
- * Verify email configuration
- */
 export declare const verifyEmailConfiguration: () => Promise<boolean>;
 declare const _default: {
-    sendInterviewInvitationEmail: (interviewData: {
+    sendInterviewInvitationEmail: (data: {
         applicantEmail: string;
         applicantName: string;
         jobTitle: string;

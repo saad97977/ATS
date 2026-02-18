@@ -1,18 +1,13 @@
 import nodemailer from 'nodemailer';
-import { formatInTimeZone } from 'date-fns-tz';
 
 /**
- * Email Service for sending professional notifications
+ * Email Service
  *
- * TIMEZONE FIX: All dates are formatted using formatInTimeZone(..., 'UTC', ...)
- * to ensure the displayed time always matches what was stored — regardless of
- * the server's local TZ setting.
- *
- * Install dependency if not present:
- *   npm install date-fns-tz
+ * Dates are formatted using native JS getUTC*() methods so they always reflect
+ * the exact UTC value stored in the database — no library dependencies, no
+ * timezone drift.
  */
 
-// Email configuration
 const createTransporter = () => {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -25,34 +20,33 @@ const createTransporter = () => {
   });
 };
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── UTC Date Formatting Helpers ─────────────────────────────────────────────
 
-/**
- * Format a Date in UTC so the output always matches the stored value,
- * regardless of what TZ the server is running in.
- */
-const formatUTC = (date: Date, fmt: string): string =>
-  formatInTimeZone(date, 'UTC', fmt);
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const pad  = (n: number) => String(n).padStart(2, '0');
 
-/** e.g. "Monday, March 15, 2025" */
-const formatDateUTC = (date: Date): string =>
-  formatUTC(date, 'EEEE, MMMM dd, yyyy');
+/** "Monday, March 17, 2025" */
+const fmtDate = (d: Date): string =>
+  `${DAYS[d.getUTCDay()]}, ${MONTHS[d.getUTCMonth()]} ${pad(d.getUTCDate())}, ${d.getUTCFullYear()}`;
 
-/** e.g. "9:00 AM" */
-const formatTimeUTC = (date: Date): string => formatUTC(date, 'h:mm a');
-
-/** e.g. "Monday, March 15, 2025 at 9:00 AM (UTC)" */
-const formatDateTimeUTC = (date: Date): string =>
-  formatUTC(date, "EEEE, MMMM dd, yyyy 'at' h:mm a '(UTC)'");
-
-/** Human-readable employment type */
-const formatEmploymentType = (type: string): string => {
-  const map: Record<string, string> = {
-    W2: 'W2 Employee',
-    CONTRACTOR_1099: '1099 Contractor',
-  };
-  return map[type] ?? type;
+/** "10:26 PM" */
+const fmtTime = (d: Date): string => {
+  const h24  = d.getUTCHours();
+  const ampm = h24 >= 12 ? 'PM' : 'AM';
+  const h12  = h24 % 12 || 12;
+  return `${h12}:${pad(d.getUTCMinutes())} ${ampm}`;
 };
+
+/** "Monday, March 17, 2025 at 10:26 PM (UTC)" */
+const fmtDateTime = (d: Date): string => `${fmtDate(d)} at ${fmtTime(d)} (UTC)`;
+
+/** "W2 Employee" | "1099 Contractor" */
+const fmtEmploymentType = (type: string): string =>
+  ({ W2: 'W2 Employee', CONTRACTOR_1099: '1099 Contractor' }[type] ?? type);
 
 // ─── Base Templates ──────────────────────────────────────────────────────────
 
@@ -69,73 +63,23 @@ const generateBaseEmailHTML = (data: {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${data.subject}</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .email-container {
-            background-color: #ffffff;
-            border: 1px solid #dddddd;
-        }
-        .header {
-            background-color: #f8f9fa;
-            padding: 20px;
-            border-bottom: 2px solid #e9ecef;
-        }
-        .header h2 {
-            margin: 0;
-            font-size: 20px;
-            color: #212529;
-            font-weight: 600;
-        }
-        .content {
-            padding: 30px 20px;
-        }
-        .content p {
-            margin: 15px 0;
-            font-size: 14px;
-            color: #495057;
-        }
-        .info-box {
-            background-color: #f8f9fa;
-            border-left: 3px solid #6c757d;
-            padding: 15px;
-            margin: 20px 0;
-        }
-        .info-box p {
-            margin: 8px 0;
-            font-size: 14px;
-        }
-        .info-box strong {
-            color: #212529;
-        }
-        .footer {
-            background-color: #f8f9fa;
-            padding: 20px;
-            border-top: 1px solid #e9ecef;
-            text-align: center;
-        }
-        .footer p {
-            margin: 5px 0;
-            font-size: 12px;
-            color: #6c757d;
-        }
-        .signature {
-            margin-top: 30px;
-            font-size: 14px;
-        }
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }
+        .email-container { background-color: #ffffff; border: 1px solid #dddddd; }
+        .header { background-color: #f8f9fa; padding: 20px; border-bottom: 2px solid #e9ecef; }
+        .header h2 { margin: 0; font-size: 20px; color: #212529; font-weight: 600; }
+        .content { padding: 30px 20px; }
+        .content p { margin: 15px 0; font-size: 14px; color: #495057; }
+        .info-box { background-color: #f8f9fa; border-left: 3px solid #6c757d; padding: 15px; margin: 20px 0; }
+        .info-box p { margin: 8px 0; font-size: 14px; }
+        .info-box strong { color: #212529; }
+        .footer { background-color: #f8f9fa; padding: 20px; border-top: 1px solid #e9ecef; text-align: center; }
+        .footer p { margin: 5px 0; font-size: 12px; color: #6c757d; }
+        .signature { margin-top: 30px; font-size: 14px; }
     </style>
 </head>
 <body>
     <div class="email-container">
-        <div class="header">
-            <h2>${data.organizationName}</h2>
-        </div>
+        <div class="header"><h2>${data.organizationName}</h2></div>
         <div class="content">
             <p>Dear ${data.applicantName},</p>
             ${data.content}
@@ -146,7 +90,7 @@ const generateBaseEmailHTML = (data: {
         </div>
         <div class="footer">
             <p>This is an automated notification. Please do not reply to this email.</p>
-            <p>© ${new Date().getFullYear()} ${data.organizationName}. All rights reserved.</p>
+            <p>© ${new Date().getUTCFullYear()} ${data.organizationName}. All rights reserved.</p>
         </div>
     </div>
 </body>
@@ -156,8 +100,7 @@ const generateBaseEmailText = (data: {
   applicantName: string;
   organizationName: string;
   content: string;
-}) => `
-Dear ${data.applicantName},
+}) => `Dear ${data.applicantName},
 
 ${data.content}
 
@@ -166,15 +109,11 @@ ${data.organizationName} Hiring Team
 
 ---
 This is an automated notification.
-© ${new Date().getFullYear()} ${data.organizationName}. All rights reserved.
-`;
+© ${new Date().getUTCFullYear()} ${data.organizationName}. All rights reserved.`;
 
 // ─── Email Senders ───────────────────────────────────────────────────────────
 
-/**
- * Send interview invitation email
- */
-export const sendInterviewInvitationEmail = async (interviewData: {
+export const sendInterviewInvitationEmail = async (data: {
   applicantEmail: string;
   applicantName: string;
   jobTitle: string;
@@ -186,19 +125,15 @@ export const sendInterviewInvitationEmail = async (interviewData: {
   contactPhone?: string;
 }): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
-    // ✅ FIX: Use UTC formatting — no more +4h offset
-    const formattedDate = formatDateUTC(interviewData.interviewDate);
-    const formattedTime = formatTimeUTC(interviewData.interviewDate);
-
     const content = `
-      <p>We are pleased to invite you for an interview for the position of <strong>${interviewData.jobTitle}</strong>.</p>
-      
+      <p>We are pleased to invite you for an interview for the position of <strong>${data.jobTitle}</strong>.</p>
+
       <div class="info-box">
-        <p><strong>Position:</strong> ${interviewData.jobTitle}</p>
-        <p><strong>Date:</strong> ${formattedDate}</p>
-        <p><strong>Time:</strong> ${formattedTime} (UTC)</p>
-        <p><strong>Location:</strong> ${interviewData.location}</p>
-        ${interviewData.organizationWebsite ? `<p><strong>Company Website:</strong> <a href="${interviewData.organizationWebsite}">${interviewData.organizationWebsite}</a></p>` : ''}
+        <p><strong>Position:</strong> ${data.jobTitle}</p>
+        <p><strong>Date:</strong> ${fmtDate(data.interviewDate)}</p>
+        <p><strong>Time:</strong> ${fmtTime(data.interviewDate)} (UTC)</p>
+        <p><strong>Location:</strong> ${data.location}</p>
+        ${data.organizationWebsite ? `<p><strong>Company Website:</strong> <a href="${data.organizationWebsite}">${data.organizationWebsite}</a></p>` : ''}
       </div>
 
       <p><strong>What to bring:</strong></p>
@@ -215,37 +150,23 @@ export const sendInterviewInvitationEmail = async (interviewData: {
         <li>If you need to reschedule, contact us as soon as possible</li>
       </ul>
 
-      ${interviewData.contactEmail || interviewData.contactPhone ? `
+      ${data.contactEmail || data.contactPhone ? `
       <p><strong>Contact Information:</strong></p>
       <p>
-        ${interviewData.contactEmail ? `Email: ${interviewData.contactEmail}<br>` : ''}
-        ${interviewData.contactPhone ? `Phone: ${interviewData.contactPhone}` : ''}
-      </p>
-      ` : ''}
+        ${data.contactEmail ? `Email: ${data.contactEmail}<br>` : ''}
+        ${data.contactPhone ? `Phone: ${data.contactPhone}` : ''}
+      </p>` : ''}
 
       <p>We look forward to meeting you.</p>
     `;
 
-    const htmlContent = generateBaseEmailHTML({
-      applicantName: interviewData.applicantName,
-      organizationName: interviewData.organizationName,
-      subject: 'Interview Invitation',
-      content,
-    });
-
-    const textContent = generateBaseEmailText({
-      applicantName: interviewData.applicantName,
-      organizationName: interviewData.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
-
     const transporter = createTransporter();
     const info = await transporter.sendMail({
-      from: { name: interviewData.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
-      to: interviewData.applicantEmail,
-      subject: `Interview Invitation - ${interviewData.jobTitle}`,
-      text: textContent,
-      html: htmlContent,
+      from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
+      to: data.applicantEmail,
+      subject: `Interview Invitation - ${data.jobTitle}`,
+      text: generateBaseEmailText({ applicantName: data.applicantName, organizationName: data.organizationName, content: content.replace(/<[^>]*>/g, '').trim() }),
+      html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: 'Interview Invitation', content }),
     });
 
     return { success: true, messageId: info.messageId };
@@ -255,9 +176,6 @@ export const sendInterviewInvitationEmail = async (interviewData: {
   }
 };
 
-/**
- * Send interview reschedule email
- */
 export const sendInterviewRescheduleEmail = async (data: {
   applicantEmail: string;
   applicantName: string;
@@ -268,18 +186,13 @@ export const sendInterviewRescheduleEmail = async (data: {
   location: string;
 }): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
-    // ✅ FIX: Use UTC formatting for both old and new dates
-    const formattedOldDate = formatDateTimeUTC(data.oldDate);
-    const formattedNewDate = formatDateUTC(data.newDate);
-    const formattedNewTime = formatTimeUTC(data.newDate);
-
     const content = `
       <p>Your interview for the position of <strong>${data.jobTitle}</strong> has been rescheduled.</p>
-      
+
       <div class="info-box">
-        <p><strong>Previous Date:</strong> ${formattedOldDate}</p>
-        <p style="color: #dc3545;"><strong>New Date:</strong> ${formattedNewDate}</p>
-        <p style="color: #dc3545;"><strong>New Time:</strong> ${formattedNewTime} (UTC)</p>
+        <p><strong>Previous Date:</strong> ${fmtDateTime(data.oldDate)}</p>
+        <p style="color: #dc3545;"><strong>New Date:</strong> ${fmtDate(data.newDate)}</p>
+        <p style="color: #dc3545;"><strong>New Time:</strong> ${fmtTime(data.newDate)} (UTC)</p>
         <p><strong>Location:</strong> ${data.location}</p>
       </div>
 
@@ -287,26 +200,13 @@ export const sendInterviewRescheduleEmail = async (data: {
       <p>We look forward to meeting you at the rescheduled time.</p>
     `;
 
-    const htmlContent = generateBaseEmailHTML({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      subject: 'Interview Rescheduled',
-      content,
-    });
-
-    const textContent = generateBaseEmailText({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
-
     const transporter = createTransporter();
     const info = await transporter.sendMail({
       from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
       to: data.applicantEmail,
       subject: `Interview Rescheduled - ${data.jobTitle}`,
-      text: textContent,
-      html: htmlContent,
+      text: generateBaseEmailText({ applicantName: data.applicantName, organizationName: data.organizationName, content: content.replace(/<[^>]*>/g, '').trim() }),
+      html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: 'Interview Rescheduled', content }),
     });
 
     return { success: true, messageId: info.messageId };
@@ -316,9 +216,6 @@ export const sendInterviewRescheduleEmail = async (data: {
   }
 };
 
-/**
- * Send interview rejection email
- */
 export const sendInterviewRejectionEmail = async (data: {
   applicantEmail: string;
   applicantName: string;
@@ -328,34 +225,18 @@ export const sendInterviewRejectionEmail = async (data: {
   try {
     const content = `
       <p>Thank you for your interest in the <strong>${data.jobTitle}</strong> position and for taking the time to interview with us.</p>
-      
       <p>After careful consideration, we have decided to move forward with other candidates whose qualifications more closely match our current needs.</p>
-
       <p>We appreciate your interest in ${data.organizationName} and encourage you to apply for future openings that match your skills and experience.</p>
-
       <p>We wish you the best in your job search and future professional endeavors.</p>
     `;
-
-    const htmlContent = generateBaseEmailHTML({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      subject: 'Interview Status Update',
-      content,
-    });
-
-    const textContent = generateBaseEmailText({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
 
     const transporter = createTransporter();
     const info = await transporter.sendMail({
       from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
       to: data.applicantEmail,
       subject: `Application Status - ${data.jobTitle}`,
-      text: textContent,
-      html: htmlContent,
+      text: generateBaseEmailText({ applicantName: data.applicantName, organizationName: data.organizationName, content: content.replace(/<[^>]*>/g, '').trim() }),
+      html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: 'Interview Status Update', content }),
     });
 
     return { success: true, messageId: info.messageId };
@@ -365,9 +246,6 @@ export const sendInterviewRejectionEmail = async (data: {
   }
 };
 
-/**
- * Send offer letter email
- */
 export const sendOfferLetterEmail = async (data: {
   applicantEmail: string;
   applicantName: string;
@@ -377,39 +255,24 @@ export const sendOfferLetterEmail = async (data: {
   try {
     const content = `
       <p>Congratulations! We are pleased to extend an offer for the position of <strong>${data.jobTitle}</strong> at ${data.organizationName}.</p>
-      
+
       <div class="info-box">
         <p><strong>Position:</strong> ${data.jobTitle}</p>
         <p><strong>Company:</strong> ${data.organizationName}</p>
       </div>
 
       <p>Your skills and experience impressed us, and we believe you will be a valuable addition to our team.</p>
-
       <p>Our HR team will contact you shortly with the formal offer letter and next steps for onboarding.</p>
-
       <p>We look forward to having you join our team!</p>
     `;
-
-    const htmlContent = generateBaseEmailHTML({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      subject: 'Job Offer',
-      content,
-    });
-
-    const textContent = generateBaseEmailText({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
 
     const transporter = createTransporter();
     const info = await transporter.sendMail({
       from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
       to: data.applicantEmail,
       subject: `Job Offer - ${data.jobTitle} at ${data.organizationName}`,
-      text: textContent,
-      html: htmlContent,
+      text: generateBaseEmailText({ applicantName: data.applicantName, organizationName: data.organizationName, content: content.replace(/<[^>]*>/g, '').trim() }),
+      html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: 'Job Offer', content }),
     });
 
     return { success: true, messageId: info.messageId };
@@ -420,37 +283,41 @@ export const sendOfferLetterEmail = async (data: {
 };
 
 /**
- * Send onboarding welcome email
+ * Send onboarding welcome email with assignment details.
  *
- * Now includes full assignment details:
- * start_date, end_date, employment_type, workers_comp_code
+ * Update the call in pipelineController.ts → onboardCandidate:
+ *
+ *   sendOnboardingWelcomeEmail({
+ *     applicantEmail,
+ *     applicantName:    result!.application.applicant.full_name,
+ *     jobTitle:         result!.application.job.job_title,
+ *     organizationName: result!.application.job.organization.name,
+ *     startDate:        startDate,
+ *     endDate:          end_date ? new Date(end_date) : null,
+ *     employmentType:   employment_type,
+ *     workersCompCode:  workers_comp_code ?? null,
+ *   })
  */
 export const sendOnboardingWelcomeEmail = async (data: {
   applicantEmail: string;
   applicantName: string;
   jobTitle: string;
   organizationName: string;
-  // ✅ NEW: Assignment fields passed from onboardCandidate controller
   startDate: Date;
   endDate?: Date | null;
   employmentType: string;
   workersCompCode?: string | null;
 }): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
-    // ✅ FIX: Format assignment dates in UTC
-    const formattedStartDate = formatDateUTC(data.startDate);
-    const formattedEndDate = data.endDate ? formatDateUTC(data.endDate) : 'Open-ended';
-    const formattedEmploymentType = formatEmploymentType(data.employmentType);
-
     const content = `
       <p>Welcome to ${data.organizationName}! We are thrilled to have you join our team as <strong>${data.jobTitle}</strong>.</p>
-      
+
       <div class="info-box">
         <p><strong>Position:</strong> ${data.jobTitle}</p>
         <p><strong>Company:</strong> ${data.organizationName}</p>
-        <p><strong>Employment Type:</strong> ${formattedEmploymentType}</p>
-        <p><strong>Start Date:</strong> ${formattedStartDate}</p>
-        <p><strong>End Date:</strong> ${formattedEndDate}</p>
+        <p><strong>Employment Type:</strong> ${fmtEmploymentType(data.employmentType)}</p>
+        <p><strong>Start Date:</strong> ${fmtDate(data.startDate)}</p>
+        <p><strong>End Date:</strong> ${data.endDate ? fmtDate(data.endDate) : 'Open-ended'}</p>
         ${data.workersCompCode ? `<p><strong>Workers' Comp Code:</strong> ${data.workersCompCode}</p>` : ''}
       </div>
 
@@ -459,34 +326,20 @@ export const sendOnboardingWelcomeEmail = async (data: {
         <li>Our HR team will contact you with detailed onboarding instructions</li>
         <li>Documentation and paperwork will be sent separately before your start date</li>
         <li>Details about orientation and training will follow shortly</li>
-        <li>Please ensure all required documents are ready prior to <strong>${formattedStartDate}</strong></li>
+        <li>Please ensure all required documents are ready prior to <strong>${fmtDate(data.startDate)}</strong></li>
       </ul>
 
       <p>If you have any questions before your start date, please don't hesitate to reach out to our HR department.</p>
-
       <p>We look forward to working with you!</p>
     `;
-
-    const htmlContent = generateBaseEmailHTML({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      subject: 'Welcome to the Team',
-      content,
-    });
-
-    const textContent = generateBaseEmailText({
-      applicantName: data.applicantName,
-      organizationName: data.organizationName,
-      content: content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
-    });
 
     const transporter = createTransporter();
     const info = await transporter.sendMail({
       from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
       to: data.applicantEmail,
       subject: `Welcome to ${data.organizationName}!`,
-      text: textContent,
-      html: htmlContent,
+      text: generateBaseEmailText({ applicantName: data.applicantName, organizationName: data.organizationName, content: content.replace(/<[^>]*>/g, '').trim() }),
+      html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: 'Welcome to the Team', content }),
     });
 
     return { success: true, messageId: info.messageId };
@@ -496,9 +349,6 @@ export const sendOnboardingWelcomeEmail = async (data: {
   }
 };
 
-/**
- * Verify email configuration
- */
 export const verifyEmailConfiguration = async (): Promise<boolean> => {
   try {
     const transporter = createTransporter();
