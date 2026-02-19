@@ -39,6 +39,7 @@ model User {
   created_jobs         Job[]                  @relation("JobCreatedBy")
   created_organizations Organization[]        @relation("OrganizationCreatedBy")
   document_signatures  DocumentSignature[]
+  reviewed_timesheets  Timesheet[] @relation("TimesheetReviewer")
 
 
 
@@ -681,6 +682,8 @@ model PipelineStage {
 // ============================================
 // ASSIGNMENT (POST-HIRE)
 // ============================================
+// ─── STEP 1: REPLACE your Assignment model ───────────────────
+// (only adds optional relation fields — zero schema-breaking changes)
 
 model Assignment {
   assignment_id     String         @id @default(uuid())
@@ -690,43 +693,178 @@ model Assignment {
   employment_type   EmploymentType
   workers_comp_code String?
 
-  // Relations
-  application  Application @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
+  // Existing relation
+  application  Application  @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
+
+  // NEW — purely additive, Prisma adds no DB column for these
+  timesheets   Timesheet[]
   time_entries TimeEntry[]
+  invoices     Invoice[]
   payrolls     Payroll[]
 
   @@map("assignments")
 }
 
-// ============================================
-// TIME & PAYROLL
-// ============================================
 
-model TimeEntry {
-  time_entry_id String          @id @default(uuid())
-  assignment_id String
-  work_date     DateTime
-  hours         Decimal         @db.Decimal(5, 2)
-  status        TimeEntryStatus @default(SUBMITTED)
+// ─── STEP 2: ADD Timesheet model (NEW TABLE) ─────────────────
+
+model Timesheet {
+  timesheet_id         String          @id @default(uuid())
+  assignment_id        String
+
+  // Always Mon 00:00:00 UTC → Sun 23:59:59 UTC
+  week_start_date      DateTime
+  week_end_date        DateTime
+
+  status               TimesheetStatus @default(DRAFT)
+
+  // Running totals — recalculated after every TimeEntry mutation
+  total_regular_hours  Decimal         @default(0) @db.Decimal(7, 2)
+  total_ot_hours       Decimal         @default(0) @db.Decimal(7, 2)
+  total_hours          Decimal         @default(0) @db.Decimal(7, 2)
+
+  // Billing snapshot written ONCE at approval time from JobRate.
+  // Frozen so historical invoices never drift when rates change.
+  bill_rate            Decimal?        @db.Decimal(10, 2)
+  ot_bill_rate         Decimal?        @db.Decimal(10, 2)
+  total_bill_amount    Decimal?        @db.Decimal(14, 2)
+  pay_rate             Decimal?        @db.Decimal(10, 2)
+  ot_pay_rate          Decimal?        @db.Decimal(10, 2)
+  total_pay_amount     Decimal?        @db.Decimal(14, 2)
+
+  // Workflow
+  submitted_at         DateTime?
+  reviewed_by_user_id  String?
+  reviewed_at          DateTime?
+  approved_at          DateTime?
+  rejected_at          DateTime?
+  rejection_reason     String?
+  notes                String?
+  created_at           DateTime        @default(now())
+  updated_at           DateTime        @updatedAt
+
+  // QuickBooks
+  qb_synced            Boolean         @default(false)
+  qb_synced_at         DateTime?
+  qb_timesheet_id      String?
 
   // Relations
-  assignment Assignment @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+  assignment           Assignment      @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+  reviewed_by          User?           @relation("TimesheetReviewer", fields: [reviewed_by_user_id], references: [user_id])
+  time_entries         TimeEntry[]
+  invoice              Invoice?
+  payroll              Payroll?
 
+  @@unique([assignment_id, week_start_date])  // one timesheet per week per worker
+  @@index([assignment_id])
+  @@index([week_start_date])
+  @@index([status])
+  @@map("timesheets")
+}
+
+
+// ─── STEP 3: ADD TimeEntry model (NEW TABLE — replaces old one) ─
+
+model TimeEntry {
+  time_entry_id   String     @id @default(uuid())
+  timesheet_id    String
+  assignment_id   String
+
+  work_date       DateTime   // stored as date at 00:00:00 UTC
+
+  // Worker fills in daily hours; weekly totals live on Timesheet
+  regular_hours   Decimal    @default(0) @db.Decimal(5, 2)
+  ot_hours        Decimal    @default(0) @db.Decimal(5, 2)
+  total_hours     Decimal    @default(0) @db.Decimal(5, 2)
+
+  break_minutes   Int?       @default(0)
+  work_type       WorkType   @default(REGULAR)
+  notes           String?
+  created_at      DateTime   @default(now())
+  updated_at      DateTime   @updatedAt
+
+  timesheet       Timesheet  @relation(fields: [timesheet_id], references: [timesheet_id], onDelete: Cascade)
+  assignment      Assignment @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+
+  @@unique([timesheet_id, work_date])   // one entry per day per timesheet
+  @@index([timesheet_id])
   @@index([assignment_id])
   @@index([work_date])
   @@map("time_entries")
 }
 
-model Payroll {
-  payroll_id    String   @id @default(uuid())
-  assignment_id String
-  pay_period    String
-  gross_pay     Decimal  @db.Decimal(10, 2)
-  net_pay       Decimal  @db.Decimal(10, 2)
-  processed_at  DateTime @default(now())
 
-  // Relations
-  assignment Assignment @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+// ─── STEP 4: ADD Invoice model (NEW TABLE) ───────────────────
+
+model Invoice {
+  invoice_id         String        @id @default(uuid())
+  assignment_id      String
+  timesheet_id       String        @unique   // 1 invoice per approved week
+
+  invoice_number     String        @unique   // INV-2025-0042
+  status             InvoiceStatus @default(DRAFT)
+
+  invoice_date       DateTime      @default(now())
+  due_date           DateTime
+  paid_at            DateTime?
+
+  // Denormalized snapshot for PDF stability
+  regular_hours      Decimal       @db.Decimal(7, 2)
+  ot_hours           Decimal       @default(0) @db.Decimal(7, 2)
+  bill_rate          Decimal       @db.Decimal(10, 2)
+  ot_bill_rate       Decimal?      @db.Decimal(10, 2)
+  subtotal           Decimal       @db.Decimal(14, 2)
+  tax_rate           Decimal       @default(0) @db.Decimal(6, 4)
+  tax_amount         Decimal       @default(0) @db.Decimal(14, 2)
+  total_amount       Decimal       @db.Decimal(14, 2)
+
+  pdf_url            String?
+  pdf_generated_at   DateTime?
+
+  payment_method     String?
+  payment_reference  String?
+
+  qb_invoice_id      String?
+  qb_synced          Boolean       @default(false)
+  qb_synced_at       DateTime?
+  qb_sync_error      String?
+
+  created_at         DateTime      @default(now())
+  updated_at         DateTime      @updatedAt
+
+  assignment         Assignment    @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+  timesheet          Timesheet     @relation(fields: [timesheet_id], references: [timesheet_id], onDelete: Cascade)
+
+  @@index([assignment_id])
+  @@index([status])
+  @@index([invoice_date])
+  @@map("invoices")
+}
+
+
+// ─── STEP 5: REPLACE Payroll model ───────────────────────────
+// timesheet_id is NULLABLE so existing Payroll rows don't break.
+// After migration, backfill then optionally make it required.
+
+model Payroll {
+  payroll_id      String    @id @default(uuid())
+  assignment_id   String
+  timesheet_id    String?   @unique   // nullable = backward compatible
+  pay_period      String              // "2025-W12"
+  regular_hours   Decimal   @db.Decimal(7, 2)
+  ot_hours        Decimal   @default(0) @db.Decimal(7, 2)
+  pay_rate        Decimal   @db.Decimal(10, 2)
+  ot_pay_rate     Decimal?  @db.Decimal(10, 2)
+  gross_pay       Decimal   @db.Decimal(14, 2)
+  net_pay         Decimal   @db.Decimal(14, 2)
+  processed_at    DateTime  @default(now())
+
+  qb_payroll_id   String?
+  qb_synced       Boolean   @default(false)
+  qb_synced_at    DateTime?
+
+  assignment      Assignment  @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+  timesheet       Timesheet?  @relation(fields: [timesheet_id], references: [timesheet_id])
 
   @@index([assignment_id])
   @@map("payrolls")
@@ -831,3 +969,30 @@ enum OfficeType {
 }
 
 
+
+enum TimesheetStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  PROCESSED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  VIEWED
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum WorkType {
+  REGULAR
+  OVERTIME
+  HOLIDAY
+  SICK
+  PTO
+  UNPAID
+}

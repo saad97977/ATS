@@ -38,8 +38,7 @@ import publicRoutes from './routes/public_application/publicRoutes';
 import applicantProfileRoutes from './routes/applicant/applicantProfileRoutes';
 import pipelineRoutes from './routes/application/pipelineRoutes';
 import initializeCronJobs from '../src/services/cronJobService'
-
-
+import timesheetRoutes from './routes/timesheets/timesheetRoutes';
 
 
 dotenv.config();
@@ -87,6 +86,9 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Serve generated invoices (PDFs)
+app.use('/generated-invoices', express.static('generated-invoices'));
 
 // Health check endpoint for Fly.io and monitoring
 app.get('/health', (req, res) => {
@@ -139,6 +141,8 @@ app.use('/api/applicant-work-history', applicantWorkHistoryRoutes);
 app.use('/api/applicant-documents', applicantDocumentsRoutes);
 
 
+// Timesheets
+app.use('/api/timesheets', timesheetRoutes);
 
 // Application routes
 app.use('/api/applications', applicationRoutes);

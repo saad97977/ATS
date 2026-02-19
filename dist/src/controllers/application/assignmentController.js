@@ -9,21 +9,16 @@ const crudFactory_1 = require("../../factories/crudFactory");
 const schemas_1 = require("../../validators/schemas");
 const response_1 = require("../../utils/response");
 /**
- * Assignment Controller - Custom CRUD for Assignment management
- * Provides: GET all, GET by id, GET by application, POST, PATCH, DELETE
+ * Assignment Controller
  *
- * Validation Rules:
- * - application_id: Required UUID
- * - start_date: Required datetime
- * - end_date: Optional datetime
- * - employment_type: W2 or CONTRACTOR_1099
- * - workers_comp_code: Optional string
- *
- * Business Context: Manages post-hire assignments linking applications to employment
- * Tracks employment periods, time entries, and payroll
- * Business Rule: One application can only have one assignment
+ * Key improvements:
+ * - getAll now includes rich relational data (worker name, job title, org, rates, counts)
+ * - getAll supports search (by worker name, assignment_id, application_id)
+ * - getAll supports status filter (active | ended | ending_soon)
+ * - getAll supports employment_type filter
+ * - Stats endpoint accurately counts using DB queries, not client-side derivation
+ * - No N+1 queries — all data loaded in single Prisma query
  */
-// Generate base CRUD methods
 const baseCrudMethods = (0, crudFactory_1.createCrudController)({
     model: prisma_config_1.default.assignment,
     modelName: 'Assignment',
@@ -33,30 +28,215 @@ const baseCrudMethods = (0, crudFactory_1.createCrudController)({
     defaultLimit: 10,
     maxLimit: 100,
 });
+// Shared include for list queries — rich enough to avoid secondary API calls.
+// Typed with `satisfies Prisma.AssignmentInclude` so TypeScript validates the
+// shape while keeping the literal types Prisma needs for orderBy / SortOrder.
+const LIST_INCLUDE = {
+    application: {
+        select: {
+            application_id: true,
+            status: true,
+            job: {
+                select: {
+                    job_id: true,
+                    job_title: true,
+                    location: true,
+                    job_rates: {
+                        take: 1,
+                    },
+                    organization: {
+                        select: {
+                            organization_id: true,
+                            name: true,
+                        },
+                    },
+                },
+            },
+            applicant: {
+                select: {
+                    applicant_id: true,
+                    full_name: true,
+                    contact: {
+                        select: {
+                            email: true,
+                            phone: true,
+                        },
+                    },
+                },
+            },
+        },
+    },
+    _count: {
+        select: {
+            time_entries: true,
+            payrolls: true,
+        },
+    },
+};
 /**
- * Override getById to include full related data
+ * Build Prisma where clause from query params
+ */
+const buildWhereClause = (query) => {
+    const where = {};
+    const now = new Date();
+    // Employment type filter
+    if (query.employment_type && query.employment_type !== 'all') {
+        where.employment_type = query.employment_type.toUpperCase();
+    }
+    // Status filter
+    if (query.status) {
+        switch (query.status) {
+            case 'active':
+                where.OR = [{ end_date: null }, { end_date: { gte: now } }];
+                break;
+            case 'ended':
+                where.end_date = { lt: now };
+                break;
+            case 'ending_soon': {
+                const thirtyDaysFromNow = new Date(now);
+                thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+                where.end_date = { gte: now, lte: thirtyDaysFromNow };
+                break;
+            }
+        }
+    }
+    // Search — by assignment_id (prefix) or worker name via relation
+    if (query.search) {
+        const term = query.search.trim();
+        const searchConditions = [
+            { assignment_id: { contains: term, mode: 'insensitive' } },
+            { application_id: { contains: term, mode: 'insensitive' } },
+            {
+                application: {
+                    applicant: {
+                        full_name: { contains: term, mode: 'insensitive' },
+                    },
+                },
+            },
+            {
+                application: {
+                    job: {
+                        job_title: { contains: term, mode: 'insensitive' },
+                    },
+                },
+            },
+            {
+                application: {
+                    job: {
+                        organization: {
+                            name: { contains: term, mode: 'insensitive' },
+                        },
+                    },
+                },
+            },
+        ];
+        // Merge with existing OR if status filter also set an OR
+        if (where.OR) {
+            // Wrap: (status conditions) AND (search conditions)
+            where.AND = [{ OR: where.OR }, { OR: searchConditions }];
+            delete where.OR;
+        }
+        else {
+            where.OR = searchConditions;
+        }
+    }
+    return where;
+};
+/**
+ * GET /api/assignments
+ * Overrides base getAll with rich data + filtering
+ */
+const getAssignments = async (req, res) => {
+    try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+        const skip = (page - 1) * limit;
+        const where = buildWhereClause(req.query);
+        const [assignments, total] = await Promise.all([
+            prisma_config_1.default.assignment.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: { start_date: 'desc' },
+                include: LIST_INCLUDE,
+            }),
+            prisma_config_1.default.assignment.count({ where }),
+        ]);
+        return (0, response_1.sendSuccess)(res, {
+            data: assignments,
+            paging: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+    }
+    catch (err) {
+        console.error('Error fetching assignments:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch assignments', 500);
+    }
+};
+/**
+ * GET /api/assignments/stats
+ * Accurate counts from DB, not client-side
+ */
+const getAssignmentStats = async (req, res) => {
+    try {
+        const now = new Date();
+        const thirtyDaysFromNow = new Date(now);
+        thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+        const [total, active, completed, endingSoon, byEmploymentType] = await Promise.all([
+            prisma_config_1.default.assignment.count(),
+            prisma_config_1.default.assignment.count({
+                where: { OR: [{ end_date: null }, { end_date: { gte: now } }] },
+            }),
+            prisma_config_1.default.assignment.count({
+                where: { end_date: { lt: now } },
+            }),
+            prisma_config_1.default.assignment.count({
+                where: { end_date: { gte: now, lte: thirtyDaysFromNow } },
+            }),
+            prisma_config_1.default.assignment.groupBy({
+                by: ['employment_type'],
+                _count: { assignment_id: true },
+            }),
+        ]);
+        return (0, response_1.sendSuccess)(res, {
+            total,
+            active,
+            completed,
+            ending_soon: endingSoon,
+            by_employment_type: byEmploymentType.map(s => ({
+                employment_type: s.employment_type,
+                count: s._count.assignment_id,
+            })),
+        });
+    }
+    catch (err) {
+        console.error('Error fetching assignment stats:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch assignment statistics', 500);
+    }
+};
+/**
  * GET /api/assignments/:id
+ * Full detail including recent time entries and payrolls
  */
 const getAssignmentById = async (req, res) => {
     try {
         const { id } = req.params;
-        if (!id) {
+        if (!id)
             return (0, response_1.sendError)(res, 'Assignment ID is required', 400);
-        }
         const assignment = await prisma_config_1.default.assignment.findUnique({
             where: { assignment_id: id },
             include: {
+                ...LIST_INCLUDE,
                 application: {
                     include: {
                         job: {
                             include: {
                                 organization: {
-                                    select: {
-                                        organization_id: true,
-                                        name: true,
-                                        website: true,
-                                        phone: true,
-                                    },
+                                    select: { organization_id: true, name: true, website: true, phone: true },
                                 },
                                 job_detail: true,
                                 job_rates: true,
@@ -81,9 +261,8 @@ const getAssignmentById = async (req, res) => {
                 },
             },
         });
-        if (!assignment) {
+        if (!assignment)
             return (0, response_1.sendError)(res, 'Assignment not found', 404);
-        }
         return (0, response_1.sendSuccess)(res, assignment);
     }
     catch (err) {
@@ -92,15 +271,13 @@ const getAssignmentById = async (req, res) => {
     }
 };
 /**
- * Get assignment by application ID
  * GET /api/assignments/application/:applicationId
  */
 const getAssignmentByApplication = async (req, res) => {
     try {
         const { applicationId } = req.params;
-        if (!applicationId) {
+        if (!applicationId)
             return (0, response_1.sendError)(res, 'Application ID is required', 400);
-        }
         const assignment = await prisma_config_1.default.assignment.findUnique({
             where: { application_id: applicationId },
             include: {
@@ -113,38 +290,23 @@ const getAssignmentByApplication = async (req, res) => {
                                 job_id: true,
                                 job_title: true,
                                 location: true,
-                                organization: {
-                                    select: {
-                                        name: true,
-                                    },
-                                },
+                                organization: { select: { name: true } },
                             },
                         },
                         applicant: {
                             select: {
                                 applicant_id: true,
                                 full_name: true,
-                                contact: {
-                                    select: {
-                                        email: true,
-                                        phone: true,
-                                    },
-                                },
+                                contact: { select: { email: true, phone: true } },
                             },
                         },
                     },
                 },
-                _count: {
-                    select: {
-                        time_entries: true,
-                        payrolls: true,
-                    },
-                },
+                _count: { select: { time_entries: true, payrolls: true } },
             },
         });
-        if (!assignment) {
+        if (!assignment)
             return (0, response_1.sendError)(res, 'Assignment not found for this application', 404);
-        }
         return (0, response_1.sendSuccess)(res, assignment);
     }
     catch (err) {
@@ -153,81 +315,88 @@ const getAssignmentByApplication = async (req, res) => {
     }
 };
 /**
- * Get assignments by employment type
- * GET /api/assignments/employment-type/:type
+ * POST /api/assignments
+ * Validates: HIRED status, no duplicate, end > start
  */
-const getAssignmentsByEmploymentType = async (req, res) => {
+const createAssignment = async (req, res) => {
     try {
-        const { type } = req.params;
-        const page = Math.max(1, parseInt(req.query.page) || 1);
-        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
-        const skip = (page - 1) * limit;
-        if (!type) {
-            return (0, response_1.sendError)(res, 'Employment type is required', 400);
+        const validation = schemas_1.createAssignmentSchema.safeParse(req.body);
+        if (!validation.success) {
+            return (0, response_1.sendError)(res, 'Validation failed', 400, validation.error.issues.map((e) => ({ field: e.path.join('.'), message: e.message })));
         }
-        // Validate employment type
-        const validTypes = ['W2', 'CONTRACTOR_1099'];
-        if (!validTypes.includes(type.toUpperCase())) {
-            return (0, response_1.sendError)(res, `Invalid employment type. Must be one of: ${validTypes.join(', ')}`, 400);
+        const { application_id, start_date, end_date } = req.body;
+        if (end_date && new Date(end_date) <= new Date(start_date)) {
+            return (0, response_1.sendError)(res, 'End date must be after start date', 400);
         }
-        const [assignments, total] = await Promise.all([
-            prisma_config_1.default.assignment.findMany({
-                where: {
-                    employment_type: type.toUpperCase(),
-                },
-                skip,
-                take: limit,
-                orderBy: { start_date: 'desc' },
-                include: {
-                    application: {
-                        select: {
-                            job: {
-                                select: {
-                                    job_title: true,
-                                    organization: {
-                                        select: {
-                                            name: true,
-                                        },
-                                    },
-                                },
-                            },
-                            applicant: {
-                                select: {
-                                    full_name: true,
-                                    contact: {
-                                        select: {
-                                            email: true,
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            }),
-            prisma_config_1.default.assignment.count({
-                where: {
-                    employment_type: type.toUpperCase(),
-                },
-            }),
+        const [application, existingAssignment] = await Promise.all([
+            prisma_config_1.default.application.findUnique({ where: { application_id } }),
+            prisma_config_1.default.assignment.findUnique({ where: { application_id } }),
         ]);
-        return (0, response_1.sendSuccess)(res, {
-            data: assignments,
-            paging: {
-                total,
-                page,
-                limit,
-                totalPages: Math.ceil(total / limit),
-            },
+        if (!application)
+            return (0, response_1.sendError)(res, 'Application not found', 404);
+        if (application.status !== 'HIRED') {
+            return (0, response_1.sendError)(res, 'Assignment can only be created for HIRED applications', 400, [{
+                    field: 'application_status',
+                    message: `Application status is ${application.status}. Only HIRED applications can have assignments.`,
+                }]);
+        }
+        if (existingAssignment) {
+            return (0, response_1.sendError)(res, 'Assignment already exists for this application', 409, [{
+                    field: 'duplicate',
+                    message: `Assignment already exists with assignment_id: ${existingAssignment.assignment_id}`,
+                }]);
+        }
+        const assignment = await prisma_config_1.default.assignment.create({
+            data: req.body,
+            include: LIST_INCLUDE,
         });
+        return (0, response_1.sendSuccess)(res, assignment, 201);
     }
     catch (err) {
-        console.error('Error fetching assignments by employment type:', err);
-        return (0, response_1.sendError)(res, 'Failed to fetch assignments', 500);
+        console.error('Error creating assignment:', err);
+        if (err.code === 'P2002')
+            return (0, response_1.sendError)(res, 'Assignment already exists for this application', 409);
+        if (err.code === 'P2003')
+            return (0, response_1.sendError)(res, 'Related application not found', 404);
+        return (0, response_1.sendError)(res, 'Failed to create assignment', 500);
     }
 };
 /**
- * Get active assignments (no end_date or end_date in future)
+ * PATCH /api/assignments/:id
+ */
+const updateAssignment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id)
+            return (0, response_1.sendError)(res, 'Assignment ID is required', 400);
+        const validation = schemas_1.updateAssignmentSchema.safeParse(req.body);
+        if (!validation.success) {
+            return (0, response_1.sendError)(res, 'Validation failed', 400, validation.error.issues.map((e) => ({ field: e.path.join('.'), message: e.message })));
+        }
+        const existingAssignment = await prisma_config_1.default.assignment.findUnique({ where: { assignment_id: id } });
+        if (!existingAssignment)
+            return (0, response_1.sendError)(res, 'Assignment not found', 404);
+        if (req.body.end_date) {
+            const startDate = req.body.start_date ? new Date(req.body.start_date) : existingAssignment.start_date;
+            if (new Date(req.body.end_date) <= startDate) {
+                return (0, response_1.sendError)(res, 'End date must be after start date', 400);
+            }
+        }
+        const assignment = await prisma_config_1.default.assignment.update({
+            where: { assignment_id: id },
+            data: req.body,
+            include: LIST_INCLUDE,
+        });
+        return (0, response_1.sendSuccess)(res, assignment);
+    }
+    catch (err) {
+        console.error('Error updating assignment:', err);
+        if (err.code === 'P2025')
+            return (0, response_1.sendError)(res, 'Assignment not found', 404);
+        return (0, response_1.sendError)(res, 'Failed to update assignment', 500);
+    }
+};
+/**
  * GET /api/assignments/active
  */
 const getActiveAssignments = async (req, res) => {
@@ -236,65 +405,12 @@ const getActiveAssignments = async (req, res) => {
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
         const skip = (page - 1) * limit;
         const now = new Date();
+        const where = { OR: [{ end_date: null }, { end_date: { gte: now } }] };
         const [assignments, total] = await Promise.all([
-            prisma_config_1.default.assignment.findMany({
-                where: {
-                    OR: [
-                        { end_date: null },
-                        { end_date: { gte: now } },
-                    ],
-                },
-                skip,
-                take: limit,
-                orderBy: { start_date: 'desc' },
-                include: {
-                    application: {
-                        select: {
-                            application_id: true,
-                            job: {
-                                select: {
-                                    job_title: true,
-                                    location: true,
-                                    organization: {
-                                        select: {
-                                            name: true,
-                                        },
-                                    },
-                                },
-                            },
-                            applicant: {
-                                select: {
-                                    full_name: true,
-                                    contact: {
-                                        select: {
-                                            email: true,
-                                            phone: true,
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            }),
-            prisma_config_1.default.assignment.count({
-                where: {
-                    OR: [
-                        { end_date: null },
-                        { end_date: { gte: now } },
-                    ],
-                },
-            }),
+            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { start_date: 'desc' }, include: LIST_INCLUDE }),
+            prisma_config_1.default.assignment.count({ where }),
         ]);
-        return (0, response_1.sendSuccess)(res, {
-            data: assignments,
-            paging: {
-                total,
-                page,
-                limit,
-                totalPages: Math.ceil(total / limit),
-            },
-        });
+        return (0, response_1.sendSuccess)(res, { data: assignments, paging: { total, page, limit, totalPages: Math.ceil(total / limit) } });
     }
     catch (err) {
         console.error('Error fetching active assignments:', err);
@@ -302,7 +418,6 @@ const getActiveAssignments = async (req, res) => {
     }
 };
 /**
- * Get completed assignments (end_date in past)
  * GET /api/assignments/completed
  */
 const getCompletedAssignments = async (req, res) => {
@@ -311,62 +426,12 @@ const getCompletedAssignments = async (req, res) => {
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
         const skip = (page - 1) * limit;
         const now = new Date();
+        const where = { end_date: { lt: now } };
         const [assignments, total] = await Promise.all([
-            prisma_config_1.default.assignment.findMany({
-                where: {
-                    end_date: {
-                        lt: now,
-                    },
-                },
-                skip,
-                take: limit,
-                orderBy: { end_date: 'desc' },
-                include: {
-                    application: {
-                        select: {
-                            application_id: true,
-                            job: {
-                                select: {
-                                    job_title: true,
-                                    organization: {
-                                        select: {
-                                            name: true,
-                                        },
-                                    },
-                                },
-                            },
-                            applicant: {
-                                select: {
-                                    full_name: true,
-                                },
-                            },
-                        },
-                    },
-                    _count: {
-                        select: {
-                            time_entries: true,
-                            payrolls: true,
-                        },
-                    },
-                },
-            }),
-            prisma_config_1.default.assignment.count({
-                where: {
-                    end_date: {
-                        lt: now,
-                    },
-                },
-            }),
+            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { end_date: 'desc' }, include: LIST_INCLUDE }),
+            prisma_config_1.default.assignment.count({ where }),
         ]);
-        return (0, response_1.sendSuccess)(res, {
-            data: assignments,
-            paging: {
-                total,
-                page,
-                limit,
-                totalPages: Math.ceil(total / limit),
-            },
-        });
+        return (0, response_1.sendSuccess)(res, { data: assignments, paging: { total, page, limit, totalPages: Math.ceil(total / limit) } });
     }
     catch (err) {
         console.error('Error fetching completed assignments:', err);
@@ -374,221 +439,40 @@ const getCompletedAssignments = async (req, res) => {
     }
 };
 /**
- * Get assignment statistics
- * GET /api/assignments/stats
+ * GET /api/assignments/employment-type/:type
  */
-const getAssignmentStats = async (req, res) => {
+const getAssignmentsByEmploymentType = async (req, res) => {
     try {
-        const now = new Date();
-        const [totalAssignments, activeAssignments, completedAssignments, byEmploymentType] = await Promise.all([
-            prisma_config_1.default.assignment.count(),
-            prisma_config_1.default.assignment.count({
-                where: {
-                    OR: [
-                        { end_date: null },
-                        { end_date: { gte: now } },
-                    ],
-                },
-            }),
-            prisma_config_1.default.assignment.count({
-                where: {
-                    end_date: {
-                        lt: now,
-                    },
-                },
-            }),
-            prisma_config_1.default.assignment.groupBy({
-                by: ['employment_type'],
-                _count: {
-                    assignment_id: true,
-                },
-            }),
+        const { type } = req.params;
+        const validTypes = ['W2', 'CONTRACTOR_1099'];
+        if (!validTypes.includes(type?.toUpperCase())) {
+            return (0, response_1.sendError)(res, `Invalid employment type. Must be one of: ${validTypes.join(', ')}`, 400);
+        }
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+        const skip = (page - 1) * limit;
+        const where = { employment_type: type.toUpperCase() };
+        const [assignments, total] = await Promise.all([
+            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { start_date: 'desc' }, include: LIST_INCLUDE }),
+            prisma_config_1.default.assignment.count({ where }),
         ]);
-        const formattedEmploymentStats = byEmploymentType.map(stat => ({
-            employment_type: stat.employment_type,
-            count: stat._count.assignment_id,
-        }));
-        return (0, response_1.sendSuccess)(res, {
-            total: totalAssignments,
-            active: activeAssignments,
-            completed: completedAssignments,
-            by_employment_type: formattedEmploymentStats,
-        });
+        return (0, response_1.sendSuccess)(res, { data: assignments, paging: { total, page, limit, totalPages: Math.ceil(total / limit) } });
     }
     catch (err) {
-        console.error('Error fetching assignment stats:', err);
-        return (0, response_1.sendError)(res, 'Failed to fetch assignment statistics', 500);
+        console.error('Error fetching assignments by employment type:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch assignments', 500);
     }
 };
-/**
- * Custom create method with duplicate check
- * Ensures one application can only have one assignment
- */
-const createAssignment = async (req, res) => {
-    try {
-        // Validate request body
-        const validation = schemas_1.createAssignmentSchema.safeParse(req.body);
-        if (!validation.success) {
-            const errors = validation.error.issues.map((err) => ({
-                field: err.path.join('.'),
-                message: err.message,
-            }));
-            return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
-        }
-        const { application_id, start_date, end_date } = req.body;
-        // Validate that end_date is after start_date if provided
-        if (end_date && new Date(end_date) <= new Date(start_date)) {
-            return (0, response_1.sendError)(res, 'End date must be after start date', 400);
-        }
-        // Check if application exists
-        const application = await prisma_config_1.default.application.findUnique({
-            where: { application_id },
-        });
-        if (!application) {
-            return (0, response_1.sendError)(res, 'Application not found', 404);
-        }
-        // Check if application status is HIRED
-        if (application.status !== 'HIRED') {
-            return (0, response_1.sendError)(res, 'Assignment can only be created for HIRED applications', 400, [{
-                    field: 'application_status',
-                    message: `Application status is ${application.status}. Only HIRED applications can have assignments.`,
-                }]);
-        }
-        // Check for existing assignment for this application
-        const existingAssignment = await prisma_config_1.default.assignment.findUnique({
-            where: { application_id },
-        });
-        if (existingAssignment) {
-            return (0, response_1.sendError)(res, 'Assignment already exists for this application', 409, [{
-                    field: 'duplicate',
-                    message: `Assignment already exists with assignment_id: ${existingAssignment.assignment_id}`,
-                }]);
-        }
-        // Create new assignment
-        const assignment = await prisma_config_1.default.assignment.create({
-            data: req.body,
-            include: {
-                application: {
-                    select: {
-                        application_id: true,
-                        job: {
-                            select: {
-                                job_title: true,
-                                organization: {
-                                    select: {
-                                        name: true,
-                                    },
-                                },
-                            },
-                        },
-                        applicant: {
-                            select: {
-                                full_name: true,
-                                contact: {
-                                    select: {
-                                        email: true,
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        });
-        return (0, response_1.sendSuccess)(res, assignment, 201);
-    }
-    catch (err) {
-        console.error('Error creating assignment:', err);
-        // Handle duplicate assignment error (unique constraint violation)
-        if (err.code === 'P2002') {
-            return (0, response_1.sendError)(res, 'Assignment already exists for this application', 409, [{
-                    field: 'application_id',
-                    message: 'An assignment has already been created for this application',
-                }]);
-        }
-        // Handle foreign key constraint (application doesn't exist)
-        if (err.code === 'P2003') {
-            return (0, response_1.sendError)(res, 'Related application not found', 404);
-        }
-        return (0, response_1.sendError)(res, 'Failed to create assignment', 500);
-    }
-};
-/**
- * Custom update method with end_date validation
- */
-const updateAssignment = async (req, res) => {
-    try {
-        const { id } = req.params;
-        if (!id) {
-            return (0, response_1.sendError)(res, 'Assignment ID is required', 400);
-        }
-        // Validate request body
-        const validation = schemas_1.updateAssignmentSchema.safeParse(req.body);
-        if (!validation.success) {
-            const errors = validation.error.issues.map((err) => ({
-                field: err.path.join('.'),
-                message: err.message,
-            }));
-            return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
-        }
-        // Check if assignment exists
-        const existingAssignment = await prisma_config_1.default.assignment.findUnique({
-            where: { assignment_id: id },
-        });
-        if (!existingAssignment) {
-            return (0, response_1.sendError)(res, 'Assignment not found', 404);
-        }
-        // Validate end_date if provided
-        if (req.body.end_date) {
-            const startDate = req.body.start_date
-                ? new Date(req.body.start_date)
-                : existingAssignment.start_date;
-            const endDate = new Date(req.body.end_date);
-            if (endDate <= startDate) {
-                return (0, response_1.sendError)(res, 'End date must be after start date', 400);
-            }
-        }
-        // Update assignment
-        const assignment = await prisma_config_1.default.assignment.update({
-            where: { assignment_id: id },
-            data: req.body,
-            include: {
-                application: {
-                    select: {
-                        job: {
-                            select: {
-                                job_title: true,
-                            },
-                        },
-                        applicant: {
-                            select: {
-                                full_name: true,
-                            },
-                        },
-                    },
-                },
-            },
-        });
-        return (0, response_1.sendSuccess)(res, assignment);
-    }
-    catch (err) {
-        console.error('Error updating assignment:', err);
-        if (err.code === 'P2025') {
-            return (0, response_1.sendError)(res, 'Assignment not found', 404);
-        }
-        return (0, response_1.sendError)(res, 'Failed to update assignment', 500);
-    }
-};
-// Export controller with custom methods
 exports.assignmentController = {
     ...baseCrudMethods,
-    getById: getAssignmentById, // Override with full details
-    create: createAssignment, // Override with duplicate check and validation
-    update: updateAssignment, // Override with date validation
-    getAssignmentByApplication, // Custom query by application
-    getAssignmentsByEmploymentType, // Custom query by employment type
-    getActiveAssignments, // Custom query for active assignments
-    getCompletedAssignments, // Custom query for completed assignments
-    getAssignmentStats, // Get assignment statistics
+    getAll: getAssignments, // Override: rich data + filtering + search
+    getById: getAssignmentById, // Override: full detail
+    create: createAssignment, // Override: validation + duplicate check
+    update: updateAssignment, // Override: date validation
+    getAssignmentByApplication,
+    getAssignmentsByEmploymentType,
+    getActiveAssignments,
+    getCompletedAssignments,
+    getAssignmentStats,
 };
 //# sourceMappingURL=assignmentController.js.map

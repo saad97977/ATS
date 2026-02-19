@@ -42,6 +42,7 @@ const publicRoutes_1 = __importDefault(require("./routes/public_application/publ
 const applicantProfileRoutes_1 = __importDefault(require("./routes/applicant/applicantProfileRoutes"));
 const pipelineRoutes_1 = __importDefault(require("./routes/application/pipelineRoutes"));
 const cronJobService_1 = __importDefault(require("../src/services/cronJobService"));
+const timesheetRoutes_1 = __importDefault(require("./routes/timesheets/timesheetRoutes"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -69,6 +70,8 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
+// Serve generated invoices (PDFs)
+app.use('/generated-invoices', express_1.default.static('generated-invoices'));
 // Health check endpoint for Fly.io and monitoring
 app.get('/health', (req, res) => {
     res.status(200).json({
@@ -109,6 +112,8 @@ app.use('/api/applicant-references', applicantReferencesRoutes_1.default);
 app.use('/api/applicant-social-profiles', applicantSocialProfilesRoutes_1.default);
 app.use('/api/applicant-work-history', applicantWorkHistoryRoutes_1.default);
 app.use('/api/applicant-documents', applicantDocumentsRoutes_1.default);
+// Timesheets
+app.use('/api/timesheets', timesheetRoutes_1.default);
 // Application routes
 app.use('/api/applications', applicationRoutes_1.default);
 app.use('/api/interviews', interviewRoutes_1.default);
