@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
+const child_process_1 = require("child_process");
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const userRoutes_1 = __importDefault(require("./routes/user/userRoutes"));
@@ -63,8 +64,36 @@ async function testAzureConnection() {
 }
 // Call on server start
 testAzureConnection();
+const logPythonInfo = () => {
+    const pythonCmd = process.env.PYTHON_CMD || process.env.PYTHON_BIN || 'python3';
+    try {
+        const out = (0, child_process_1.execSync)(`${pythonCmd} --version`, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+        }).toString().trim();
+        const version = out || (0, child_process_1.execSync)(`${pythonCmd} -V`, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+        }).toString().trim();
+        console.log(`Python detected: ${pythonCmd} (${version})`);
+    }
+    catch (err) {
+        const fallbackCmd = 'python';
+        try {
+            const out = (0, child_process_1.execSync)(`${fallbackCmd} --version`, {
+                stdio: ['ignore', 'pipe', 'pipe'],
+            }).toString().trim();
+            const version = out || (0, child_process_1.execSync)(`${fallbackCmd} -V`, {
+                stdio: ['ignore', 'pipe', 'pipe'],
+            }).toString().trim();
+            console.log(`Python detected: ${fallbackCmd} (${version})`);
+        }
+        catch (fallbackErr) {
+            console.warn(`Python not detected. Tried: ${pythonCmd}, ${fallbackCmd}`);
+        }
+    }
+};
 console.log("Node version:", process.version);
 console.log("crypto exists:", typeof globalThis.crypto);
+logPythonInfo();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 // Middleware

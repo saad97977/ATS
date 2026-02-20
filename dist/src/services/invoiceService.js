@@ -318,16 +318,18 @@ const generateInvoicePdf = async (invoiceId) => {
     const tmpDir = os.tmpdir();
     const pdfPath = path.join(tmpDir, filename);
     const pyPath = path.join(tmpDir, `inv_${invoiceId}.py`);
+    const pythonCmd = process.env.PYTHON_CMD || process.env.PYTHON_BIN || 'python3';
     try {
         if (!fs.existsSync(tmpDir))
             fs.mkdirSync(tmpDir, { recursive: true });
         fs.writeFileSync(pyPath, buildPythonScript(data, pdfPath));
         let out = '';
         try {
-            out = (0, child_process_1.execSync)(`python3 "${pyPath}"`, { timeout: 30000 }).toString().trim();
+            out = (0, child_process_1.execSync)(`${pythonCmd} "${pyPath}"`, { timeout: 30000 }).toString().trim();
         }
         catch (err) {
-            if (err?.status !== 9009)
+            // 9009 = Windows (command not found), 127 = *nix (command not found)
+            if (err?.status !== 9009 && err?.status !== 127)
                 throw err;
             out = (0, child_process_1.execSync)(`python "${pyPath}"`, { timeout: 30000 }).toString().trim();
         }

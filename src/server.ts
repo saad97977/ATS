@@ -1,4 +1,5 @@
 import express from 'express';
+import { execSync } from 'child_process';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import userRoutes from './routes/user/userRoutes';
@@ -74,8 +75,35 @@ async function testAzureConnection() {
 testAzureConnection();
 
 
+const logPythonInfo = () => {
+  const pythonCmd = process.env.PYTHON_CMD || process.env.PYTHON_BIN || 'python3';
+  try {
+    const out = execSync(`${pythonCmd} --version`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).toString().trim();
+    const version = out || execSync(`${pythonCmd} -V`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).toString().trim();
+    console.log(`Python detected: ${pythonCmd} (${version})`);
+  } catch (err: any) {
+    const fallbackCmd = 'python';
+    try {
+      const out = execSync(`${fallbackCmd} --version`, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).toString().trim();
+      const version = out || execSync(`${fallbackCmd} -V`, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).toString().trim();
+      console.log(`Python detected: ${fallbackCmd} (${version})`);
+    } catch (fallbackErr: any) {
+      console.warn(`Python not detected. Tried: ${pythonCmd}, ${fallbackCmd}`);
+    }
+  }
+};
+
 console.log("Node version:", process.version);
 console.log("crypto exists:", typeof globalThis.crypto);
+logPythonInfo();
 
 
 
