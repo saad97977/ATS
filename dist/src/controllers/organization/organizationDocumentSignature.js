@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getSignatureImage = exports.requestSignature = exports.getSignatureAuditTrail = exports.verifySignature = exports.getDocumentSignatures = exports.createDocumentSignature = void 0;
+exports.getSignatureImage = exports.requestSignature = exports.getSignatureAuditTrail = exports.rejectSignature = exports.verifySignature = exports.getDocumentSignatures = exports.createDocumentSignature = void 0;
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const response_1 = require("../../utils/response");
 const storage_blob_1 = require("@azure/storage-blob");
@@ -75,17 +75,21 @@ const createDocumentSignature = async (req, res) => {
         });
         if (!document)
             return (0, response_1.sendError)(res, 'Document not found', 404);
-        // ── Guard: one signature per email per document ────────────────────────────
+        const normalizedEmail = signer_email.toLowerCase().trim();
+        // ── Guard: block if a non-rejected signature exists for this email ────────
+        // A rejected signature is allowed to be re-signed; COMPLETED / VERIFIED block.
         const existingSignature = await prisma_config_1.default.documentSignature.findFirst({
             where: {
                 document_id: documentId,
-                signer_email: signer_email.toLowerCase().trim(),
+                signer_email: normalizedEmail,
+                status: { not: 'REJECTED' },
             },
         });
         if (existingSignature) {
-            return (0, response_1.sendError)(res, `This document has already been signed by ${signer_email}. Each email address can only sign a document once.`, 409);
+            const stateLabel = existingSignature.is_verified ? 'verified' : 'pending';
+            return (0, response_1.sendError)(res, `This document already has a ${stateLabel} signature from ${signer_email}. Only rejected signatures can be re-submitted.`, 409);
         }
-        // ──────────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────────
         const signatureImageUrl = await storeSignatureImage(documentId, user_id, signature_data);
         const signedAt = new Date();
         const verificationHash = generateSignatureHash(documentId, user_id, signedAt);
@@ -94,8 +98,7 @@ const createDocumentSignature = async (req, res) => {
                 document_id: documentId,
                 user_id,
                 signer_name,
-                // Normalise email to lowercase for consistent duplicate checks
-                signer_email: signer_email.toLowerCase().trim(),
+                signer_email: normalizedEmail,
                 signature_image_url: signatureImageUrl,
                 signature_type,
                 signed_at: signedAt,
@@ -104,7 +107,6 @@ const createDocumentSignature = async (req, res) => {
                 verification_hash: verificationHash,
                 position: position ? JSON.stringify(position) : null,
                 status: 'COMPLETED',
-                // New field — starts unverified; set to true when verifySignature is called
                 is_verified: false,
             },
         });
@@ -194,7 +196,10 @@ const verifySignature = async (req, res) => {
         });
         if (!signature)
             return (0, response_1.sendError)(res, 'Signature not found', 404);
-        // ── If already verified in DB, return that state without re-computing ─────
+        // Cannot verify a rejected signature
+        if (signature.status === 'REJECTED') {
+            return (0, response_1.sendError)(res, 'Cannot verify a rejected signature', 400);
+        }
         if (signature.is_verified) {
             return (0, response_1.sendSuccess)(res, {
                 data: {
@@ -209,10 +214,8 @@ const verifySignature = async (req, res) => {
                 },
             });
         }
-        // ─────────────────────────────────────────────────────────────────────────
         const expectedHash = generateSignatureHash(signature.document_id, signature.user_id, signature.signed_at);
         const isValid = signature.verification_hash === expectedHash;
-        // Persist verified state so the next call (or page reload) returns it instantly
         if (isValid) {
             await prisma_config_1.default.documentSignature.update({
                 where: { signature_id: signatureId },
@@ -238,6 +241,51 @@ const verifySignature = async (req, res) => {
     }
 };
 exports.verifySignature = verifySignature;
+// ─── Reject Signature ─────────────────────────────────────────────────────────
+const rejectSignature = async (req, res) => {
+    try {
+        const { signatureId } = req.params;
+        const { rejected_by, rejection_reason } = req.body;
+        if (!rejected_by) {
+            return (0, response_1.sendError)(res, 'rejected_by (user_id) is required', 400);
+        }
+        if (!rejection_reason || !rejection_reason.trim()) {
+            return (0, response_1.sendError)(res, 'A rejection reason is required', 400);
+        }
+        const signature = await prisma_config_1.default.documentSignature.findUnique({
+            where: { signature_id: signatureId },
+        });
+        if (!signature)
+            return (0, response_1.sendError)(res, 'Signature not found', 404);
+        if (signature.status === 'REJECTED') {
+            return (0, response_1.sendError)(res, 'This signature has already been rejected', 409);
+        }
+        const updated = await prisma_config_1.default.documentSignature.update({
+            where: { signature_id: signatureId },
+            data: {
+                status: 'REJECTED',
+                is_verified: false,
+                rejected_at: new Date(),
+                rejection_reason: rejection_reason.trim(),
+                rejected_by,
+            },
+        });
+        return (0, response_1.sendSuccess)(res, {
+            message: 'Signature rejected successfully',
+            data: {
+                signature_id: updated.signature_id,
+                status: updated.status,
+                rejection_reason: updated.rejection_reason,
+                rejected_at: updated.rejected_at,
+            },
+        });
+    }
+    catch (err) {
+        console.error('Error rejecting signature:', err);
+        return (0, response_1.sendError)(res, 'Failed to reject signature', 500);
+    }
+};
+exports.rejectSignature = rejectSignature;
 // ─── Audit Trail ─────────────────────────────────────────────────────────────
 const getSignatureAuditTrail = async (req, res) => {
     try {
@@ -254,7 +302,10 @@ const getSignatureAuditTrail = async (req, res) => {
                 status: true,
                 verification_hash: true,
                 signature_image_url: true,
-                is_verified: true, // included so audit trail can show verified state
+                is_verified: true,
+                rejection_reason: true,
+                rejected_at: true,
+                rejected_by: true,
             },
             orderBy: { signed_at: 'asc' },
         });
@@ -285,11 +336,13 @@ const requestSignature = async (req, res) => {
         });
         if (!document)
             return (0, response_1.sendError)(res, 'Document not found', 404);
-        // ── Guard: don't send a request if this email already signed ─────────────
+        const normalizedEmail = recipient_email.toLowerCase().trim();
+        // ── Guard: don't send a request if a non-rejected signature exists ────────
         const alreadySigned = await prisma_config_1.default.documentSignature.findFirst({
             where: {
                 document_id: documentId,
-                signer_email: recipient_email.toLowerCase().trim(),
+                signer_email: normalizedEmail,
+                status: { not: 'REJECTED' },
             },
         });
         if (alreadySigned) {
@@ -299,7 +352,7 @@ const requestSignature = async (req, res) => {
         const signatureRequest = await prisma_config_1.default.signatureRequest.create({
             data: {
                 document_id: documentId,
-                recipient_email: recipient_email.toLowerCase().trim(),
+                recipient_email: normalizedEmail,
                 recipient_name,
                 message: message || null,
                 status: 'PENDING',
@@ -323,7 +376,7 @@ const requestSignature = async (req, res) => {
     }
 };
 exports.requestSignature = requestSignature;
-// ─── Get Signature Image (proxy for private Azure blob) ───────────────────────
+// ─── Get Signature Image ──────────────────────────────────────────────────────
 const getSignatureImage = async (req, res) => {
     try {
         const { signatureId } = req.params;

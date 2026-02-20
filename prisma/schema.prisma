@@ -283,7 +283,6 @@ model OrganizationDocument {
 }
 
 
-
 model DocumentSignature {
   signature_id        String   @id @default(uuid())
   document_id         String
@@ -297,13 +296,15 @@ model DocumentSignature {
   user_agent          String?
   verification_hash   String
   position            String?  // JSON
-  status              String   @default("COMPLETED")
-  is_verified         Boolean  @default(false)   // ← ADD THIS
+  status              String   @default("COMPLETED") // COMPLETED | REJECTED
+  is_verified         Boolean  @default(false)
+  rejected_at         DateTime?   // ← NEW (nullable, safe)
+  rejection_reason    String?     // ← NEW (nullable, safe)
+  rejected_by         String?     // ← NEW (user_id of rejector, nullable)
 
-  
   document            OrganizationDocument @relation(fields: [document_id], references: [document_id], onDelete: Cascade)
   user                User @relation(fields: [user_id], references: [user_id])
-  
+
   @@index([document_id])
   @@index([user_id])
 }

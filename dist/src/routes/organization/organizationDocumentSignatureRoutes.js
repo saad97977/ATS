@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const signatureController = __importStar(require("../../controllers/organization/organizationDocumentSignature"));
 const router = (0, express_1.Router)();
+router.patch('/signatures/:signatureId/reject', signatureController.rejectSignature);
 router.post('/documents/:documentId/signatures', signatureController.createDocumentSignature);
 router.get('/documents/:documentId/signatures', signatureController.getDocumentSignatures);
 router.get('/signatures/:signatureId/verify', signatureController.verifySignature);
