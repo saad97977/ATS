@@ -425,10 +425,10 @@ const getApplicationsByStatus = async (req, res) => {
     }
 };
 /**
- * Search applications by job title, applicant name, or organization name
+ * Search applications by job title, applicant name, organization name, or work history
  * GET /api/applications/search?q=searchTerm
  * Query params:
- * - q: search term (required)
+ * - q: search term (required) - searches in job title, organization name, applicant name, work history title, and work history description
  * - page: page number (optional, default: 1)
  * - limit: items per page (optional, default: 10, max: 100)
  * - status: filter by application status (optional)
@@ -469,6 +469,26 @@ const searchApplications = async (req, res) => {
                         full_name: {
                             contains: searchTerm,
                             mode: 'insensitive',
+                        },
+                    },
+                },
+                {
+                    work_history: {
+                        some: {
+                            title: {
+                                contains: searchTerm,
+                                mode: 'insensitive',
+                            },
+                        },
+                    },
+                },
+                {
+                    work_history: {
+                        some: {
+                            description: {
+                                contains: searchTerm,
+                                mode: 'insensitive',
+                            },
                         },
                     },
                 },
@@ -516,6 +536,14 @@ const searchApplications = async (req, res) => {
                                     phone: true,
                                 },
                             },
+                        },
+                    },
+                    work_history: {
+                        select: {
+                            applicant_work_history_id: true,
+                            title: true,
+                            description: true,
+                            created_at: true,
                         },
                     },
                     evaluations: {

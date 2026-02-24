@@ -123,6 +123,7 @@ router.get('/filter', filterJobs);
 
 // Standard CRUD operations
 router.get('/', jobController.getAll);
+router.get('/:id/requirements', jobController.getJobRequirements);
 router.get('/:id', jobController.getById);
 router.post('/', jobController.create);
 router.patch('/:id', jobController.update);

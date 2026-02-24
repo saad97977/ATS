@@ -213,7 +213,6 @@ export const getPublicJobById = async (req: Request, res: Response) => {
         job_rates: {
           select: {
             pay_rate: true,
-            bill_rate: true,
             hours: true,
           },
         },
@@ -305,18 +304,6 @@ export const getPublicJobStats = async (req: Request, res: Response) => {
 /**
  * Search jobs with advanced filters
  * POST /api/public/jobs/search
- * 
- * Body params:
- * - keywords: Search keywords
- * - location: Location filter
- * - job_type: TEMPORARY or PERMANENT
- * - organization_id: Filter by organization
- * - min_pay_rate: Minimum pay rate
- * - max_pay_rate: Maximum pay rate
- * - office_type: REMOTE, HYBRID, or ONSITE
- * - posted_within_days: Number of days (e.g., 7, 30)
- * - page: Page number
- * - limit: Items per page
  */
 export const searchPublicJobs = async (req: Request, res: Response) => {
   try {
@@ -326,6 +313,7 @@ export const searchPublicJobs = async (req: Request, res: Response) => {
 
     const {
       keywords,
+      organization,
       location,
       job_type,
       organization_id,
@@ -339,10 +327,26 @@ export const searchPublicJobs = async (req: Request, res: Response) => {
       status: JobStatus.OPEN,
       organization: {
         status: OrganizationStatus.ACTIVE,
+        ...(organization
+          ? { name: { contains: organization as string, mode: 'insensitive' } }
+          : {}),
       },
     };
 
-    // Keyword search
+    // ✅ Step 1: Find job IDs where skills JSON matches the keyword (raw SQL)
+    let skillMatchingJobIds: string[] = [];
+
+    if (keywords) {
+      const skillMatches = await prisma.$queryRaw<{ job_id: string }[]>`
+        SELECT j.job_id
+        FROM jobs j
+        JOIN job_details jd ON jd.job_id = j.job_id
+        WHERE LOWER(jd.skills::text) LIKE LOWER(${`%${keywords}%`})
+      `;
+      skillMatchingJobIds = skillMatches.map((r) => r.job_id);
+    }
+
+    // ✅ Step 2: Build OR clause with skills job IDs injected
     if (keywords) {
       whereClause.OR = [
         {
@@ -365,6 +369,10 @@ export const searchPublicJobs = async (req: Request, res: Response) => {
             },
           },
         },
+        // ✅ Skills match via raw query result
+        ...(skillMatchingJobIds.length > 0
+          ? [{ job_id: { in: skillMatchingJobIds } }]
+          : []),
       ];
     }
 
@@ -408,7 +416,7 @@ export const searchPublicJobs = async (req: Request, res: Response) => {
       whereClause.job_rates = {
         some: {},
       };
-      
+
       if (min_pay_rate) {
         const minRate = parseFloat(min_pay_rate as string);
         if (!isNaN(minRate)) {
@@ -417,7 +425,7 @@ export const searchPublicJobs = async (req: Request, res: Response) => {
           };
         }
       }
-      
+
       if (max_pay_rate) {
         const maxRate = parseFloat(max_pay_rate as string);
         if (!isNaN(maxRate)) {
@@ -495,6 +503,7 @@ export const searchPublicJobs = async (req: Request, res: Response) => {
       },
       filters_applied: {
         keywords,
+        organization,
         location,
         job_type,
         organization_id,
@@ -509,6 +518,7 @@ export const searchPublicJobs = async (req: Request, res: Response) => {
     return sendError(res, 'Failed to search jobs', 500);
   }
 };
+
 
 /**
  * Get featured/highlighted jobs

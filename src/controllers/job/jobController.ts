@@ -1051,6 +1051,9 @@ const updateJobCompleteSchema = z.object({
   // New fields
   max_positions: z.number().int().min(1, 'Max positions must be at least 1').optional().nullable(),
   open_positions: z.number().int().min(0, 'Open positions cannot be negative').optional().nullable(),
+  resume_required: z.boolean().optional(),
+  interview_Round1: z.boolean().optional(),
+  interview_Round2: z.boolean().optional(),
   
   // Related entities
   job_detail: jobDetailUpdateSchema.optional(),
@@ -1096,6 +1099,9 @@ const updateJobComplete = async (req: Request, res: Response) => {
       end_date,
       max_positions,
       open_positions,
+      resume_required,
+      interview_Round1,
+      interview_Round2,
       job_detail,
       job_notes,
       job_rates,
@@ -1273,6 +1279,9 @@ const updateJobComplete = async (req: Request, res: Response) => {
       if (end_date !== undefined) jobUpdateData.end_date = end_date ? new Date(end_date) : null;
       if (max_positions !== undefined) jobUpdateData.max_positions = max_positions;
       if (open_positions !== undefined) jobUpdateData.open_positions = open_positions;
+      if (resume_required !== undefined) jobUpdateData.resume_required = resume_required;
+      if (interview_Round1 !== undefined) jobUpdateData.interview_Round1 = interview_Round1;
+      if (interview_Round2 !== undefined) jobUpdateData.interview_Round2 = interview_Round2;
 
       const updatedJob = Object.keys(jobUpdateData).length > 0
         ? await tx.job.update({
@@ -2091,6 +2100,40 @@ const getDraftJobsByManager = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Get job interview and resume requirements
+ * GET /api/jobs/:id/requirements
+ * Returns only resume_required, interview_Round1, and interview_Round2 fields
+ */
+const getJobRequirements = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return sendError(res, 'Job ID is required', 400);
+    }
+
+    const job = await prisma.job.findUnique({
+      where: { job_id: id },
+      select: {
+        job_id: true,
+        resume_required: true,
+        interview_Round1: true,
+        interview_Round2: true,
+      },
+    });
+
+    if (!job) {
+      return sendError(res, 'Job not found', 404);
+    }
+
+    return sendSuccess(res, job);
+  } catch (err: any) {
+    console.error('Error fetching job requirements:', err);
+    return sendError(res, 'Failed to fetch job requirements', 500);
+  }
+};
+
 
 // Export controller with custom methods
 export const jobController = {
@@ -2116,5 +2159,6 @@ export const jobController = {
   getDeclinedJobsByManager,
   getClosedJobsByManager,
   getDraftJobsByManager,
+  getJobRequirements,
 
 };

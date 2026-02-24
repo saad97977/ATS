@@ -37,18 +37,6 @@ export declare const getPublicJobStats: (req: Request, res: Response) => Promise
 /**
  * Search jobs with advanced filters
  * POST /api/public/jobs/search
- *
- * Body params:
- * - keywords: Search keywords
- * - location: Location filter
- * - job_type: TEMPORARY or PERMANENT
- * - organization_id: Filter by organization
- * - min_pay_rate: Minimum pay rate
- * - max_pay_rate: Maximum pay rate
- * - office_type: REMOTE, HYBRID, or ONSITE
- * - posted_within_days: Number of days (e.g., 7, 30)
- * - page: Page number
- * - limit: Items per page
  */
 export declare const searchPublicJobs: (req: Request, res: Response) => Promise<void>;
 /**

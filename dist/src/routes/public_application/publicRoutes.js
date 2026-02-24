@@ -101,6 +101,11 @@ router.get('/jobs/:jobId/check-application', publicApplicationsController_1.chec
 // Body: { full_name, email, phone, resume: File, ... }
 router.post('/jobs/:jobId/apply', upload.single('resume'), // 'resume' is the field name in form-data
 handleMulterError, publicApplicationsController_1.submitApplication);
+// Upload resume for an existing application
+// POST /api/public/applications/:applicationId/upload-resume
+// Content-Type: multipart/form-data
+// Body: { email: "john@example.com", resume: File }
+router.post('/applications/:applicationId/upload-resume', upload.single('resume'), handleMulterError, publicApplicationsController_1.uploadApplicationResume);
 // View resume for an application
 // GET /api/public/applications/:applicationId/resume/view
 router.get('/applications/:applicationId/resume/view', publicApplicationsController_1.viewApplicationResume);
@@ -136,8 +141,11 @@ router.get('/applicants/applications', publicApplicationsController_1.getApplica
  * JOB APPLICATIONS:
  * - GET    /api/public/jobs/:jobId/check-application
  * - POST   /api/public/jobs/:jobId/apply
+ * - POST   /api/public/applications/:applicationId/upload-resume
  * - GET    /api/public/applications/:applicationId
  * - GET    /api/public/applications/:applicationId/resume
+ * - GET    /api/public/applications/:applicationId/resume/view
+ * - GET    /api/public/applications/:applicationId/cover-letter/view
  * - GET    /api/public/applicants/applications
  * - DELETE /api/public/applications/:applicationId/withdraw
  */

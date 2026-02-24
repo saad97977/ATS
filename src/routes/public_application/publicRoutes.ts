@@ -14,6 +14,7 @@ import {
 // Import Application Controllers
 import {
   submitApplication,
+  uploadApplicationResume,
   checkExistingApplication,
   getApplicationStatus,
   downloadApplicationResume,
@@ -131,6 +132,17 @@ router.post(
   submitApplication
 );
 
+// Upload resume for an existing application
+// POST /api/public/applications/:applicationId/upload-resume
+// Content-Type: multipart/form-data
+// Body: { email: "john@example.com", resume: File }
+router.post(
+  '/applications/:applicationId/upload-resume',
+  upload.single('resume'),
+  handleMulterError,
+  uploadApplicationResume
+);
+
 // View resume for an application
 // GET /api/public/applications/:applicationId/resume/view
 router.get('/applications/:applicationId/resume/view', viewApplicationResume);
@@ -175,8 +187,11 @@ router.get('/applicants/applications', getApplicantApplications);
  * JOB APPLICATIONS:
  * - GET    /api/public/jobs/:jobId/check-application
  * - POST   /api/public/jobs/:jobId/apply
+ * - POST   /api/public/applications/:applicationId/upload-resume
  * - GET    /api/public/applications/:applicationId
  * - GET    /api/public/applications/:applicationId/resume
+ * - GET    /api/public/applications/:applicationId/resume/view
+ * - GET    /api/public/applications/:applicationId/cover-letter/view
  * - GET    /api/public/applicants/applications
  * - DELETE /api/public/applications/:applicationId/withdraw
  */

@@ -58,6 +58,9 @@ const createJobCompleteSchema = zod_1.z.object({
     // New fields
     max_positions: zod_1.z.number().int().min(1, 'Max positions must be at least 1').optional(),
     open_positions: zod_1.z.number().int().min(0, 'Open positions cannot be negative').optional(),
+    resume_required: zod_1.z.boolean().optional().default(false),
+    interview_Round1: zod_1.z.boolean().optional().default(true),
+    interview_Round2: zod_1.z.boolean().optional().default(false),
     // Related entities
     job_detail: jobDetailSchema.optional(),
     job_notes: zod_1.z.array(jobNoteSchema).optional(),
@@ -79,7 +82,7 @@ const createJobComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, approved, start_date, end_date, created_by_user_id, max_positions, open_positions, job_detail, job_notes, job_rates, job_owners, } = validation.data;
+        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, approved, start_date, end_date, created_by_user_id, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, job_detail, job_notes, job_rates, job_owners, } = validation.data;
         // Check if organization exists
         const organizationExists = await prisma_config_1.default.organization.findUnique({
             where: { organization_id },
@@ -183,6 +186,9 @@ const createJobComplete = async (req, res) => {
                     created_by_user_id,
                     max_positions,
                     open_positions,
+                    resume_required,
+                    interview_Round1,
+                    interview_Round2,
                 },
             });
             // 2. Create JobDetail (if provided)

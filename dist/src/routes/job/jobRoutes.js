@@ -107,6 +107,7 @@ router.patch('/auto-close', jobController_1.jobController.autoCloseExpiredJobs);
 router.get('/filter', jobFilterController_1.filterJobs);
 // Standard CRUD operations
 router.get('/', jobController_1.jobController.getAll);
+router.get('/:id/requirements', jobController_1.jobController.getJobRequirements);
 router.get('/:id', jobController_1.jobController.getById);
 router.post('/', jobController_1.jobController.create);
 router.patch('/:id', jobController_1.jobController.update);

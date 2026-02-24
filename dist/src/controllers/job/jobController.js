@@ -966,6 +966,9 @@ const updateJobCompleteSchema = zod_1.z.object({
     // New fields
     max_positions: zod_1.z.number().int().min(1, 'Max positions must be at least 1').optional().nullable(),
     open_positions: zod_1.z.number().int().min(0, 'Open positions cannot be negative').optional().nullable(),
+    resume_required: zod_1.z.boolean().optional(),
+    interview_Round1: zod_1.z.boolean().optional(),
+    interview_Round2: zod_1.z.boolean().optional(),
     // Related entities
     job_detail: jobDetailUpdateSchema.optional(),
     job_notes: zod_1.z.array(jobNoteUpdateSchema).optional(),
@@ -991,7 +994,7 @@ const updateJobComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, start_date, end_date, max_positions, open_positions, job_detail, job_notes, job_rates, job_owners, } = validation.data;
+        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, start_date, end_date, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, job_detail, job_notes, job_rates, job_owners, } = validation.data;
         // Check if job exists
         const existingJob = await prisma_config_1.default.job.findUnique({
             where: { job_id: id },
@@ -1141,6 +1144,12 @@ const updateJobComplete = async (req, res) => {
                 jobUpdateData.max_positions = max_positions;
             if (open_positions !== undefined)
                 jobUpdateData.open_positions = open_positions;
+            if (resume_required !== undefined)
+                jobUpdateData.resume_required = resume_required;
+            if (interview_Round1 !== undefined)
+                jobUpdateData.interview_Round1 = interview_Round1;
+            if (interview_Round2 !== undefined)
+                jobUpdateData.interview_Round2 = interview_Round2;
             const updatedJob = Object.keys(jobUpdateData).length > 0
                 ? await tx.job.update({
                     where: { job_id: id },
@@ -1923,6 +1932,36 @@ const getDraftJobsByManager = async (req, res) => {
         return (0, response_1.sendError)(res, 'Failed to fetch draft jobs', 500);
     }
 };
+/**
+ * Get job interview and resume requirements
+ * GET /api/jobs/:id/requirements
+ * Returns only resume_required, interview_Round1, and interview_Round2 fields
+ */
+const getJobRequirements = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id) {
+            return (0, response_1.sendError)(res, 'Job ID is required', 400);
+        }
+        const job = await prisma_config_1.default.job.findUnique({
+            where: { job_id: id },
+            select: {
+                job_id: true,
+                resume_required: true,
+                interview_Round1: true,
+                interview_Round2: true,
+            },
+        });
+        if (!job) {
+            return (0, response_1.sendError)(res, 'Job not found', 404);
+        }
+        return (0, response_1.sendSuccess)(res, job);
+    }
+    catch (err) {
+        console.error('Error fetching job requirements:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch job requirements', 500);
+    }
+};
 // Export controller with custom methods
 exports.jobController = {
     ...baseCrudMethods,
@@ -1947,5 +1986,6 @@ exports.jobController = {
     getDeclinedJobsByManager,
     getClosedJobsByManager,
     getDraftJobsByManager,
+    getJobRequirements,
 };
 //# sourceMappingURL=jobController.js.map

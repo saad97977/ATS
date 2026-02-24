@@ -353,6 +353,9 @@ model Job {
   max_positions     Int?
   open_positions    Int?
   company_office_id String?
+  resume_required   Boolean?   @default(false)
+  interview_Round1  Boolean?   @default(true)
+  interview_Round2  Boolean?   @default(false)
 
 
 
@@ -485,6 +488,7 @@ model Applicant {
   applicant_id   String          @id @default(uuid())
   full_name      String
   status         ApplicantStatus @default(APPLIED)
+  comp_code_last String?
   last_active_at DateTime?
   created_at     DateTime        @default(now())
 

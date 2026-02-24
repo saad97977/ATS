@@ -21,6 +21,7 @@ export declare const jobController: {
     getDeclinedJobsByManager: (req: Request, res: Response) => Promise<void>;
     getClosedJobsByManager: (req: Request, res: Response) => Promise<void>;
     getDraftJobsByManager: (req: Request, res: Response) => Promise<void>;
+    getJobRequirements: (req: Request, res: Response) => Promise<void>;
     delete: (req: Request, res: Response) => Promise<void>;
 };
 //# sourceMappingURL=jobController.d.ts.map
