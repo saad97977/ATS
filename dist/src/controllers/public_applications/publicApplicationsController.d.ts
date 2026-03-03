@@ -74,6 +74,7 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
         resume_required: boolean | null;
         interview_Round1: boolean | null;
         interview_Round2: boolean | null;
+        interview_rounds: number | null;
     };
     documents: {
         created_at: Date;

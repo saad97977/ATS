@@ -4,20 +4,28 @@
  * Mount in app.ts:
  *   import timesheetRoutes from './routes/timesheets.routes';
  *   app.use('/api/timesheets', timesheetRoutes);
+ *
+ * Install deps for import endpoint:
+ *   npm install multer @types/multer xlsx
  */
 
 import { Router } from 'express';
+import multer from 'multer';
 import {
   getAllTimesheets,
   getTimesheetById,
   getTimesheetsByAssignment,
   getTimesheetStats,
   createOrGetTimesheet,
+  updateTimesheetRates,
   upsertTimeEntry,
   deleteTimeEntry,
   submitTimesheet,
   approveTimesheet,
   rejectTimesheet,
+  toggleAssignmentTimesheets,
+  downloadImportTemplate,
+  importTimesheets,
   getAllInvoices,
   getInvoiceById,
   downloadInvoicePdf,
@@ -31,11 +39,25 @@ import {
 
 const router = Router();
 
-// ─── Stats & invoices must come before /:id ──────────────────────────────────
-// (otherwise Express will match them as the :id param)
+// ─── Multer (for CSV / Excel import) ─────────────────────────────────────────
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (_req, file, cb) => {
+    if (/\.(csv|xlsx|xls)$/i.test(file.originalname)) cb(null, true);
+    else cb(new Error('Only CSV (.csv) and Excel (.xlsx / .xls) files are supported'));
+  },
+});
 
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTANT: All fixed-path routes must come BEFORE /:id routes
+// to prevent Express matching them as the :id param.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Stats ────────────────────────────────────────────────────────────────────
 router.get('/stats', getTimesheetStats);
 
+// ─── Invoices ─────────────────────────────────────────────────────────────────
 router.get('/invoices',                     getAllInvoices);
 router.get('/invoices/:invoiceId',          getInvoiceById);
 router.get('/invoices/:invoiceId/download', downloadInvoicePdf);
@@ -45,20 +67,32 @@ router.patch('/invoices/:invoiceId/status', updateInvoiceStatus);
 // router.post('/invoices/:invoiceId/sync-qb', syncInvoiceToQuickBooks);
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Assignments dropdown (for non-technical users)
-router.get('/assignments',    getAssignmentsForTimesheets);
+// ─── Assignments ──────────────────────────────────────────────────────────────
+// Dropdown list with current-week timesheet status
+router.get('/assignments', getAssignmentsForTimesheets);
 
-// Weekly notification bell data
-router.get('/notifications',  getTimesheetNotifications);
+// NEW: Enable / disable timesheet creation for a specific assignment
+// Body: { timesheets_enabled: boolean }
+router.patch('/assignments/:assignmentId/toggle', toggleAssignmentTimesheets);
 
-// Bulk save all 7 days in one call
+// ─── Notifications ────────────────────────────────────────────────────────────
+router.get('/notifications', getTimesheetNotifications);
+
+// ─── Import ───────────────────────────────────────────────────────────────────
+// NEW: Download the CSV import template
+router.get('/import/template', downloadImportTemplate);
+
+// NEW: Upload CSV or Excel file to bulk-create timesheets
+// Form field name: "file"  |  Body fields: assignment_id, custom_bill_rate?, etc.
+router.post('/import', upload.single('file'), importTimesheets);
+
+// ─── Bulk entry save ──────────────────────────────────────────────────────────
+// Save all 7 days in one call (used by the wizard)
 router.post('/:id/entries/bulk', bulkUpsertTimeEntries);
-
-
 
 // ─── Timesheet CRUD ───────────────────────────────────────────────────────────
 
-// All timesheets (filters: ?assignmentId=  ?status=  ?weekStart=  ?page=  ?limit=)
+// All timesheets (filters: ?assignmentId=  ?status=  ?weekStart=  ?search=  ?page=  ?limit=)
 router.get('/', getAllTimesheets);
 
 // All timesheets for one assignment
@@ -68,8 +102,14 @@ router.get('/assignment/:assignmentId', getTimesheetsByAssignment);
 router.get('/:id', getTimesheetById);
 
 // Create or retrieve the week's timesheet (idempotent)
-// Body: { assignment_id, week_start_date, notes? }
+// Body: { assignment_id, week_start_date, notes?, custom_bill_rate?, ... }
 router.post('/', createOrGetTimesheet);
+
+// NEW: Update per-timesheet rate overrides (DRAFT / REJECTED only)
+// Body: { custom_bill_rate?, custom_ot_bill_rate?, custom_pay_rate?,
+//         custom_ot_pay_rate?, custom_markup_percentage?,
+//         custom_overtime_rule?, rate_override_reason? }
+router.patch('/:id/rates', updateTimesheetRates);
 
 // ─── Daily time entry CRUD ────────────────────────────────────────────────────
 
@@ -106,11 +146,21 @@ TIMESHEETS
   GET    /api/timesheets/assignment/:id           worker history
   GET    /api/timesheets/:id                      full detail
   POST   /api/timesheets                          create/get week (idempotent)
+  PATCH  /api/timesheets/:id/rates                update custom rate overrides  ← NEW
   POST   /api/timesheets/:id/entries              upsert daily entry
+  POST   /api/timesheets/:id/entries/bulk         upsert all 7 days at once
   DELETE /api/timesheets/:id/entries/:entryId     delete daily entry
   POST   /api/timesheets/:id/submit               DRAFT → SUBMITTED
   POST   /api/timesheets/:id/approve              SUBMITTED → APPROVED
   POST   /api/timesheets/:id/reject               SUBMITTED → REJECTED
+
+ASSIGNMENTS
+  GET    /api/timesheets/assignments              dropdown list + current-week status
+  PATCH  /api/timesheets/assignments/:id/toggle   enable/disable timesheets         ← NEW
+
+IMPORT
+  GET    /api/timesheets/import/template          download CSV template              ← NEW
+  POST   /api/timesheets/import                   upload CSV or Excel file           ← NEW
 
 INVOICES
   GET    /api/timesheets/invoices                 list (paginated + filtered)

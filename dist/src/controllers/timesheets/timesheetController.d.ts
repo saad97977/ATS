@@ -1,64 +1,60 @@
 import { Request, Response } from 'express';
-/**
- * GET /api/timesheets
- * List timesheets with pagination and optional filters.
- * Query: assignmentId?, status?, weekStart?, search?, page?, limit?
- *
- * Improvements:
- *   - Added `search` param: filters by worker name, job title, or org name
- *   - Fixed filter conflict: AND-merges status + assignmentId + search
- *   - Returns LinearProgress-compatible `refreshing` state via 304
- */
 export declare const getAllTimesheets: (req: Request, res: Response) => Promise<void>;
-/**
- * GET /api/timesheets/stats
- * Aggregate statistics across timesheets.
- * Query: assignmentId?, status?, weekStart?, weekEnd?
- *
- * Field mapping (matches frontend expectations):
- *   total_billed  ← total_bill_amount sum
- *   total_payroll ← total_pay_amount sum
- */
 export declare const getTimesheetStats: (req: Request, res: Response) => Promise<void>;
-/**
- * GET /api/timesheets/assignment/:assignmentId
- * All timesheets for a single assignment (worker history).
- */
 export declare const getTimesheetsByAssignment: (req: Request, res: Response) => Promise<void>;
-/**
- * GET /api/timesheets/:id
- * Full timesheet detail including all daily entries, invoice, payroll.
- */
 export declare const getTimesheetById: (req: Request, res: Response) => Promise<void>;
 /**
  * POST /api/timesheets
  * Create or retrieve the timesheet for a given assignment + week (idempotent).
- * Body: { assignment_id, week_start_date, notes? }
+ * NEW: checks timesheets_enabled on the assignment.
+ * NEW: accepts optional rate override fields.
+ * Body: {
+ *   assignment_id, week_start_date, notes?,
+ *   custom_bill_rate?, custom_ot_bill_rate?, custom_pay_rate?, custom_ot_pay_rate?,
+ *   custom_markup_percentage?, custom_overtime_rule?, rate_override_reason?
+ * }
  */
 export declare const createOrGetTimesheet: (req: Request, res: Response) => Promise<void>;
 /**
- * POST /api/timesheets/:id/entries
- * Add or update a single daily time entry. Timesheet must be DRAFT or REJECTED.
+ * PATCH /api/timesheets/:id/rates
+ * Update per-timesheet rate overrides on a DRAFT or REJECTED timesheet.
  */
+export declare const updateTimesheetRates: (req: Request, res: Response) => Promise<void>;
 export declare const upsertTimeEntry: (req: Request, res: Response) => Promise<void>;
-/**
- * DELETE /api/timesheets/:id/entries/:entryId
- */
 export declare const deleteTimeEntry: (req: Request, res: Response) => Promise<void>;
-/**
- * POST /api/timesheets/:id/submit
- */
 export declare const submitTimesheet: (req: Request, res: Response) => Promise<void>;
 /**
  * POST /api/timesheets/:id/approve
- * Atomically snapshots billing, creates Invoice + Payroll, fires PDF async.
- * Body: { reviewed_by_user_id, tax_rate?, net_terms_days? }
+ * Now reads custom rate overrides from the timesheet row itself.
  */
 export declare const approveTimesheet: (req: Request, res: Response) => Promise<void>;
-/**
- * POST /api/timesheets/:id/reject
- */
 export declare const rejectTimesheet: (req: Request, res: Response) => Promise<void>;
+/**
+ * PATCH /api/timesheets/assignments/:assignmentId/toggle
+ * Enable or disable timesheet creation for this assignment.
+ * Body: { timesheets_enabled: boolean }
+ */
+export declare const toggleAssignmentTimesheets: (req: Request, res: Response) => Promise<void>;
+/**
+ * GET /api/timesheets/import/template
+ * Returns CSV column headers and example rows as text/csv.
+ */
+export declare const downloadImportTemplate: (_req: Request, res: Response) => Promise<Response<any, Record<string, any>>>;
+/**
+ * POST /api/timesheets/import
+ * Accepts a multipart/form-data upload with field "file" (CSV or XLSX).
+ * Additional fields: assignment_id, (optional) custom_bill_rate etc.
+ *
+ * Parsing strategy:
+ *   - CSV: built-in line-by-line parse (no dep needed)
+ *   - XLSX: uses the 'xlsx' npm package (install: npm i xlsx)
+ *
+ * One timesheet is created per unique week_start_date found in the file.
+ * Rows with errors are skipped; all valid rows are upserted.
+ *
+ * Returns a detailed import result summary.
+ */
+export declare const importTimesheets: (req: Request, res: Response) => Promise<void>;
 export declare const getAllInvoices: (req: Request, res: Response) => Promise<void>;
 export declare const getInvoiceById: (req: Request, res: Response) => Promise<void>;
 export declare const downloadInvoicePdf: (req: Request, res: Response) => Promise<void>;
@@ -72,11 +68,15 @@ export declare const timesheetController: {
     getTimesheetsByAssignment: (req: Request, res: Response) => Promise<void>;
     getTimesheetStats: (req: Request, res: Response) => Promise<void>;
     createOrGetTimesheet: (req: Request, res: Response) => Promise<void>;
+    updateTimesheetRates: (req: Request, res: Response) => Promise<void>;
     upsertTimeEntry: (req: Request, res: Response) => Promise<void>;
     deleteTimeEntry: (req: Request, res: Response) => Promise<void>;
     submitTimesheet: (req: Request, res: Response) => Promise<void>;
     approveTimesheet: (req: Request, res: Response) => Promise<void>;
     rejectTimesheet: (req: Request, res: Response) => Promise<void>;
+    toggleAssignmentTimesheets: (req: Request, res: Response) => Promise<void>;
+    downloadImportTemplate: (_req: Request, res: Response) => Promise<Response<any, Record<string, any>>>;
+    importTimesheets: (req: Request, res: Response) => Promise<void>;
     getAllInvoices: (req: Request, res: Response) => Promise<void>;
     getInvoiceById: (req: Request, res: Response) => Promise<void>;
     downloadInvoicePdf: (req: Request, res: Response) => Promise<void>;

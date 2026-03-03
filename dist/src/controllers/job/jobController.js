@@ -430,11 +430,9 @@ const getJobById = async (req, res) => {
                 },
                 job_postings: true,
                 job_rates: true,
-                applications: {
+                _count: {
                     select: {
-                        application_id: true,
-                        status: true,
-                        applied_at: true,
+                        applications: true,
                     },
                 },
             },
@@ -442,7 +440,11 @@ const getJobById = async (req, res) => {
         if (!job) {
             return (0, response_1.sendError)(res, 'Job not found', 404);
         }
-        return (0, response_1.sendSuccess)(res, job);
+        const { _count, ...jobData } = job;
+        return (0, response_1.sendSuccess)(res, {
+            ...jobData,
+            applications_count: _count.applications,
+        });
     }
     catch (err) {
         console.error('Error fetching job:', err);
@@ -969,6 +971,7 @@ const updateJobCompleteSchema = zod_1.z.object({
     resume_required: zod_1.z.boolean().optional(),
     interview_Round1: zod_1.z.boolean().optional(),
     interview_Round2: zod_1.z.boolean().optional(),
+    interview_rounds: zod_1.z.number().int().min(0).optional().nullable(),
     // Related entities
     job_detail: jobDetailUpdateSchema.optional(),
     job_notes: zod_1.z.array(jobNoteUpdateSchema).optional(),
@@ -994,7 +997,7 @@ const updateJobComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, start_date, end_date, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, job_detail, job_notes, job_rates, job_owners, } = validation.data;
+        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, start_date, end_date, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, interview_rounds, job_detail, job_notes, job_rates, job_owners, } = validation.data;
         // Check if job exists
         const existingJob = await prisma_config_1.default.job.findUnique({
             where: { job_id: id },
@@ -1108,9 +1111,9 @@ const updateJobComplete = async (req, res) => {
         // Sync approved boolean with status
         let syncedApproved = existingJob.approved;
         const finalStatus = status || existingJob.status;
-        // If status is changing, update approved accordingly
-        if (status !== undefined) {
-            syncedApproved = status === 'OPEN';
+        // Only flip approved when explicitly moving to OPEN
+        if (status === 'OPEN') {
+            syncedApproved = true;
         }
         // Perform update in a transaction
         const result = await prisma_config_1.default.$transaction(async (tx) => {
@@ -1126,7 +1129,12 @@ const updateJobComplete = async (req, res) => {
                 jobUpdateData.job_title = job_title;
             if (status !== undefined) {
                 jobUpdateData.status = status;
-                jobUpdateData.approved = status === 'OPEN';
+                // Only flip approved when explicitly moving to OPEN.
+                // All other status changes (CLOSED, DECLINED, DRAFT, PENDING)
+                // leave approved untouched so callers must change it on purpose.
+                if (status === 'OPEN') {
+                    jobUpdateData.approved = true;
+                }
             }
             if (job_type !== undefined)
                 jobUpdateData.job_type = job_type;
@@ -1150,6 +1158,8 @@ const updateJobComplete = async (req, res) => {
                 jobUpdateData.interview_Round1 = interview_Round1;
             if (interview_Round2 !== undefined)
                 jobUpdateData.interview_Round2 = interview_Round2;
+            if (interview_rounds !== undefined)
+                jobUpdateData.interview_rounds = interview_rounds;
             const updatedJob = Object.keys(jobUpdateData).length > 0
                 ? await tx.job.update({
                     where: { job_id: id },

@@ -13,24 +13,7 @@ const activityService_1 = require("../../services/activityService");
 // ─────────────────────────────────────────────────────────────────────────────
 // TIMEZONE CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
-// The frontend sends datetime-local values converted to UTC ISO strings using
-// localInputToUTCISOString(), which already accounts for the local offset.
-// The controller therefore receives correct UTC strings and stores them as-is.
-//
-// The ONLY place where a timezone offset is needed here is when comparing
-// "now" against stored dates for validation (e.g. "must be in the future").
-// That comparison is done in UTC so no offset is needed on the server side.
-//
-// TIMEZONE_OFFSET_HOURS is kept here purely for documentation / symmetry.
-// Do NOT apply it to incoming dates — the frontend already did the conversion.
-//
-// Examples:
-//   -5   → EST  (Eastern Standard Time)
-//   -4   → EDT  (Eastern Daylight Time)
-//    0   → UTC
-//   +5   → PKT  (Pakistan Standard Time)
-// ─────────────────────────────────────────────────────────────────────────────
-const TIMEZONE_OFFSET_HOURS = -5; // informational only — see note above
+const TIMEZONE_OFFSET_HOURS = -5; // informational only
 // Base CRUD methods
 const baseCrudMethods = (0, crudFactory_1.createCrudController)({
     model: prisma_config_1.default.pipelineStage,
@@ -41,6 +24,140 @@ const baseCrudMethods = (0, crudFactory_1.createCrudController)({
     defaultLimit: 10,
     maxLimit: 100,
 });
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: Determine interview round config from job fields
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Uses `interview_rounds` (Int) if present, otherwise falls back to the
+// legacy boolean fields (interview_Round1 / interview_Round2) so existing
+// data continues to work without any backfill.
+//
+//   interview_rounds = 0  → No interviews required, direct onboard
+//   interview_rounds = 1  → 1 round (default)
+//   interview_rounds = N  → N rounds
+//
+// Legacy fallback:
+//   Round1=false, Round2=false → 0 rounds
+//   Round1=true,  Round2=false → 1 round
+//   Round1=true,  Round2=true  → 2 rounds
+//
+const getInterviewRoundConfig = (job) => {
+    let totalRounds;
+    if (job?.interview_rounds !== undefined && job?.interview_rounds !== null) {
+        totalRounds = Math.max(0, Number(job.interview_rounds));
+    }
+    else {
+        // Legacy boolean fallback
+        const r1 = !!job?.interview_Round1;
+        const r2 = !!job?.interview_Round2;
+        if (!r1 && !r2)
+            totalRounds = 0;
+        else if (r1 && !r2)
+            totalRounds = 1;
+        else
+            totalRounds = 2;
+    }
+    return {
+        totalRounds,
+        noInterviewRequired: totalRounds === 0,
+        // Legacy compat helpers
+        round1Required: totalRounds >= 1,
+        round2Required: totalRounds >= 2,
+    };
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: Determine next schedulable round
+// Returns the round number to schedule next, or null if nothing to schedule.
+// ─────────────────────────────────────────────────────────────────────────────
+const getNextRoundToSchedule = (interviews, totalRounds) => {
+    if (totalRounds === 0)
+        return null;
+    for (let r = 1; r <= totalRounds; r++) {
+        const iv = interviews.find((i) => (i.round ?? 1) === r);
+        if (!iv) {
+            // This round hasn't been scheduled yet.
+            // Check that the previous round was accepted (or r === 1).
+            if (r === 1)
+                return 1;
+            const prev = interviews.find((i) => (i.round ?? 1) === r - 1);
+            if (prev?.status === 'ACCEPTED')
+                return r;
+            return null; // previous round not yet accepted
+        }
+        if (iv.status === 'REJECTED')
+            return null; // pipeline ended
+        if (iv.status === 'PENDING' || iv.status === 'COMPLETED_RESULT_PENDING')
+            return null; // in progress
+        // ACCEPTED → continue to next round
+    }
+    return null; // all rounds scheduled
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: Can the candidate be onboarded?
+// ─────────────────────────────────────────────────────────────────────────────
+const canOnboard = (interviews, totalRounds) => {
+    if (totalRounds === 0)
+        return true;
+    for (let r = 1; r <= totalRounds; r++) {
+        const iv = interviews.find((i) => (i.round ?? 1) === r);
+        if (!iv || iv.status !== 'ACCEPTED')
+            return false;
+    }
+    return true;
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED INCLUDE FRAGMENT
+// ─────────────────────────────────────────────────────────────────────────────
+const pipelineInclude = {
+    application: {
+        include: {
+            applicant: {
+                select: {
+                    applicant_id: true,
+                    full_name: true,
+                    status: true,
+                    contact: { select: { email: true, phone: true } },
+                },
+            },
+            job: {
+                select: {
+                    job_id: true,
+                    job_title: true,
+                    organization: { select: { organization_id: true, name: true } },
+                    resume_required: true,
+                    interview_Round1: true,
+                    interview_Round2: true,
+                    interview_rounds: true,
+                },
+            },
+            interviews: {
+                select: {
+                    interview_id: true,
+                    interview_date: true,
+                    status: true,
+                    round: true,
+                    interview_type: true,
+                },
+                orderBy: { round: 'asc' },
+            },
+        },
+    },
+    credit_user: { select: { user_id: true, name: true, email: true } },
+    representative_user: { select: { user_id: true, name: true, email: true } },
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// RESHAPE: Strip interview_Round1/Round2/interview_rounds into job_requirements
+// ─────────────────────────────────────────────────────────────────────────────
+const reshapePipelineStage = (stage) => {
+    const { application, ...stageRest } = stage;
+    const { job, ...applicationRest } = application;
+    const { resume_required, interview_Round1, interview_Round2, interview_rounds, ...jobRest } = job ?? {};
+    return {
+        ...stageRest,
+        application: { ...applicationRest, job: jobRest },
+        job_requirements: { resume_required, interview_Round1, interview_Round2, interview_rounds },
+    };
+};
 // ─────────────────────────────────────────────────────────────────────────────
 // GET ALL PIPELINE STAGES
 // GET /api/pipeline?stage=PIPELINED&page=1&limit=10
@@ -59,21 +176,14 @@ const getAllPipelineStages = async (req, res) => {
             prisma_config_1.default.pipelineStage.findMany({
                 where: whereClause, skip, take: limit,
                 orderBy: { pipeline_date: 'desc' },
-                include: {
-                    application: {
-                        include: {
-                            applicant: { select: { applicant_id: true, full_name: true, status: true, contact: { select: { email: true, phone: true } } } },
-                            job: { select: { job_id: true, job_title: true, organization: { select: { organization_id: true, name: true } } } },
-                            interviews: { select: { interview_id: true, interview_date: true, status: true } },
-                        },
-                    },
-                    credit_user: { select: { user_id: true, name: true, email: true } },
-                    representative_user: { select: { user_id: true, name: true, email: true } },
-                },
+                include: pipelineInclude,
             }),
             prisma_config_1.default.pipelineStage.count({ where: whereClause }),
         ]);
-        return (0, response_1.sendSuccess)(res, { data: pipelineStages, paging: { total, page, limit, totalPages: Math.ceil(total / limit) } });
+        return (0, response_1.sendSuccess)(res, {
+            data: pipelineStages.map(reshapePipelineStage),
+            paging: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        });
     }
     catch (err) {
         console.error('Error fetching pipeline stages:', err);
@@ -99,15 +209,26 @@ const createPipeline = async (req, res) => {
             return (0, response_1.sendError)(res, 'Application not found', 404);
         const existing = await prisma_config_1.default.pipelineStage.findFirst({ where: { application_id } });
         if (existing) {
-            return (0, response_1.sendError)(res, 'Pipeline already exists for this application', 409, [{ field: 'duplicate', message: `Pipeline already exists with ID: ${existing.pipeline_stage_id}` }]);
+            return (0, response_1.sendError)(res, 'Pipeline already exists for this application', 409, [{
+                    field: 'duplicate',
+                    message: `Pipeline already exists with ID: ${existing.pipeline_stage_id}`,
+                }]);
         }
         const pipelineStageId = await prisma_config_1.default.$transaction(async (tx) => {
             const ps = await tx.pipelineStage.create({
-                data: { application_id, stage_name: 'PIPELINED', credit_organization_user_id: credit_organization_user_id || null, representative_organization_user_id: representative_organization_user_id || null },
+                data: {
+                    application_id,
+                    stage_name: 'PIPELINED',
+                    credit_organization_user_id: credit_organization_user_id || null,
+                    representative_organization_user_id: representative_organization_user_id || null,
+                },
                 select: { pipeline_stage_id: true },
             });
             await tx.application.update({ where: { application_id }, data: { status: 'SCREENED' } });
-            await tx.applicant.update({ where: { applicant_id: application.applicant_id }, data: { status: 'SHORTLISTED' } });
+            await tx.applicant.update({
+                where: { applicant_id: application.applicant_id },
+                data: { status: 'SHORTLISTED' },
+            });
             return ps.pipeline_stage_id;
         });
         const result = await prisma_config_1.default.pipelineStage.findUnique({
@@ -138,20 +259,23 @@ const createPipeline = async (req, res) => {
 // CREATE INTERVIEW
 // POST /api/pipeline/:pipelineStageId/interview
 //
-// The frontend sends interview_date as a UTC ISO string (already converted
-// from EST via localInputToUTCISOString). We store it directly as UTC.
+// N-round logic:
+//   - interview_rounds = 0  → error, use onboard directly
+//   - Schedules the next required round in sequence
+//   - Each round must be ACCEPTED before the next can be scheduled
+//
+// Body: { interview_date: ISO string, round?: number, interview_type?: 'ONLINE' | 'OFFLINE' }
 // ─────────────────────────────────────────────────────────────────────────────
 const createInterviewForPipeline = async (req, res) => {
     try {
         const { pipelineStageId } = req.params;
-        const { interview_date } = req.body;
+        const { interview_date, round: requestedRound, interview_type } = req.body;
         if (!interview_date)
             return (0, response_1.sendError)(res, 'interview_date is required', 400);
-        // The incoming value is already UTC (frontend converted EST → UTC).
-        // Parse directly — no offset adjustment needed here.
         const interviewDateUTC = new Date(interview_date);
         if (isNaN(interviewDateUTC.getTime()))
             return (0, response_1.sendError)(res, 'Invalid interview_date format', 400);
+        const interviewType = interview_type === 'OFFLINE' ? 'OFFLINE' : 'ONLINE';
         const pipelineStage = await prisma_config_1.default.pipelineStage.findUnique({
             where: { pipeline_stage_id: pipelineStageId },
             include: {
@@ -161,36 +285,62 @@ const createInterviewForPipeline = async (req, res) => {
                         job: {
                             include: {
                                 organization: {
-                                    select: { name: true, website: true, contacts: { where: { contact_type: 'PRIMARY' }, take: 1 } },
+                                    select: {
+                                        name: true, website: true,
+                                        contacts: { where: { contact_type: 'PRIMARY' }, take: 1 },
+                                    },
                                 },
                             },
                         },
-                        interviews: true,
+                        interviews: { orderBy: { round: 'asc' } },
                     },
                 },
             },
         });
         if (!pipelineStage)
             return (0, response_1.sendError)(res, 'Pipeline stage not found', 404);
-        if (pipelineStage.application.interviews?.length > 0) {
-            return (0, response_1.sendError)(res, 'Interview already exists for this application', 409, [{
-                    field: 'interview',
-                    message: `An interview is already scheduled for ${pipelineStage.application.interviews[0].interview_date}`,
-                }]);
+        const job = pipelineStage.application.job;
+        const { totalRounds, noInterviewRequired } = getInterviewRoundConfig(job);
+        const existingInterviews = pipelineStage.application.interviews;
+        if (noInterviewRequired) {
+            return (0, response_1.sendError)(res, 'This job requires no interview rounds. Use the onboard endpoint directly.', 400);
+        }
+        const roundToSchedule = getNextRoundToSchedule(existingInterviews, totalRounds);
+        if (roundToSchedule === null) {
+            // Figure out why
+            const hasRejected = existingInterviews.some((i) => i.status === 'REJECTED');
+            if (hasRejected)
+                return (0, response_1.sendError)(res, 'Cannot schedule: a previous interview round was rejected.', 400);
+            const allScheduled = existingInterviews.length >= totalRounds;
+            if (allScheduled)
+                return (0, response_1.sendError)(res, `All ${totalRounds} interview round(s) have already been scheduled.`, 409);
+            return (0, response_1.sendError)(res, 'Cannot schedule interview at this stage. Check previous round status.', 400);
+        }
+        // Validate requested round matches expected round (if frontend sends it)
+        if (requestedRound && Number(requestedRound) !== roundToSchedule) {
+            return (0, response_1.sendError)(res, `Expected round ${roundToSchedule} but received round ${requestedRound}`, 400);
         }
         const applicantEmail = pipelineStage.application.applicant.contact?.email;
-        if (!applicantEmail)
+        if (!applicantEmail) {
             return (0, response_1.sendError)(res, 'Applicant email not found. Cannot send interview invitation.', 400);
+        }
         const interviewId = await prisma_config_1.default.$transaction(async (tx) => {
             const iv = await tx.interview.create({
                 data: {
                     application_id: pipelineStage.application_id,
-                    interview_date: interviewDateUTC, // stored as UTC
+                    interview_date: interviewDateUTC,
                     status: 'PENDING',
+                    round: roundToSchedule,
+                    interview_type: interviewType,
                 },
                 select: { interview_id: true },
             });
-            await tx.applicant.update({ where: { applicant_id: pipelineStage.application.applicant_id }, data: { status: 'INTERVIEWING' } });
+            if (roundToSchedule === 1) {
+                await tx.applicant.update({
+                    where: { applicant_id: pipelineStage.application.applicant_id },
+                    data: { status: 'INTERVIEWING' },
+                });
+            }
             return iv.interview_id;
         });
         const result = await prisma_config_1.default.interview.findUnique({
@@ -201,7 +351,12 @@ const createInterviewForPipeline = async (req, res) => {
                         job: {
                             select: {
                                 job_id: true, job_title: true, location: true,
-                                organization: { select: { organization_id: true, name: true, website: true, contacts: { where: { contact_type: 'PRIMARY' }, select: { email: true, phone: true } } } },
+                                organization: {
+                                    select: {
+                                        organization_id: true, name: true, website: true,
+                                        contacts: { where: { contact_type: 'PRIMARY' }, select: { email: true, phone: true } },
+                                    },
+                                },
                             },
                         },
                         applicant: { select: { applicant_id: true, full_name: true, contact: { select: { email: true, phone: true } } } },
@@ -209,28 +364,30 @@ const createInterviewForPipeline = async (req, res) => {
                 },
             },
         });
-        // Send invitation email (async)
         (0, emailService_1.sendInterviewInvitationEmail)({
             applicantEmail: result.application.applicant.contact.email,
             applicantName: result.application.applicant.full_name,
             jobTitle: result.application.job.job_title,
             organizationName: result.application.job.organization.name,
             organizationWebsite: result.application.job.organization.website || undefined,
-            interviewDate: result.interview_date, // UTC Date — emailService formats in EST
+            interviewDate: result.interview_date,
             location: result.application.job.location,
             contactEmail: result.application.job.organization.contacts[0]?.email || undefined,
             contactPhone: result.application.job.organization.contacts[0]?.phone || undefined,
+            round: roundToSchedule,
+            totalRounds,
+            interviewType,
         }).then((r) => {
             if (r.success)
-                console.log('✅ Interview invitation email sent', { interviewId: result.interview_id });
+                console.log(`✅ Round ${roundToSchedule} invitation email sent`, { interviewId: result.interview_id });
             else
                 console.error('❌ Failed to send invitation email', { error: r.error });
         }).catch((e) => console.error('❌ Email error', e.message));
         const userId = req.user?.user_id;
         if (userId) {
             await (0, activityService_1.updateUserActivity)(userId, {
-                action_type: 'SCEDULE', entity_type: 'INTERVIEW', entity_id: result.interview_id,
-                entity_name: `Interview for ${result.application.applicant.full_name} - ${result.application.job.job_title}`,
+                action_type: 'SCHEDULE', entity_type: 'INTERVIEW', entity_id: result.interview_id,
+                entity_name: `Round ${roundToSchedule} Interview for ${result.application.applicant.full_name} - ${result.application.job.job_title}`,
                 timestamp: new Date().toISOString(),
             });
         }
@@ -239,16 +396,13 @@ const createInterviewForPipeline = async (req, res) => {
     catch (err) {
         console.error('Error creating interview:', err);
         if (err.code === 'P2002')
-            return (0, response_1.sendError)(res, 'Interview already exists for this application', 409);
+            return (0, response_1.sendError)(res, 'Interview already exists for this round', 409);
         return (0, response_1.sendError)(res, 'Failed to create interview', 500);
     }
 };
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATE INTERVIEW DATE
 // PATCH /api/pipeline/interview/:interviewId/update-date
-//
-// The frontend sends the new date as a UTC ISO string (EST → UTC conversion
-// already applied by localInputToUTCISOString). Store directly.
 // ─────────────────────────────────────────────────────────────────────────────
 const updateInterviewDate = async (req, res) => {
     try {
@@ -256,7 +410,6 @@ const updateInterviewDate = async (req, res) => {
         const { interview_date } = req.body;
         if (!interview_date)
             return (0, response_1.sendError)(res, 'interview_date is required', 400);
-        // Incoming value is already UTC — parse and validate against now (UTC)
         const selectedDateUTC = new Date(interview_date);
         if (isNaN(selectedDateUTC.getTime()))
             return (0, response_1.sendError)(res, 'Invalid interview_date format', 400);
@@ -281,7 +434,7 @@ const updateInterviewDate = async (req, res) => {
         const oldDate = interview.interview_date;
         const updated = await prisma_config_1.default.interview.update({
             where: { interview_id: interviewId },
-            data: { interview_date: selectedDateUTC }, // stored as UTC
+            data: { interview_date: selectedDateUTC },
             include: {
                 application: {
                     include: {
@@ -298,8 +451,8 @@ const updateInterviewDate = async (req, res) => {
                 applicantName: updated.application.applicant.full_name,
                 jobTitle: updated.application.job.job_title,
                 organizationName: updated.application.job.organization.name,
-                oldDate, // UTC Date — emailService formats in EST
-                newDate: updated.interview_date, // UTC Date — emailService formats in EST
+                oldDate,
+                newDate: updated.interview_date,
                 location: updated.application.job.location,
             }).then((r) => { if (!r.success)
                 console.error('❌ Reschedule email failed:', r.error); })
@@ -327,14 +480,16 @@ const updateInterviewDate = async (req, res) => {
 const getInterviewByApplication = async (req, res) => {
     try {
         const { applicationId } = req.params;
-        const interview = await prisma_config_1.default.interview.findUnique({
+        const interviews = await prisma_config_1.default.interview.findMany({
             where: { application_id: applicationId },
+            orderBy: { round: 'asc' },
             include: {
                 application: {
                     include: {
                         job: {
                             select: {
                                 job_id: true, job_title: true, job_type: true, location: true,
+                                interview_Round1: true, interview_Round2: true, interview_rounds: true,
                                 organization: {
                                     select: {
                                         organization_id: true, name: true, website: true,
@@ -354,25 +509,41 @@ const getInterviewByApplication = async (req, res) => {
                 },
             },
         });
-        if (!interview)
+        if (!interviews.length)
             return (0, response_1.sendError)(res, 'Interview not found for this application', 404);
+        const activeInterview = interviews.find((i) => i.status === 'PENDING' || i.status === 'COMPLETED_RESULT_PENDING') || interviews[interviews.length - 1];
+        const app = activeInterview.application;
+        const job = app.job;
+        const { totalRounds, noInterviewRequired } = getInterviewRoundConfig(job);
+        // Build timeline events: one per required round + standard stages
+        const roundEvents = [];
+        for (let r = 1; r <= totalRounds; r++) {
+            const iv = interviews.find((i) => (i.round ?? 1) === r);
+            roundEvents.push({
+                stage: `ROUND_${r}`,
+                date: iv?.interview_date || null,
+                description: `Round ${r} Interview${iv?.interview_type ? ` (${iv.interview_type})` : ''}`,
+                status: !iv ? 'pending'
+                    : iv.status === 'PENDING' ? 'current'
+                        : iv.status === 'REJECTED' ? 'rejected'
+                            : 'completed',
+            });
+        }
         const statusTimeline = {
-            application_status: interview.application.status,
-            applicant_status: interview.application.applicant.status,
-            interview_status: interview.status,
-            pipeline_stage: interview.application.pipeline_stages[0]?.stage_name || null,
+            application_status: app.status,
+            applicant_status: app.applicant.status,
+            interview_status: activeInterview.status,
+            pipeline_stage: app.pipeline_stages[0]?.stage_name || null,
+            round_config: { totalRounds, noInterviewRequired },
             events: [
-                { stage: 'APPLIED', date: interview.application.applied_at, description: 'Application submitted', status: 'completed' },
-                { stage: 'SCREENED', date: interview.application.pipeline_stages[0]?.pipeline_date || null, description: 'Application screened and shortlisted', status: interview.application.status === 'APPLIED' ? 'pending' : 'completed' },
-                { stage: 'INTERVIEWING', date: interview.interview_date, description: 'Interview scheduled', status: interview.status === 'PENDING' ? 'current' : 'completed' },
-                { stage: 'INTERVIEW_RESULT', date: null, description: 'Interview result pending',
-                    status: interview.status === 'COMPLETED_RESULT_PENDING' ? 'current' : interview.status === 'REJECTED' ? 'rejected' : interview.status === 'ACCEPTED' ? 'completed' : 'pending' },
-                { stage: 'OFFERED', date: null, description: 'Offer extended',
-                    status: interview.application.status === 'OFFERED' ? 'current' : interview.application.status === 'HIRED' ? 'completed' : 'pending' },
-                { stage: 'HIRED', date: null, description: 'Candidate hired and onboarded', status: interview.application.status === 'HIRED' ? 'completed' : 'pending' },
+                { stage: 'APPLIED', date: app.applied_at, description: 'Application submitted', status: 'completed' },
+                { stage: 'SCREENED', date: app.pipeline_stages[0]?.pipeline_date || null, description: 'Application screened and shortlisted', status: app.status === 'APPLIED' ? 'pending' : 'completed' },
+                ...roundEvents,
+                { stage: 'OFFERED', date: null, description: 'Offer extended', status: app.status === 'OFFERED' ? 'current' : app.status === 'HIRED' ? 'completed' : 'pending' },
+                { stage: 'HIRED', date: null, description: 'Candidate hired and onboarded', status: app.status === 'HIRED' ? 'completed' : 'pending' },
             ],
         };
-        return (0, response_1.sendSuccess)(res, { interview, status_timeline: statusTimeline });
+        return (0, response_1.sendSuccess)(res, { interview: activeInterview, all_interviews: interviews, status_timeline: statusTimeline });
     }
     catch (err) {
         console.error('Error fetching interview by application:', err);
@@ -382,7 +553,6 @@ const getInterviewByApplication = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTO-UPDATE COMPLETED INTERVIEWS
 // POST /api/pipeline/auto-update-completed
-// Compares stored UTC dates against UTC now — no offset needed.
 // ─────────────────────────────────────────────────────────────────────────────
 const autoUpdateCompletedInterviews = async (req, res) => {
     try {
@@ -394,7 +564,10 @@ const autoUpdateCompletedInterviews = async (req, res) => {
         if (!pending.length)
             return (0, response_1.sendSuccess)(res, { message: 'No interviews to update', updated_count: 0 });
         const count = await prisma_config_1.default.$transaction(async (tx) => {
-            const r = await tx.interview.updateMany({ where: { status: 'PENDING', interview_date: { lt: nowUTC } }, data: { status: 'COMPLETED_RESULT_PENDING' } });
+            const r = await tx.interview.updateMany({
+                where: { status: 'PENDING', interview_date: { lt: nowUTC } },
+                data: { status: 'COMPLETED_RESULT_PENDING' },
+            });
             await tx.pipelineStage.updateMany({
                 where: { application: { interviews: { some: { status: 'COMPLETED_RESULT_PENDING', interview_date: { lt: nowUTC } } } } },
                 data: { stage_name: 'INTERVIEWED' },
@@ -428,9 +601,10 @@ const rejectInterview = async (req, res) => {
         });
         if (!interview)
             return (0, response_1.sendError)(res, 'Interview not found', 404);
-        await prisma_config_1.default.$transaction(async (tx) => {
-            await tx.interview.update({ where: { interview_id: interviewId }, data: { status: 'REJECTED' } });
-        });
+        if (interview.status !== 'COMPLETED_RESULT_PENDING') {
+            return (0, response_1.sendError)(res, `Cannot reject interview with status ${interview.status}. Must be COMPLETED_RESULT_PENDING.`, 400);
+        }
+        await prisma_config_1.default.interview.update({ where: { interview_id: interviewId }, data: { status: 'REJECTED' } });
         const result = await prisma_config_1.default.interview.findUnique({
             where: { interview_id: interviewId },
             include: {
@@ -463,6 +637,10 @@ const rejectInterview = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCEPT INTERVIEW
 // PATCH /api/pipeline/interview/:interviewId/accept
+//
+// N-round logic:
+//   - If this is the last required round → ACCEPTED + application → OFFERED
+//   - Otherwise → ACCEPTED, wait for next round to be scheduled
 // ─────────────────────────────────────────────────────────────────────────────
 const acceptInterview = async (req, res) => {
     try {
@@ -474,15 +652,28 @@ const acceptInterview = async (req, res) => {
                     include: {
                         applicant: { include: { contact: true } },
                         job: { include: { organization: { select: { name: true } } } },
+                        interviews: { orderBy: { round: 'asc' } },
                     },
                 },
             },
         });
         if (!interview)
             return (0, response_1.sendError)(res, 'Interview not found', 404);
+        if (interview.status !== 'COMPLETED_RESULT_PENDING') {
+            return (0, response_1.sendError)(res, `Cannot accept interview with status ${interview.status}. Must be COMPLETED_RESULT_PENDING.`, 400);
+        }
+        const job = interview.application.job;
+        const { totalRounds } = getInterviewRoundConfig(job);
+        const currentRound = interview.round ?? 1;
+        const isLastRound = currentRound >= totalRounds;
         await prisma_config_1.default.$transaction(async (tx) => {
             await tx.interview.update({ where: { interview_id: interviewId }, data: { status: 'ACCEPTED' } });
-            await tx.application.update({ where: { application_id: interview.application_id }, data: { status: 'OFFERED' } });
+            if (isLastRound) {
+                await tx.application.update({
+                    where: { application_id: interview.application_id },
+                    data: { status: 'OFFERED' },
+                });
+            }
         });
         const result = await prisma_config_1.default.interview.findUnique({
             where: { interview_id: interviewId },
@@ -495,18 +686,26 @@ const acceptInterview = async (req, res) => {
                 },
             },
         });
-        const aEmail = result.application.applicant.contact?.email;
-        if (aEmail) {
-            (0, emailService_1.sendOfferLetterEmail)({
-                applicantEmail: aEmail,
-                applicantName: result.application.applicant.full_name,
-                jobTitle: result.application.job.job_title,
-                organizationName: result.application.job.organization.name,
-            }).then((r) => { if (!r.success)
-                console.error('❌ Offer email failed:', r.error); })
-                .catch((e) => console.error('❌ Offer email error:', e.message));
+        if (isLastRound) {
+            const aEmail = result.application.applicant.contact?.email;
+            if (aEmail) {
+                (0, emailService_1.sendOfferLetterEmail)({
+                    applicantEmail: aEmail,
+                    applicantName: result.application.applicant.full_name,
+                    jobTitle: result.application.job.job_title,
+                    organizationName: result.application.job.organization.name,
+                }).then((r) => { if (!r.success)
+                    console.error('❌ Offer email failed:', r.error); })
+                    .catch((e) => console.error('❌ Offer email error:', e.message));
+            }
         }
-        return (0, response_1.sendSuccess)(res, result);
+        const message = isLastRound
+            ? `Round ${currentRound} accepted. Offer letter sent to candidate.`
+            : `Round ${currentRound} accepted. Please schedule Round ${currentRound + 1} next.`;
+        return (0, response_1.sendSuccess)(res, {
+            ...result,
+            _meta: { message, isLastRound, nextRound: isLastRound ? null : currentRound + 1 },
+        });
     }
     catch (err) {
         console.error('Error accepting interview:', err);
@@ -516,6 +715,9 @@ const acceptInterview = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // ONBOARD CANDIDATE
 // PATCH /api/pipeline/:pipelineStageId/onboard
+//
+// N-round guard: all required rounds must be ACCEPTED before onboarding.
+// noInterviewRequired → skip all interview checks.
 // ─────────────────────────────────────────────────────────────────────────────
 const onboardCandidate = async (req, res) => {
     try {
@@ -523,8 +725,9 @@ const onboardCandidate = async (req, res) => {
         const { start_date, end_date, employment_type, workers_comp_code } = req.body;
         if (!start_date || !employment_type)
             return (0, response_1.sendError)(res, 'start_date and employment_type are required', 400);
-        if (!['W2', 'CONTRACTOR_1099'].includes(employment_type))
+        if (!['W2', 'CONTRACTOR_1099'].includes(employment_type)) {
             return (0, response_1.sendError)(res, 'employment_type must be W2 or CONTRACTOR_1099', 400);
+        }
         const startDate = new Date(start_date);
         if (isNaN(startDate.getTime()))
             return (0, response_1.sendError)(res, 'Invalid start_date format', 400);
@@ -542,15 +745,28 @@ const onboardCandidate = async (req, res) => {
                     include: {
                         applicant: { include: { contact: true } },
                         job: { include: { organization: { select: { name: true } } } },
+                        interviews: { orderBy: { round: 'asc' } },
                     },
                 },
             },
         });
         if (!pipelineStage)
             return (0, response_1.sendError)(res, 'Pipeline stage not found', 404);
-        const interview = await prisma_config_1.default.interview.findUnique({ where: { application_id: pipelineStage.application_id } });
-        if (!interview || interview.status !== 'ACCEPTED')
-            return (0, response_1.sendError)(res, 'Cannot onboard: Interview must be accepted first', 400);
+        const job = pipelineStage.application.job;
+        const { totalRounds, noInterviewRequired } = getInterviewRoundConfig(job);
+        const interviews = pipelineStage.application.interviews;
+        if (!noInterviewRequired) {
+            if (!canOnboard(interviews, totalRounds)) {
+                // Find which round is blocking
+                for (let r = 1; r <= totalRounds; r++) {
+                    const iv = interviews.find((i) => (i.round ?? 1) === r);
+                    if (!iv)
+                        return (0, response_1.sendError)(res, `Cannot onboard: Round ${r} interview has not been scheduled yet.`, 400);
+                    if (iv.status !== 'ACCEPTED')
+                        return (0, response_1.sendError)(res, `Cannot onboard: Round ${r} interview must be accepted first (current status: ${iv.status}).`, 400);
+                }
+            }
+        }
         const existing = await prisma_config_1.default.assignment.findUnique({ where: { application_id: pipelineStage.application_id } });
         if (existing)
             return (0, response_1.sendError)(res, 'Assignment already exists for this application', 400);
@@ -606,7 +822,6 @@ const onboardCandidate = async (req, res) => {
 };
 // ─────────────────────────────────────────────────────────────────────────────
 // GET PIPELINE BY JOB
-// GET /api/pipeline/job/:jobId
 // ─────────────────────────────────────────────────────────────────────────────
 const getPipelineByJob = async (req, res) => {
     try {
@@ -622,21 +837,14 @@ const getPipelineByJob = async (req, res) => {
         const [pipelineStages, total] = await Promise.all([
             prisma_config_1.default.pipelineStage.findMany({
                 where: whereClause, skip, take: limit, orderBy: { pipeline_date: 'desc' },
-                include: {
-                    application: {
-                        include: {
-                            applicant: { select: { applicant_id: true, full_name: true, status: true, contact: { select: { email: true, phone: true } } } },
-                            job: { select: { job_id: true, job_title: true, organization: { select: { organization_id: true, name: true } } } },
-                            interviews: { select: { interview_id: true, interview_date: true, status: true } },
-                        },
-                    },
-                    credit_user: { select: { user_id: true, name: true, email: true } },
-                    representative_user: { select: { user_id: true, name: true, email: true } },
-                },
+                include: pipelineInclude,
             }),
             prisma_config_1.default.pipelineStage.count({ where: whereClause }),
         ]);
-        return (0, response_1.sendSuccess)(res, { data: pipelineStages, paging: { total, page, limit, totalPages: Math.ceil(total / limit) } });
+        return (0, response_1.sendSuccess)(res, {
+            data: pipelineStages.map(reshapePipelineStage),
+            paging: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        });
     }
     catch (err) {
         console.error('Error fetching pipeline by job:', err);
@@ -645,7 +853,6 @@ const getPipelineByJob = async (req, res) => {
 };
 // ─────────────────────────────────────────────────────────────────────────────
 // GET PIPELINE STATS
-// GET /api/pipeline/stats
 // ─────────────────────────────────────────────────────────────────────────────
 const getPipelineStats = async (req, res) => {
     try {
@@ -665,7 +872,6 @@ const getPipelineStats = async (req, res) => {
 };
 // ─────────────────────────────────────────────────────────────────────────────
 // GET PIPELINE OVERVIEW
-// GET /api/pipeline/:pipelineStageId/overview
 // ─────────────────────────────────────────────────────────────────────────────
 const getPipelineOverview = async (req, res) => {
     try {
@@ -675,15 +881,21 @@ const getPipelineOverview = async (req, res) => {
             include: {
                 application: {
                     include: {
-                        job: { select: { job_title: true, job_type: true, location: true, organization: { select: { name: true, website: true } } } },
+                        job: {
+                            select: {
+                                job_title: true, job_type: true, location: true,
+                                interview_Round1: true, interview_Round2: true, interview_rounds: true,
+                                organization: { select: { name: true, website: true } },
+                            },
+                        },
                         applicant: {
                             include: {
                                 contact: true, demographic: true,
-                                work_history: { where: { OR: [{ application_id: { equals: null } }, { application_id: { not: null } }] }, orderBy: { created_at: 'desc' } },
-                                documents: { where: { OR: [{ application_id: { equals: null } }, { application_id: { not: null } }] }, orderBy: { created_at: 'desc' } },
+                                work_history: { orderBy: { created_at: 'desc' } },
+                                documents: { orderBy: { created_at: 'desc' } },
                             },
                         },
-                        interviews: true,
+                        interviews: { orderBy: { round: 'asc' } },
                     },
                 },
                 credit_user: { select: { user_id: true, name: true, email: true } },
@@ -701,7 +913,6 @@ const getPipelineOverview = async (req, res) => {
 };
 // ─────────────────────────────────────────────────────────────────────────────
 // GET PIPELINE BY INTERVIEW STATUS
-// GET /api/pipeline/filter-by-interview-status?status=PENDING
 // ─────────────────────────────────────────────────────────────────────────────
 const getPipelineByInterviewStatus = async (req, res) => {
     try {
@@ -710,27 +921,21 @@ const getPipelineByInterviewStatus = async (req, res) => {
         const skip = (page - 1) * limit;
         const status = req.query.status;
         if (!status || !['PENDING', 'COMPLETED_RESULT_PENDING', 'REJECTED', 'ACCEPTED'].includes(status.toUpperCase())) {
-            return (0, response_1.sendError)(res, 'Invalid or missing interview status. Valid values: PENDING, COMPLETED_RESULT_PENDING, REJECTED, ACCEPTED', 400);
+            return (0, response_1.sendError)(res, 'Invalid or missing interview status.', 400);
         }
         const whereClause = { application: { interviews: { some: { status: status.toUpperCase() } } } };
         const [pipelineStages, total] = await Promise.all([
             prisma_config_1.default.pipelineStage.findMany({
                 where: whereClause, skip, take: limit, orderBy: { pipeline_date: 'desc' },
-                include: {
-                    application: {
-                        include: {
-                            applicant: { select: { applicant_id: true, full_name: true, status: true, contact: { select: { email: true, phone: true } } } },
-                            job: { select: { job_id: true, job_title: true, organization: { select: { organization_id: true, name: true } } } },
-                            interviews: { select: { interview_id: true, interview_date: true, status: true } },
-                        },
-                    },
-                    credit_user: { select: { user_id: true, name: true, email: true } },
-                    representative_user: { select: { user_id: true, name: true, email: true } },
-                },
+                include: pipelineInclude,
             }),
             prisma_config_1.default.pipelineStage.count({ where: whereClause }),
         ]);
-        return (0, response_1.sendSuccess)(res, { data: pipelineStages, paging: { total, page, limit, totalPages: Math.ceil(total / limit) }, filter: { interview_status: status.toUpperCase() } });
+        return (0, response_1.sendSuccess)(res, {
+            data: pipelineStages.map(reshapePipelineStage),
+            paging: { total, page, limit, totalPages: Math.ceil(total / limit) },
+            filter: { interview_status: status.toUpperCase() },
+        });
     }
     catch (err) {
         console.error('Error fetching pipeline by interview status:', err);
@@ -739,7 +944,6 @@ const getPipelineByInterviewStatus = async (req, res) => {
 };
 // ─────────────────────────────────────────────────────────────────────────────
 // SEARCH PIPELINED APPLICANTS
-// GET /api/pipeline/search?query=john
 // ─────────────────────────────────────────────────────────────────────────────
 const searchPipelinedApplicants = async (req, res) => {
     try {
@@ -763,21 +967,15 @@ const searchPipelinedApplicants = async (req, res) => {
         const [pipelineStages, total] = await Promise.all([
             prisma_config_1.default.pipelineStage.findMany({
                 where: whereClause, skip, take: limit, orderBy: { pipeline_date: 'desc' },
-                include: {
-                    application: {
-                        include: {
-                            applicant: { select: { applicant_id: true, full_name: true, status: true, contact: { select: { email: true, phone: true } } } },
-                            job: { select: { job_id: true, job_title: true, organization: { select: { organization_id: true, name: true } } } },
-                            interviews: { select: { interview_id: true, interview_date: true, status: true } },
-                        },
-                    },
-                    credit_user: { select: { user_id: true, name: true, email: true } },
-                    representative_user: { select: { user_id: true, name: true, email: true } },
-                },
+                include: pipelineInclude,
             }),
             prisma_config_1.default.pipelineStage.count({ where: whereClause }),
         ]);
-        return (0, response_1.sendSuccess)(res, { data: pipelineStages, paging: { total, page, limit, totalPages: Math.ceil(total / limit) }, search: { query: term, fields: ['organization_name', 'job_title', 'applicant_name', 'applicant_email'] } });
+        return (0, response_1.sendSuccess)(res, {
+            data: pipelineStages.map(reshapePipelineStage),
+            paging: { total, page, limit, totalPages: Math.ceil(total / limit) },
+            search: { query: term },
+        });
     }
     catch (err) {
         console.error('Error searching pipelined applicants:', err);

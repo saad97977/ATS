@@ -8,6 +8,9 @@ export declare const sendInterviewInvitationEmail: (data: {
     location: string;
     contactEmail?: string;
     contactPhone?: string;
+    round?: number;
+    totalRounds?: number;
+    interviewType?: "ONLINE" | "OFFLINE";
 }) => Promise<{
     success: boolean;
     messageId?: string;
@@ -72,6 +75,9 @@ declare const _default: {
         location: string;
         contactEmail?: string;
         contactPhone?: string;
+        round?: number;
+        totalRounds?: number;
+        interviewType?: "ONLINE" | "OFFLINE";
     }) => Promise<{
         success: boolean;
         messageId?: string;

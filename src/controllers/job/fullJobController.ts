@@ -63,6 +63,7 @@ const createJobCompleteSchema = z.object({
   resume_required: z.boolean().optional().default(false),
   interview_Round1: z.boolean().optional().default(true),
   interview_Round2: z.boolean().optional().default(false),
+  interview_rounds: z.number().int().min(0).optional().default(1),
   
   // Related entities
   job_detail: jobDetailSchema.optional(),
@@ -107,6 +108,7 @@ const createJobComplete = async (req: Request, res: Response) => {
       resume_required,
       interview_Round1,
       interview_Round2,
+      interview_rounds,
       job_detail,
       job_notes,
       job_rates,
@@ -244,6 +246,7 @@ const createJobComplete = async (req: Request, res: Response) => {
           resume_required,
           interview_Round1,
           interview_Round2,
+          interview_rounds,
         },
       });
 

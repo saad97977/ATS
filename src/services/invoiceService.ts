@@ -1,52 +1,59 @@
-/**
- * invoice.service.ts
+﻿/**
+ * invoiceService.ts
  *
- * Generates professional PDF invoices using Python + ReportLab.
- * The PDF is built via a subprocess, saved to /tmp, then uploaded
- * to your storage layer (S3/GCS — stub provided below).
- *
- * Install Python dep: pip3 install reportlab
+ * Generates professional PDF invoices using PDFKit (pure Node.js, no system deps).
+ * The PDF is built in-memory as a Buffer â€” no temp files, no subprocesses.
+ * Buffer is then handed off to the storage layer for upload.
  */
 
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
-import { execSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import 'dotenv/config'; 
+import PDFDocument from 'pdfkit';
+import { BlobServiceClient } from '@azure/storage-blob';
+import 'dotenv/config';
 
-// ─── Storage Upload ───────────────────────────────────────────
-// Replace this stub with your actual S3 / GCS / Azure logic.
-
-const uploadPdfToStorage = async (
-  localPath: string,
-  filename: string
-): Promise<string> => {
-  /*
-  // S3 example:
-  import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-  const s3 = new S3Client({ region: process.env.AWS_REGION });
-  await s3.send(new PutObjectCommand({
-    Bucket:      process.env.S3_BUCKET!,
-    Key:         `invoices/${filename}`,
-    Body:        fs.createReadStream(localPath),
-    ContentType: 'application/pdf',
-  }));
-  return `https://${process.env.S3_BUCKET}.s3.amazonaws.com/invoices/${filename}`;
-  */
-
-  // Dev stub: save to local folder and return the URL
-  const dir = path.join(process.cwd(), 'generated-invoices');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, filename);
-  fs.copyFileSync(localPath, dest);
-  // Return full URL compatible with the Express static middleware
-  const baseUrl = process.env.API_URL || 'http://localhost:5000';
-  return `${baseUrl}/generated-invoices/${filename}`;
+// â”€â”€â”€ Palette â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const C = {
+  PRIMARY:   '#1a365d',
+  SECONDARY: '#2b6cb0',
+  LIGHT:     '#e2e8f0',
+  MUTED:     '#718096',
+  TEXT:      '#1a202c',
+  WHITE:     '#ffffff',
+  BG:        '#f7fafc',
+  BORDER:    '#cbd5e0',
 };
 
-// ─── Data Fetcher ─────────────────────────────────────────────
+// â”€â”€â”€ Storage Upload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
+  throw new Error('AZURE_STORAGE_CONNECTION_STRING is not defined in environment variables');
+}
+
+const blobServiceClient = BlobServiceClient.fromConnectionString(
+  process.env.AZURE_STORAGE_CONNECTION_STRING
+);
+
+const invoicesContainerName = process.env.AZURE_INVOICES_CONTAINER_NAME || 'invoices';
+
+const getInvoicesContainerClient = async () => {
+  const containerClient = blobServiceClient.getContainerClient(invoicesContainerName);
+  await containerClient.createIfNotExists({ access: 'blob' });
+  return containerClient;
+};
+
+const uploadPdfToStorage = async (
+  buffer: Buffer,
+  filename: string
+): Promise<string> => {
+  const containerClient = await getInvoicesContainerClient();
+  const blockBlobClient = containerClient.getBlockBlobClient(filename);
+  await blockBlobClient.upload(buffer, buffer.length, {
+    blobHTTPHeaders: { blobContentType: 'application/pdf' },
+  });
+  return blockBlobClient.url;
+};
+
+// â”€â”€â”€ Data Fetcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const fetchInvoiceData = async (invoiceId: string) => {
   const invoice = await prisma.invoice.findUnique({
@@ -109,210 +116,274 @@ const fetchInvoiceData = async (invoiceId: string) => {
   };
 };
 
-// ─── Python PDF Script Builder ────────────────────────────────
+// â”€â”€â”€ PDF Builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-const buildPythonScript = (data: ReturnType<typeof fetchInvoiceData> extends Promise<infer T> ? T : never, outputPath: string) => `
-import json
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.units import inch
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-)
-from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
+type InvoiceData = Awaited<ReturnType<typeof fetchInvoiceData>>;
 
-data        = ${JSON.stringify(data)}
-output_path = "${outputPath.replace(/\\/g, '/')}"
+/**
+ * Builds the invoice PDF entirely in-memory and resolves with a Buffer.
+ * No temp files, no subprocesses.
+ */
+const buildPdf = (data: InvoiceData): Promise<Buffer> => {
+  return new Promise((resolve, reject) => {
+    const PT    = 72; // points per inch
+    const doc   = new PDFDocument({
+      size: 'LETTER',
+      margins: { top: 43, bottom: 43, left: 47, right: 47 },
+      info: {
+        Title:  `${data.invoice_number} - ${data.organization_name}`,
+        Author: data.organization_name,
+      },
+    });
 
-PRIMARY   = colors.HexColor("#1a365d")
-SECONDARY = colors.HexColor("#2b6cb0")
-LIGHT     = colors.HexColor("#e2e8f0")
-MUTED     = colors.HexColor("#718096")
-TEXT      = colors.HexColor("#1a202c")
-WHITE     = colors.white
-GREEN     = colors.HexColor("#276749")
+    const chunks: Buffer[] = [];
+    doc.on('data',  (chunk: Buffer) => chunks.push(chunk));
+    doc.on('end',   () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
 
-doc   = SimpleDocTemplate(output_path, pagesize=letter,
-          rightMargin=0.65*inch, leftMargin=0.65*inch,
-          topMargin=0.6*inch,  bottomMargin=0.6*inch,
-          title=data["invoice_number"] + " - " + data["organization_name"],
-          author=data["organization_name"])
-sty   = getSampleStyleSheet()
-story = []
+    const W        = doc.page.width;                   // 612 pt
+    const L        = doc.page.margins.left;            // 47 pt
+    const R        = doc.page.margins.right;           // 47 pt
+    const contentW = W - L - R;                        // 518 pt
 
-def s(base, **kw):
-    c = sty[base].clone(base + "_c")
-    for k,v in kw.items(): setattr(c, k, v)
-    return c
+    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const money = (v: string | number) =>
+      '$' + parseFloat(String(v)).toLocaleString('en-US', {
+        minimumFractionDigits: 2, maximumFractionDigits: 2,
+      });
+    const hrs = (v: string | number) =>
+      `${parseFloat(String(v)).toFixed(2)} hrs`;
 
-H1   = s("Normal", fontSize=22, textColor=PRIMARY, leading=26, fontName="Helvetica-Bold")
-H2   = s("Normal", fontSize=10, textColor=PRIMARY, leading=13, fontName="Helvetica-Bold")
-BODY = s("Normal", fontSize=8.5, textColor=TEXT,   leading=12)
-BODYB= s("Normal", fontSize=8.5, textColor=TEXT,   leading=12, fontName="Helvetica-Bold")
-SM   = s("Normal", fontSize=7.5, textColor=MUTED,  leading=11)
-RGT  = s("Normal", fontSize=8.5, textColor=TEXT,   leading=12, alignment=TA_RIGHT)
-RGTB = s("Normal", fontSize=8.5, textColor=TEXT,   leading=12, alignment=TA_RIGHT, fontName="Helvetica-Bold")
+    // Draw a filled row rect, then a grid stroke on top
+    const drawRow = (x: number, y: number, w: number, h: number, fill: string) => {
+      doc.rect(x, y, w, h).fill(fill);
+      doc.rect(x, y, w, h).lineWidth(0.4).strokeColor(C.LIGHT).stroke();
+    };
 
-# ── HEADER ────────────────────────────────────────────────────
-hdr = Table([[
-    Paragraph(data["organization_name"], H1),
-    Paragraph(
-        '<font color="#2b6cb0" size="18">INVOICE</font><br/>'
-        '<font size="8" color="#718096">' + data["invoice_number"] + '</font>',
-        s("Normal", fontSize=18, textColor=PRIMARY, leading=22,
-          fontName="Helvetica-Bold", alignment=TA_RIGHT)
-    )
-]], colWidths=[3.9*inch, 3.3*inch])
-hdr.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
-story += [hdr, Spacer(1,4), HRFlowable(width="100%", thickness=2, color=SECONDARY), Spacer(1,12)]
+    // Write centred text inside a cell (does not move the cursor line)
+    const cell = (
+      text: string,
+      x: number, y: number, w: number, h: number,
+      opts: { font?: string; size?: number; color?: string; align?: 'left' | 'center' | 'right' } = {}
+    ) => {
+      const { font = 'Helvetica', size = 8, color = C.TEXT, align = 'center' } = opts;
+      const pad = align === 'left' ? 8 : 4;
+      doc.font(font).fontSize(size).fillColor(color)
+         .text(text, x + pad, y + (h / 2) - (size / 2) + 1,
+               { width: w - pad * 2, align, lineBreak: false });
+    };
 
-# ── BILL TO / WORKER / DETAILS ────────────────────────────────
-info = Table([[
-    [Paragraph("BILL TO", SM),
-     Paragraph(data["organization_name"], BODYB),
-     Paragraph(data["organization_website"] or "", BODY)],
-    [Paragraph("WORKER", SM),
-     Paragraph(data["worker_name"],  BODYB),
-     Paragraph(data["worker_email"], BODY),
-     Paragraph(data["worker_phone"], BODY)],
-    [Paragraph("INVOICE DETAILS", SM),
-     Paragraph("Date: <b>" + data["invoice_date"] + "</b>", BODY),
-     Paragraph("Due:  <b>" + data["due_date"]     + "</b>", BODY),
-     Paragraph("Job:  <b>" + data["job_title"]    + "</b>", BODY),
-     Paragraph("Week: <b>" + data["week_start"]   + " to " + data["week_end"] + "</b>", BODY)],
-]], colWidths=[2.4*inch, 2.4*inch, 2.4*inch])
-info.setStyle(TableStyle([
-    ("VALIGN",(0,0),(-1,-1),"TOP"),
-    ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#f7fafc")),
-    ("TOPPADDING",(0,0),(-1,-1),10),
-    ("BOTTOMPADDING",(0,0),(-1,-1),10),
-    ("LEFTPADDING",(0,0),(-1,-1),10),
-    ("RIGHTPADDING",(0,0),(-1,-1),10),
-    ("LINEAFTER",(0,0),(1,-1),0.5,colors.HexColor("#cbd5e0")),
-]))
-story += [info, Spacer(1,20)]
+    // â”€â”€ HEADER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    let y = doc.page.margins.top; // 43 pt
 
-# ── DAILY TIME ENTRIES ────────────────────────────────────────
-story.append(Paragraph("Daily Time Entries", H2))
-story.append(Spacer(1,6))
-erows = [["Date","Type","Regular Hrs","OT Hrs","Total Hrs"]]
-for e in data["daily_entries"]:
-    erows.append([e["date"], e["type"], e["regular"], e["ot"], e["total"]])
+    doc.font('Helvetica-Bold').fontSize(22).fillColor(C.PRIMARY)
+       .text(data.organization_name, L, y, { width: contentW * 0.55, lineBreak: false });
 
-et = Table(erows, colWidths=[1.7*inch,1.4*inch,1.4*inch,1.3*inch,1.4*inch])
-et.setStyle(TableStyle([
-    ("BACKGROUND",   (0,0),(-1,0), PRIMARY),
-    ("TEXTCOLOR",    (0,0),(-1,0), WHITE),
-    ("FONTNAME",     (0,0),(-1,0), "Helvetica-Bold"),
-    ("FONTSIZE",     (0,0),(-1,-1), 8),
-    ("ALIGN",        (0,0),(-1,-1), "CENTER"),
-    ("VALIGN",       (0,0),(-1,-1), "MIDDLE"),
-    ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE, colors.HexColor("#f7fafc")]),
-    ("GRID",         (0,0),(-1,-1), 0.4, LIGHT),
-    ("TOPPADDING",   (0,0),(-1,-1), 6),
-    ("BOTTOMPADDING",(0,0),(-1,-1), 6),
-]))
-story += [et, Spacer(1,20)]
+    doc.font('Helvetica-Bold').fontSize(18).fillColor(C.SECONDARY)
+       .text('INVOICE', L, y, { width: contentW, align: 'right', lineBreak: false });
 
-# ── BILLING SUMMARY ───────────────────────────────────────────
-story.append(Paragraph("Billing Summary", H2))
-story.append(Spacer(1,6))
+    y += 26;
+    doc.font('Helvetica').fontSize(8).fillColor(C.MUTED)
+       .text(data.invoice_number, L, y, { width: contentW, align: 'right', lineBreak: false });
 
-def m(v): return "$" + "{:,.2f}".format(float(v))
-def h(v): return "{:.2f} hrs".format(float(v))
+    // Divider
+    y += 14;
+    doc.moveTo(L, y).lineTo(W - R, y).lineWidth(2).strokeColor(C.SECONDARY).stroke();
 
-brows = [["Description","Hours","Rate","Amount"],
-         ["Regular Hours", h(data["regular_hours"]),
-          m(data["bill_rate"])+"/hr",
-          m(float(data["regular_hours"])*float(data["bill_rate"]))]]
-if float(data["ot_hours"]) > 0:
-    brows.append(["Overtime Hours", h(data["ot_hours"]),
-                  m(data["ot_bill_rate"])+"/hr",
-                  m(float(data["ot_hours"])*float(data["ot_bill_rate"]))])
+    // â”€â”€ INFO SECTION (3 columns) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    y += 14;
+    const colW  = contentW / 3;   // ~172.7 pt per column
+    const pad   = 10;
+    const lineH = 12;
 
-bt = Table(brows, colWidths=[2.9*inch,1.3*inch,1.5*inch,1.5*inch])
-bt.setStyle(TableStyle([
-    ("BACKGROUND",   (0,0),(-1,0), PRIMARY),
-    ("TEXTCOLOR",    (0,0),(-1,0), WHITE),
-    ("FONTNAME",     (0,0),(-1,0), "Helvetica-Bold"),
-    ("FONTSIZE",     (0,0),(-1,-1), 8),
-    ("ALIGN",        (1,0),(-1,-1), "RIGHT"),
-    ("ALIGN",        (0,0),(0,-1), "LEFT"),
-    ("VALIGN",       (0,0),(-1,-1), "MIDDLE"),
-    ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE, colors.HexColor("#f7fafc")]),
-    ("GRID",         (0,0),(-1,-1), 0.4, LIGHT),
-    ("TOPPADDING",   (0,0),(-1,-1), 7),
-    ("BOTTOMPADDING",(0,0),(-1,-1), 7),
-    ("LEFTPADDING",  (0,0),(0,-1), 10),
-]))
-story += [bt, Spacer(1,8)]
+    // Count max lines in col3 (Invoice Details: label + 4 fields)
+    const infoH = pad + lineH * 5 + pad; // ~120 pt â†’ comfortable
+    doc.rect(L, y, contentW, infoH).fill(C.BG);
+    doc.moveTo(L + colW,     y).lineTo(L + colW,     y + infoH).lineWidth(0.5).strokeColor(C.BORDER).stroke();
+    doc.moveTo(L + colW * 2, y).lineTo(L + colW * 2, y + infoH).lineWidth(0.5).strokeColor(C.BORDER).stroke();
 
-# ── TOTALS ────────────────────────────────────────────────────
-tax_pct = round(float(data["tax_rate"])*100, 2)
-trows = [
-    ["Subtotal",               m(data["subtotal"])],
-    ["Tax (" + str(tax_pct) + "%)",  m(data["tax_amount"])],
-    ["", ""],
-    ["TOTAL DUE",              m(data["total_amount"])],
-]
-tt = Table(trows, colWidths=[5.45*inch,1.75*inch])
-tt.setStyle(TableStyle([
-    ("ALIGN",        (0,0),(-1,-1),"RIGHT"),
-    ("FONTSIZE",     (0,0),(-1,-1), 9),
-    ("TOPPADDING",   (0,0),(-1,-1), 4),
-    ("BOTTOMPADDING",(0,0),(-1,-1), 4),
-    ("BACKGROUND",   (0,3),(-1,3), PRIMARY),
-    ("TEXTCOLOR",    (0,3),(-1,3), WHITE),
-    ("FONTNAME",     (0,3),(-1,3), "Helvetica-Bold"),
-    ("FONTSIZE",     (0,3),(-1,3), 12),
-    ("TOPPADDING",   (0,3),(-1,3), 10),
-    ("BOTTOMPADDING",(0,3),(-1,3), 10),
-]))
-story += [tt, Spacer(1,28)]
+    // Col 1 â€“ Bill To
+    let c1y = y + pad;
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.MUTED)
+       .text('BILL TO', L + pad, c1y, { width: colW - pad * 2, lineBreak: false });
+    c1y += lineH;
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.TEXT)
+       .text(data.organization_name, L + pad, c1y, { width: colW - pad * 2, lineBreak: false });
+    c1y += lineH;
+    if (data.organization_website) {
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.TEXT)
+         .text(data.organization_website, L + pad, c1y, { width: colW - pad * 2, lineBreak: false });
+    }
 
-# ── FOOTER ────────────────────────────────────────────────────
-story.append(HRFlowable(width="100%", thickness=0.5, color=LIGHT))
-story.append(Spacer(1,6))
-story.append(Paragraph(
-    "Generated by ATS Billing System  ·  " + data["invoice_number"] +
-    "  ·  Thank you for your business.",
-    s("Normal", fontSize=7, textColor=MUTED, alignment=TA_CENTER)
-))
+    // Col 2 â€“ Worker
+    let c2y = y + pad;
+    const c2x = L + colW + pad;
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.MUTED)
+       .text('WORKER', c2x, c2y, { width: colW - pad * 2, lineBreak: false });
+    c2y += lineH;
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.TEXT)
+       .text(data.worker_name, c2x, c2y, { width: colW - pad * 2, lineBreak: false });
+    c2y += lineH;
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.TEXT)
+       .text(data.worker_email, c2x, c2y, { width: colW - pad * 2, lineBreak: false });
+    c2y += lineH;
+    if (data.worker_phone) {
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.TEXT)
+         .text(data.worker_phone, c2x, c2y, { width: colW - pad * 2, lineBreak: false });
+    }
 
-doc.build(story)
-print("OK:" + output_path)
-`;
+    // Col 3 â€“ Invoice Details
+    let c3y = y + pad;
+    const c3x = L + colW * 2 + pad;
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.MUTED)
+       .text('INVOICE DETAILS', c3x, c3y, { width: colW - pad * 2, lineBreak: false });
+    c3y += lineH;
+    const detailFields: [string, string][] = [
+      ['Date', data.invoice_date],
+      ['Due',  data.due_date],
+      ['Job',  data.job_title],
+      ['Week', `${data.week_start} to ${data.week_end}`],
+    ];
+    for (const [label, value] of detailFields) {
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.TEXT)
+         .text(`${label}: `, c3x, c3y, { continued: true, lineBreak: false })
+         .font('Helvetica-Bold')
+         .text(value, { lineBreak: false });
+      c3y += lineH;
+    }
 
-// ─── Main Export ──────────────────────────────────────────────
+    // â”€â”€ DAILY TIME ENTRIES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    y += infoH + 20;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.PRIMARY)
+       .text('Daily Time Entries', L, y);
+    y += 16;
+
+    const eCols  = [1.7 * PT, 1.4 * PT, 1.4 * PT, 1.3 * PT, 1.4 * PT]; // 518 pt total
+    const eHdrs  = ['Date', 'Type', 'Regular Hrs', 'OT Hrs', 'Total Hrs'];
+    const rowH   = 20;
+
+    // Header row
+    doc.rect(L, y, contentW, rowH).fill(C.PRIMARY);
+    let cx = L;
+    for (let i = 0; i < eHdrs.length; i++) {
+      cell(eHdrs[i], cx, y, eCols[i], rowH, { font: 'Helvetica-Bold', color: C.WHITE });
+      cx += eCols[i];
+    }
+    y += rowH;
+
+    // Data rows
+    for (let ri = 0; ri < data.daily_entries.length; ri++) {
+      const e = data.daily_entries[ri];
+      drawRow(L, y, contentW, rowH, ri % 2 === 0 ? C.WHITE : C.BG);
+      cx = L;
+      for (const [i, val] of ([e.date, e.type, e.regular, e.ot, e.total] as string[]).entries()) {
+        cell(val, cx, y, eCols[i], rowH);
+        cx += eCols[i];
+      }
+      y += rowH;
+    }
+
+    // â”€â”€ BILLING SUMMARY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    y += 20;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.PRIMARY)
+       .text('Billing Summary', L, y);
+    y += 16;
+
+    const bCols = [2.9 * PT, 1.3 * PT, 1.5 * PT, 1.5 * PT]; // 518 pt total
+    const bHdrs = ['Description', 'Hours', 'Rate', 'Amount'];
+
+    // Header row
+    doc.rect(L, y, contentW, rowH).fill(C.PRIMARY);
+    cx = L;
+    for (let i = 0; i < bHdrs.length; i++) {
+      cell(bHdrs[i], cx, y, bCols[i], rowH,
+        { font: 'Helvetica-Bold', color: C.WHITE, align: i === 0 ? 'left' : 'right' });
+      cx += bCols[i];
+    }
+    y += rowH;
+
+    const billRows: string[][] = [
+      [
+        'Regular Hours',
+        hrs(data.regular_hours),
+        `${money(data.bill_rate)}/hr`,
+        money(parseFloat(data.regular_hours) * parseFloat(data.bill_rate)),
+      ],
+    ];
+    if (parseFloat(data.ot_hours) > 0) {
+      billRows.push([
+        'Overtime Hours',
+        hrs(data.ot_hours),
+        `${money(data.ot_bill_rate)}/hr`,
+        money(parseFloat(data.ot_hours) * parseFloat(data.ot_bill_rate)),
+      ]);
+    }
+
+    for (let ri = 0; ri < billRows.length; ri++) {
+      drawRow(L, y, contentW, rowH, ri % 2 === 0 ? C.WHITE : C.BG);
+      cx = L;
+      for (let i = 0; i < billRows[ri].length; i++) {
+        cell(billRows[ri][i], cx, y, bCols[i], rowH, { align: i === 0 ? 'left' : 'right' });
+        cx += bCols[i];
+      }
+      y += rowH;
+    }
+
+    // â”€â”€ TOTALS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    y += 8;
+    const taxPct   = (parseFloat(data.tax_rate) * 100).toFixed(2);
+    const totals: [string, string][] = [
+      ['Subtotal',              money(data.subtotal)],
+      [`Tax (${taxPct}%)`,      money(data.tax_amount)],
+      ['TOTAL DUE',             money(data.total_amount)],
+    ];
+    const labelW = contentW - 1.75 * PT;
+    const valW   = 1.75 * PT;
+
+    for (let ri = 0; ri < totals.length; ri++) {
+      const isTotalRow = ri === 2;
+      const rH    = isTotalRow ? 32 : 18;
+      const fSize = isTotalRow ? 12 : 9;
+      const font  = isTotalRow ? 'Helvetica-Bold' : 'Helvetica';
+      const color = isTotalRow ? C.WHITE : C.TEXT;
+
+      if (isTotalRow) {
+        doc.rect(L, y, contentW, rH).fill(C.PRIMARY);
+        y += 6; // extra top padding for the total row
+      }
+
+      const textY = y + (isTotalRow ? 4 : 4);
+      doc.font(font).fontSize(fSize).fillColor(color)
+         .text(totals[ri][0], L, textY, { width: labelW, align: 'right', lineBreak: false });
+      doc.font(font).fontSize(fSize).fillColor(color)
+         .text(totals[ri][1], L + labelW, textY, { width: valW - 4, align: 'right', lineBreak: false });
+
+      y += isTotalRow ? rH : rH;
+    }
+
+    // â”€â”€ FOOTER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    y += 28;
+    doc.moveTo(L, y).lineTo(W - R, y).lineWidth(0.5).strokeColor(C.LIGHT).stroke();
+    y += 8;
+    doc.font('Helvetica').fontSize(7).fillColor(C.MUTED)
+       .text(
+         `Generated by ATS Billing System  Â·  ${data.invoice_number}  Â·  Thank you for your business.`,
+         L, y, { width: contentW, align: 'center', lineBreak: false }
+       );
+
+    doc.end();
+  });
+};
+// â”€â”€â”€ Main Export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Generate a PDF for the given invoiceId and return the storage URL.
- * Called async after approval, or synchronously on /download.
+ * Called after approval or on /download.
  */
 export const generateInvoicePdf = async (invoiceId: string): Promise<string> => {
   const data     = await fetchInvoiceData(invoiceId);
-  const filename = `${(data as any).invoice_number.replace(/[^A-Za-z0-9\-]/g, '_')}.pdf`;
-  const tmpDir   = os.tmpdir();
-  const pdfPath  = path.join(tmpDir, filename);
-  const pyPath   = path.join(tmpDir, `inv_${invoiceId}.py`);
-  const pythonCmd = process.env.PYTHON_CMD || process.env.PYTHON_BIN || 'python3';
-
-  try {
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    fs.writeFileSync(pyPath, buildPythonScript(data as any, pdfPath));
-    let out = '';
-    try {
-      out = execSync(`${pythonCmd} "${pyPath}"`, { timeout: 30_000 }).toString().trim();
-    } catch (err: any) {
-      // 9009 = Windows (command not found), 127 = *nix (command not found)
-      if (err?.status !== 9009 && err?.status !== 127) throw err;
-      out = execSync(`python "${pyPath}"`, { timeout: 30_000 }).toString().trim();
-    }
-    if (!out.startsWith('OK:')) throw new Error(`PDF script error: ${out}`);
-    return await uploadPdfToStorage(pdfPath, filename);
-  } finally {
-    if (fs.existsSync(pyPath)) fs.unlinkSync(pyPath);
-    if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
-  }
+  const filename = `${data.invoice_number.replace(/[^A-Za-z0-9\-]/g, '_')}.pdf`;
+  const buffer   = await buildPdf(data);
+  return await uploadPdfToStorage(buffer, filename);
 };
+

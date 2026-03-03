@@ -41,32 +41,24 @@ const MONTHS = [
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const pad  = (n: number) => String(n).padStart(2, '0');
 
-/**
- * Shifts a UTC Date by TIMEZONE_OFFSET_HOURS and returns a plain object
- * with adjusted year / month / day / weekday / hours / minutes.
- * All arithmetic is done in UTC so the result is independent of the
- * server's local timezone.
- */
 const toOffsetParts = (d: Date) => {
   const offsetMs = TIMEZONE_OFFSET_HOURS * 60 * 60 * 1000;
   const shifted  = new Date(d.getTime() + offsetMs);
   return {
     year:    shifted.getUTCFullYear(),
-    month:   shifted.getUTCMonth(),    // 0-based
+    month:   shifted.getUTCMonth(),
     day:     shifted.getUTCDate(),
-    weekday: shifted.getUTCDay(),      // 0 = Sunday
+    weekday: shifted.getUTCDay(),
     hours:   shifted.getUTCHours(),
     minutes: shifted.getUTCMinutes(),
   };
 };
 
-/** "Monday, March 17, 2025" */
 const fmtDate = (d: Date): string => {
   const p = toOffsetParts(d);
   return `${DAYS[p.weekday]}, ${MONTHS[p.month]} ${pad(p.day)}, ${p.year}`;
 };
 
-/** "10:26 PM (EST)" */
 const fmtTime = (d: Date): string => {
   const p    = toOffsetParts(d);
   const ampm = p.hours >= 12 ? 'PM' : 'AM';
@@ -74,10 +66,8 @@ const fmtTime = (d: Date): string => {
   return `${h12}:${pad(p.minutes)} ${ampm} (${TIMEZONE_LABEL})`;
 };
 
-/** "Monday, March 17, 2025 at 10:26 PM (EST)" */
 const fmtDateTime = (d: Date): string => `${fmtDate(d)} at ${fmtTime(d)}`;
 
-/** "W2 Employee" | "1099 Contractor" */
 const fmtEmploymentType = (type: string): string =>
   ({ W2: 'W2 Employee', CONTRACTOR_1099: '1099 Contractor' }[type] ?? type);
 
@@ -105,6 +95,9 @@ const generateBaseEmailHTML = (data: {
         .info-box { background-color: #f8f9fa; border-left: 3px solid #6c757d; padding: 15px; margin: 20px 0; }
         .info-box p { margin: 8px 0; font-size: 14px; }
         .info-box strong { color: #212529; }
+        .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .badge-online { background-color: #dbeafe; color: #1d4ed8; }
+        .badge-offline { background-color: #fef3c7; color: #92400e; }
         .footer { background-color: #f8f9fa; padding: 20px; border-top: 1px solid #e9ecef; text-align: center; }
         .footer p { margin: 5px 0; font-size: 12px; color: #6c757d; }
         .signature { margin-top: 30px; font-size: 14px; }
@@ -156,20 +149,42 @@ export const sendInterviewInvitationEmail = async (data: {
   location: string;
   contactEmail?: string;
   contactPhone?: string;
+  round?: number;
+  totalRounds?: number;
+  interviewType?: 'ONLINE' | 'OFFLINE';
 }): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
+    const roundLabel    = data.round ? ` – Round ${data.round}` : '';
+    const totalRounds   = data.totalRounds ?? (data.round ? data.round : undefined);
+    const roundNote     = data.round
+      ? `<p>This is your <strong>Round ${data.round}${totalRounds && totalRounds > 1 ? ` of ${totalRounds}` : ''}</strong> interview invitation.</p>`
+      : '';
+
+    const interviewType = data.interviewType || 'ONLINE';
+    const typeLabel     = interviewType === 'ONLINE' ? 'Online (Virtual)' : 'In-Person (On-site)';
+    const typeBadgeClass = interviewType === 'ONLINE' ? 'badge-online' : 'badge-offline';
+    const typeNote      = interviewType === 'ONLINE'
+      ? '<p>A video conference link or dial-in details will be shared separately.</p>'
+      : '<p>Please arrive at the location on time. Parking or directions will be shared if needed.</p>';
+
     const content = `
       <p>We are pleased to invite you for an interview for the position of <strong>${data.jobTitle}</strong>.</p>
 
+      ${roundNote}
+
       <div class="info-box">
         <p><strong>Position:</strong> ${data.jobTitle}</p>
+        ${data.round ? `<p><strong>Interview Round:</strong> Round ${data.round}${totalRounds && totalRounds > 1 ? ` of ${totalRounds}` : ''}</p>` : ''}
+        <p><strong>Format:</strong> <span class="badge ${typeBadgeClass}">${typeLabel}</span></p>
         <p><strong>Date:</strong> ${fmtDate(data.interviewDate)}</p>
         <p><strong>Time:</strong> ${fmtTime(data.interviewDate)}</p>
-        <p><strong>Location:</strong> ${data.location}</p>
+        ${interviewType === 'OFFLINE' ? `<p><strong>Location:</strong> ${data.location}</p>` : ''}
         ${data.organizationWebsite ? `<p><strong>Company Website:</strong> <a href="${data.organizationWebsite}">${data.organizationWebsite}</a></p>` : ''}
       </div>
 
-      <p><strong>What to bring:</strong></p>
+      ${typeNote}
+
+      <p><strong>What to prepare:</strong></p>
       <ul>
         <li>A copy of your resume</li>
         <li>Valid photo identification</li>
@@ -178,7 +193,7 @@ export const sendInterviewInvitationEmail = async (data: {
 
       <p><strong>Please note:</strong></p>
       <ul>
-        <li>Arrive 10–15 minutes early</li>
+        ${interviewType === 'OFFLINE' ? '<li>Arrive 10–15 minutes early</li>' : '<li>Join the video call 5 minutes early to test your connection</li>'}
         <li>Dress professionally</li>
         <li>If you need to reschedule, contact us as soon as possible</li>
       </ul>
@@ -197,9 +212,9 @@ export const sendInterviewInvitationEmail = async (data: {
     const info = await transporter.sendMail({
       from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
       to: data.applicantEmail,
-      subject: `Interview Invitation - ${data.jobTitle}`,
+      subject: `Interview Invitation${roundLabel} - ${data.jobTitle}`,
       text: generateBaseEmailText({ applicantName: data.applicantName, organizationName: data.organizationName, content: content.replace(/<[^>]*>/g, '').trim() }),
-      html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: 'Interview Invitation', content }),
+      html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: `Interview Invitation${roundLabel}`, content }),
     });
 
     return { success: true, messageId: info.messageId };

@@ -477,11 +477,9 @@ const getJobById = async (req: Request, res: Response) => {
         },
         job_postings: true,
         job_rates: true,
-        applications: {
+        _count: {
           select: {
-            application_id: true,
-            status: true,
-            applied_at: true,
+            applications: true,
           },
         },
       },
@@ -491,7 +489,11 @@ const getJobById = async (req: Request, res: Response) => {
       return sendError(res, 'Job not found', 404);
     }
 
-    return sendSuccess(res, job);
+    const { _count, ...jobData } = job;
+    return sendSuccess(res, {
+      ...jobData,
+      applications_count: _count.applications,
+    });
   } catch (err: any) {
     console.error('Error fetching job:', err);
     return sendError(res, 'Failed to fetch job', 500);
@@ -1054,6 +1056,7 @@ const updateJobCompleteSchema = z.object({
   resume_required: z.boolean().optional(),
   interview_Round1: z.boolean().optional(),
   interview_Round2: z.boolean().optional(),
+  interview_rounds: z.number().int().min(0).optional().nullable(),
   
   // Related entities
   job_detail: jobDetailUpdateSchema.optional(),
@@ -1102,6 +1105,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
       resume_required,
       interview_Round1,
       interview_Round2,
+      interview_rounds,
       job_detail,
       job_notes,
       job_rates,
@@ -1254,9 +1258,9 @@ const updateJobComplete = async (req: Request, res: Response) => {
     let syncedApproved = existingJob.approved;
     const finalStatus = status || existingJob.status;
 
-    // If status is changing, update approved accordingly
-    if (status !== undefined) {
-      syncedApproved = status === 'OPEN';
+    // Only flip approved when explicitly moving to OPEN
+    if (status === 'OPEN') {
+      syncedApproved = true;
     }
 
     // Perform update in a transaction
@@ -1269,7 +1273,12 @@ const updateJobComplete = async (req: Request, res: Response) => {
       if (job_title !== undefined) jobUpdateData.job_title = job_title;
       if (status !== undefined) {
         jobUpdateData.status = status;
-        jobUpdateData.approved = status === 'OPEN';
+        // Only flip approved when explicitly moving to OPEN.
+        // All other status changes (CLOSED, DECLINED, DRAFT, PENDING)
+        // leave approved untouched so callers must change it on purpose.
+        if (status === 'OPEN') {
+          jobUpdateData.approved = true;
+        }
       }
       if (job_type !== undefined) jobUpdateData.job_type = job_type;
       if (location !== undefined) jobUpdateData.location = location;
@@ -1282,6 +1291,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
       if (resume_required !== undefined) jobUpdateData.resume_required = resume_required;
       if (interview_Round1 !== undefined) jobUpdateData.interview_Round1 = interview_Round1;
       if (interview_Round2 !== undefined) jobUpdateData.interview_Round2 = interview_Round2;
+      if (interview_rounds !== undefined) jobUpdateData.interview_rounds = interview_rounds;
 
       const updatedJob = Object.keys(jobUpdateData).length > 0
         ? await tx.job.update({

@@ -356,6 +356,7 @@ model Job {
   resume_required   Boolean?   @default(false)
   interview_Round1  Boolean?   @default(true)
   interview_Round2  Boolean?   @default(false)
+  interview_rounds Int? @default(1)
 
 
 
@@ -472,6 +473,7 @@ model JobRate {
   hours             Int
   ot_pay_rate       Decimal? @db.Decimal(10, 2)
   ot_bill_rate      Decimal? @db.Decimal(10, 2)
+
 
   // Relations
   job Job @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
@@ -653,13 +655,16 @@ model ApplicationEvaluation {
 
 model Interview {
   interview_id   String   @id @default(uuid())
-  application_id String   @unique
+  application_id String
+  round          Int?             @default(1)   
   interview_date DateTime
-  status         InterviewStatus
+  status         InterviewStatus   @default(PENDING)
+  interview_type InterviewType @default(ONLINE)
 
   // Relations
   application Application @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
 
+  @@unique([application_id, round]) // prevents duplicate rounds, not duplicate applications
   @@index([application_id])
   @@map("interviews")
 }
@@ -697,6 +702,7 @@ model Assignment {
   end_date          DateTime?
   employment_type   EmploymentType
   workers_comp_code String?
+  timesheets_enabled  Boolean  @default(true)
 
   // Existing relation
   application  Application  @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
@@ -706,6 +712,7 @@ model Assignment {
   time_entries TimeEntry[]
   invoices     Invoice[]
   payrolls     Payroll[]
+  imports  TimesheetImport[]
 
   @@map("assignments")
 }
@@ -716,6 +723,8 @@ model Assignment {
 model Timesheet {
   timesheet_id         String          @id @default(uuid())
   assignment_id        String
+  import_id            String?   // FK to TimesheetImport (nullable)
+
 
   // Always Mon 00:00:00 UTC → Sun 23:59:59 UTC
   week_start_date      DateTime
@@ -748,6 +757,16 @@ model Timesheet {
   created_at           DateTime        @default(now())
   updated_at           DateTime        @updatedAt
 
+  // Rate override — if set, these OVERRIDE the job's JobRate at
+  // approval time. If null, the controller falls back to JobRate.
+  custom_bill_rate          Decimal?  @db.Decimal(10, 2)
+  custom_ot_bill_rate       Decimal?  @db.Decimal(10, 2)
+  custom_pay_rate           Decimal?  @db.Decimal(10, 2)
+  custom_ot_pay_rate        Decimal?  @db.Decimal(10, 2)
+  custom_markup_percentage  Decimal?  @db.Decimal(5, 2)
+  custom_overtime_rule      String?   // e.g. "DAILY_8", "WEEKLY_40", "CALIFORNIA"
+  rate_override_reason      String?   // optional note why rates differ
+
   // QuickBooks
   qb_synced            Boolean         @default(false)
   qb_synced_at         DateTime?
@@ -759,13 +778,44 @@ model Timesheet {
   time_entries         TimeEntry[]
   invoice              Invoice?
   payroll              Payroll?
+  import               TimesheetImport? @relation(fields: [import_id], references: [import_id])
+
 
   @@unique([assignment_id, week_start_date])  // one timesheet per week per worker
   @@index([assignment_id])
   @@index([week_start_date])
   @@index([status])
   @@map("timesheets")
+  
 }
+
+
+// Tracks CSV/Excel import sessions so we can show history and link
+// imported timesheets back to the batch that created them.
+
+model TimesheetImport {
+  import_id        String   @id @default(uuid())
+  assignment_id    String
+  imported_by      String   // user_id
+  file_name        String
+  file_type        String   // CSV | XLSX
+  row_count        Int      @default(0)
+  success_count    Int      @default(0)
+  error_count      Int      @default(0)
+  errors           Json?    // array of { row, message }
+  status           String   @default("PROCESSING") // PROCESSING | DONE | FAILED
+  created_at       DateTime @default(now())
+  completed_at     DateTime?
+
+  assignment       Assignment @relation(fields: [assignment_id], references: [assignment_id], onDelete: Cascade)
+  timesheets       Timesheet[]
+
+
+  @@index([assignment_id])
+  @@map("timesheet_imports")
+  
+}
+
 
 
 // ─── STEP 3: ADD TimeEntry model (NEW TABLE — replaces old one) ─
@@ -1000,4 +1050,10 @@ enum WorkType {
   SICK
   PTO
   UNPAID
+}
+
+
+enum InterviewType { 
+  ONLINE
+  OFFLINE
 }
