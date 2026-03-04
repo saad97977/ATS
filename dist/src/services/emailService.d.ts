@@ -49,6 +49,12 @@ export declare const sendOfferLetterEmail: (data: {
     messageId?: string;
     error?: string;
 }>;
+export declare const verifyEmailConfiguration: () => Promise<boolean>;
+interface EmailAttachment {
+    filename: string;
+    content: Buffer;
+    contentType: string;
+}
 export declare const sendOnboardingWelcomeEmail: (data: {
     applicantEmail: string;
     applicantName: string;
@@ -57,13 +63,49 @@ export declare const sendOnboardingWelcomeEmail: (data: {
     startDate: Date;
     endDate?: Date | null;
     employmentType: string;
-    workersCompCode?: string | null;
+    workersCompCodes?: Array<{
+        code: string;
+        description?: string;
+        pct: number;
+    }>;
+    uploadedDocuments?: Array<{
+        document_name: string;
+        document_type: string;
+        send_to_candidate?: boolean;
+    }>;
+    attachments?: EmailAttachment[];
 }) => Promise<{
     success: boolean;
     messageId?: string;
     error?: string;
 }>;
-export declare const verifyEmailConfiguration: () => Promise<boolean>;
+export declare const sendAssignmentNotificationEmail: (data: {
+    recipientEmail: string;
+    recipientName: string;
+    role: string;
+    applicantName: string;
+    applicantEmail: string;
+    jobTitle: string;
+    organizationName: string;
+    startDate: Date;
+    endDate?: Date | null;
+    employmentType: string;
+    companyCodes: Array<{
+        code: string;
+        description?: string;
+        allocation_pct: number;
+    }>;
+    uploadedDocuments: Array<{
+        document_name: string;
+        document_type: string;
+        send_to_candidate?: boolean;
+    }>;
+    attachments?: EmailAttachment[];
+}) => Promise<{
+    success: boolean;
+    messageId?: string;
+    error?: string;
+}>;
 declare const _default: {
     sendInterviewInvitationEmail: (data: {
         applicantEmail: string;
@@ -124,7 +166,44 @@ declare const _default: {
         startDate: Date;
         endDate?: Date | null;
         employmentType: string;
-        workersCompCode?: string | null;
+        workersCompCodes?: Array<{
+            code: string;
+            description?: string;
+            pct: number;
+        }>;
+        uploadedDocuments?: Array<{
+            document_name: string;
+            document_type: string;
+            send_to_candidate?: boolean;
+        }>;
+        attachments?: EmailAttachment[];
+    }) => Promise<{
+        success: boolean;
+        messageId?: string;
+        error?: string;
+    }>;
+    sendAssignmentNotificationEmail: (data: {
+        recipientEmail: string;
+        recipientName: string;
+        role: string;
+        applicantName: string;
+        applicantEmail: string;
+        jobTitle: string;
+        organizationName: string;
+        startDate: Date;
+        endDate?: Date | null;
+        employmentType: string;
+        companyCodes: Array<{
+            code: string;
+            description?: string;
+            allocation_pct: number;
+        }>;
+        uploadedDocuments: Array<{
+            document_name: string;
+            document_type: string;
+            send_to_candidate?: boolean;
+        }>;
+        attachments?: EmailAttachment[];
     }) => Promise<{
         success: boolean;
         messageId?: string;

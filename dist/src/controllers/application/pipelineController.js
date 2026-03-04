@@ -3,13 +3,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.pipelineController = void 0;
+exports.pipelineController = exports.uploadOnboardingDocs = void 0;
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const crudFactory_1 = require("../../factories/crudFactory");
 const schemas_1 = require("../../validators/schemas");
 const response_1 = require("../../utils/response");
 const emailService_1 = require("../../services/emailService");
 const activityService_1 = require("../../services/activityService");
+const crypto_1 = __importDefault(require("crypto"));
+const storage_blob_1 = require("@azure/storage-blob");
+const multer_1 = __importDefault(require("multer"));
 // ─────────────────────────────────────────────────────────────────────────────
 // TIMEZONE CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
@@ -713,114 +716,6 @@ const acceptInterview = async (req, res) => {
     }
 };
 // ─────────────────────────────────────────────────────────────────────────────
-// ONBOARD CANDIDATE
-// PATCH /api/pipeline/:pipelineStageId/onboard
-//
-// N-round guard: all required rounds must be ACCEPTED before onboarding.
-// noInterviewRequired → skip all interview checks.
-// ─────────────────────────────────────────────────────────────────────────────
-const onboardCandidate = async (req, res) => {
-    try {
-        const { pipelineStageId } = req.params;
-        const { start_date, end_date, employment_type, workers_comp_code } = req.body;
-        if (!start_date || !employment_type)
-            return (0, response_1.sendError)(res, 'start_date and employment_type are required', 400);
-        if (!['W2', 'CONTRACTOR_1099'].includes(employment_type)) {
-            return (0, response_1.sendError)(res, 'employment_type must be W2 or CONTRACTOR_1099', 400);
-        }
-        const startDate = new Date(start_date);
-        if (isNaN(startDate.getTime()))
-            return (0, response_1.sendError)(res, 'Invalid start_date format', 400);
-        if (end_date) {
-            const endDate = new Date(end_date);
-            if (isNaN(endDate.getTime()))
-                return (0, response_1.sendError)(res, 'Invalid end_date format', 400);
-            if (endDate <= startDate)
-                return (0, response_1.sendError)(res, 'end_date must be after start_date', 400);
-        }
-        const pipelineStage = await prisma_config_1.default.pipelineStage.findUnique({
-            where: { pipeline_stage_id: pipelineStageId },
-            include: {
-                application: {
-                    include: {
-                        applicant: { include: { contact: true } },
-                        job: { include: { organization: { select: { name: true } } } },
-                        interviews: { orderBy: { round: 'asc' } },
-                    },
-                },
-            },
-        });
-        if (!pipelineStage)
-            return (0, response_1.sendError)(res, 'Pipeline stage not found', 404);
-        const job = pipelineStage.application.job;
-        const { totalRounds, noInterviewRequired } = getInterviewRoundConfig(job);
-        const interviews = pipelineStage.application.interviews;
-        if (!noInterviewRequired) {
-            if (!canOnboard(interviews, totalRounds)) {
-                // Find which round is blocking
-                for (let r = 1; r <= totalRounds; r++) {
-                    const iv = interviews.find((i) => (i.round ?? 1) === r);
-                    if (!iv)
-                        return (0, response_1.sendError)(res, `Cannot onboard: Round ${r} interview has not been scheduled yet.`, 400);
-                    if (iv.status !== 'ACCEPTED')
-                        return (0, response_1.sendError)(res, `Cannot onboard: Round ${r} interview must be accepted first (current status: ${iv.status}).`, 400);
-                }
-            }
-        }
-        const existing = await prisma_config_1.default.assignment.findUnique({ where: { application_id: pipelineStage.application_id } });
-        if (existing)
-            return (0, response_1.sendError)(res, 'Assignment already exists for this application', 400);
-        await prisma_config_1.default.$transaction(async (tx) => {
-            await tx.pipelineStage.update({ where: { pipeline_stage_id: pipelineStageId }, data: { stage_name: 'ONBOARDED' } });
-            await tx.application.update({ where: { application_id: pipelineStage.application_id }, data: { status: 'HIRED' } });
-            await tx.applicant.update({ where: { applicant_id: pipelineStage.application.applicant_id }, data: { status: 'PLACED' } });
-            await tx.assignment.create({
-                data: {
-                    application_id: pipelineStage.application_id,
-                    start_date: startDate,
-                    end_date: end_date ? new Date(end_date) : null,
-                    employment_type,
-                    workers_comp_code: workers_comp_code || null,
-                },
-            });
-        });
-        const result = await prisma_config_1.default.pipelineStage.findUnique({
-            where: { pipeline_stage_id: pipelineStageId },
-            include: {
-                application: {
-                    include: {
-                        job: { select: { job_title: true, organization: { select: { name: true } } } },
-                        applicant: { select: { full_name: true, status: true, contact: { select: { email: true } } } },
-                        assignment: { select: { assignment_id: true, start_date: true, end_date: true, employment_type: true, workers_comp_code: true } },
-                    },
-                },
-                credit_user: { select: { user_id: true, name: true } },
-                representative_user: { select: { user_id: true, name: true } },
-            },
-        });
-        const aEmail = result.application.applicant.contact?.email;
-        if (aEmail) {
-            (0, emailService_1.sendOnboardingWelcomeEmail)({
-                applicantEmail: aEmail,
-                applicantName: result.application.applicant.full_name,
-                jobTitle: result.application.job.job_title,
-                organizationName: result.application.job.organization.name,
-                startDate,
-                endDate: end_date ? new Date(end_date) : null,
-                employmentType: employment_type,
-                workersCompCode: workers_comp_code ?? null,
-            }).then((r) => { if (!r.success)
-                console.error('❌ Onboarding email failed:', r.error); })
-                .catch((e) => console.error('❌ Onboarding email error:', e.message));
-        }
-        return (0, response_1.sendSuccess)(res, result);
-    }
-    catch (err) {
-        console.error('Error onboarding candidate:', err);
-        return (0, response_1.sendError)(res, 'Failed to onboard candidate', 500);
-    }
-};
-// ─────────────────────────────────────────────────────────────────────────────
 // GET PIPELINE BY JOB
 // ─────────────────────────────────────────────────────────────────────────────
 const getPipelineByJob = async (req, res) => {
@@ -982,6 +877,483 @@ const searchPipelinedApplicants = async (req, res) => {
         return (0, response_1.sendError)(res, 'Failed to search applicants', 500);
     }
 };
+// ─── SSN encryption (AES-256-CBC) ────────────────────────────────────────────
+// Store ENCRYPTION_KEY (32-byte hex) and ENCRYPTION_IV (16-byte hex) in .env
+const SSN_KEY = Buffer.from(process.env.SSN_ENCRYPTION_KEY || '', 'hex'); // 32 bytes
+const SSN_IV = Buffer.from(process.env.SSN_ENCRYPTION_IV || '', 'hex'); // 16 bytes
+const encryptSSN = (ssn) => {
+    if (!ssn)
+        return '';
+    if (SSN_KEY.length !== 32)
+        throw new Error('SSN_ENCRYPTION_KEY must be 32 bytes (64 hex chars)');
+    const cipher = crypto_1.default.createCipheriv('aes-256-cbc', SSN_KEY, SSN_IV);
+    return cipher.update(ssn, 'utf8', 'hex') + cipher.final('hex');
+};
+// Only needed if you expose a read endpoint later — kept here for completeness
+// const decryptSSN = (enc: string): string => {
+//   const d = crypto.createDecipheriv('aes-256-cbc', SSN_KEY, SSN_IV);
+//   return d.update(enc, 'hex', 'utf8') + d.final('utf8');
+// };
+// ─── Azure Blob (onboarding container) ────────────────────────────────────────
+const blobClient = storage_blob_1.BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION_STRING);
+const ONBOARDING_CONTAINER = process.env.AZURE_ONBOARDING_DOCS_CONTAINER || 'onboarding-documents';
+// FIX 1: Cache the ContainerClient — createIfNotExists ran on every submission
+//         (~300ms Azure roundtrip). Now it runs once at startup and is reused.
+let _containerClient = null;
+const getOnboardingContainer = async () => {
+    if (_containerClient)
+        return _containerClient;
+    const cc = blobClient.getContainerClient(ONBOARDING_CONTAINER);
+    await cc.createIfNotExists({ access: 'blob' });
+    _containerClient = cc;
+    return cc;
+};
+const makeBlobName = (applicantId, originalName) => {
+    const ts = Date.now();
+    const rand = Math.random().toString(36).slice(2, 8);
+    const safe = originalName.replace(/[^a-zA-Z0-9.\-]/g, '_');
+    return `${applicantId}/${ts}-${rand}-${safe}`;
+};
+// ─── multer (memory, up to 20 files × 20 MB) ─────────────────────────────────
+exports.uploadOnboardingDocs = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: 20 * 1024 * 1024 },
+}).array('files', 20);
+// ══════════════════════════════════════════════════════════════════════════════
+const onboardCandidate = async (req, res) => {
+    try {
+        const { pipelineStageId } = req.params;
+        // ── 1. Parse body ──────────────────────────────────────────────────────────
+        const { start_date, end_date, employment_type, ssn, filing_status, additional_withholding, exempt_from_federal, exempt_from_state, work_state, resident_state, } = req.body;
+        let workersCompCodes = [];
+        try {
+            workersCompCodes = JSON.parse(req.body.workers_comp_codes || '[]');
+        }
+        catch {
+            return (0, response_1.sendError)(res, 'Invalid workers_comp_codes format — expected JSON array', 400);
+        }
+        let companyCodes = [];
+        try {
+            companyCodes = JSON.parse(req.body.company_codes || '[]');
+        }
+        catch {
+            return (0, response_1.sendError)(res, 'Invalid company_codes format — expected JSON array', 400);
+        }
+        const files = req.files ?? [];
+        const documentNames = [req.body.document_names ?? []].flat();
+        const documentTypes = [req.body.document_types ?? []].flat();
+        const sendToCandidate = [req.body.send_to_candidate ?? []].flat();
+        // ── 2. Basic validation ────────────────────────────────────────────────────
+        if (!start_date || !employment_type)
+            return (0, response_1.sendError)(res, 'start_date and employment_type are required', 400);
+        if (!['W2', 'CONTRACTOR_1099'].includes(employment_type))
+            return (0, response_1.sendError)(res, 'employment_type must be W2 or CONTRACTOR_1099', 400);
+        const startDate = new Date(start_date);
+        if (isNaN(startDate.getTime()))
+            return (0, response_1.sendError)(res, 'Invalid start_date', 400);
+        if (end_date) {
+            const endDate = new Date(end_date);
+            if (isNaN(endDate.getTime()))
+                return (0, response_1.sendError)(res, 'Invalid end_date', 400);
+            if (endDate <= startDate)
+                return (0, response_1.sendError)(res, 'end_date must be after start_date', 400);
+        }
+        if (!workersCompCodes.length)
+            return (0, response_1.sendError)(res, 'At least one workers\'s comp code is required', 400);
+        if (workersCompCodes.some(w => !w.code?.trim()))
+            return (0, response_1.sendError)(res, 'All workers\' comp entries must have a code', 400);
+        if (workersCompCodes.some(w => typeof w.pct !== 'number' || w.pct <= 0))
+            return (0, response_1.sendError)(res, 'All workers\' comp entries must have a valid pct > 0', 400);
+        const totalWcPct = workersCompCodes.reduce((s, w) => s + w.pct, 0);
+        if (Math.round(totalWcPct) !== 100)
+            return (0, response_1.sendError)(res, `Workers' comp pct must total 100% (got ${totalWcPct}%)`, 400);
+        if (!ssn || !/^\d{9}$/.test(ssn))
+            return (0, response_1.sendError)(res, 'Valid 9-digit SSN is required', 400);
+        if (!companyCodes.length)
+            return (0, response_1.sendError)(res, 'At least one company code is required', 400);
+        const totalAllocation = companyCodes.reduce((s, c) => s + (c.allocation_pct || 0), 0);
+        if (Math.round(totalAllocation) !== 100)
+            return (0, response_1.sendError)(res, `Company code allocations must total 100% (got ${totalAllocation}%)`, 400);
+        if (companyCodes.some(c => !c.code?.trim()))
+            return (0, response_1.sendError)(res, 'All company codes must have a non-empty code value', 400);
+        if (!work_state)
+            return (0, response_1.sendError)(res, 'work_state is required', 400);
+        // ── 3. Fetch pipeline stage ────────────────────────────────────────────────
+        const pipelineStage = await prisma_config_1.default.pipelineStage.findUnique({
+            where: { pipeline_stage_id: pipelineStageId },
+            include: {
+                application: {
+                    include: {
+                        applicant: { include: { contact: true } },
+                        job: {
+                            include: {
+                                organization: { select: { name: true, organization_id: true } },
+                            },
+                        },
+                        interviews: { orderBy: { round: 'asc' } },
+                    },
+                },
+                credit_user: { select: { user_id: true, name: true, email: true } },
+                representative_user: { select: { user_id: true, name: true, email: true } },
+            },
+        });
+        if (!pipelineStage)
+            return (0, response_1.sendError)(res, 'Pipeline stage not found', 404);
+        const { application } = pipelineStage;
+        const job = application.job;
+        const applicant = application.applicant;
+        const { totalRounds, noInterviewRequired } = getInterviewRoundConfig(job);
+        const interviews = application.interviews;
+        // ── 4. Interview gate ──────────────────────────────────────────────────────
+        if (!noInterviewRequired && !canOnboard(interviews, totalRounds)) {
+            for (let r = 1; r <= totalRounds; r++) {
+                const iv = interviews.find((i) => (i.round ?? 1) === r);
+                if (!iv)
+                    return (0, response_1.sendError)(res, `Cannot onboard: Round ${r} interview not scheduled`, 400);
+                if (iv.status !== 'ACCEPTED')
+                    return (0, response_1.sendError)(res, `Cannot onboard: Round ${r} must be ACCEPTED (is: ${iv.status})`, 400);
+            }
+        }
+        // ── 5. Duplicate check ─────────────────────────────────────────────────────
+        const existing = await prisma_config_1.default.assignment.findUnique({
+            where: { application_id: application.application_id },
+        });
+        if (existing)
+            return (0, response_1.sendError)(res, 'Assignment already exists for this application', 400);
+        let uploadedDocs = [];
+        if (files.length) {
+            const container = await getOnboardingContainer();
+            uploadedDocs = await Promise.all(files.map(async (f, i) => {
+                const blobName = makeBlobName(applicant.applicant_id, f.originalname);
+                const blob = container.getBlockBlobClient(blobName);
+                await blob.upload(f.buffer, f.buffer.length, {
+                    blobHTTPHeaders: { blobContentType: f.mimetype },
+                    metadata: {
+                        applicantId: applicant.applicant_id,
+                        applicationId: application.application_id,
+                        documentType: documentTypes[i] || 'OTHER',
+                        uploadedVia: 'onboarding',
+                    },
+                });
+                return {
+                    document_type: documentTypes[i] || 'OTHER',
+                    document_name: documentNames[i] || f.originalname.replace(/\.[^.]+$/, ''),
+                    file_url: blob.url,
+                    blob_name: blobName,
+                    original_name: f.originalname,
+                    mime_type: f.mimetype,
+                    size: f.size,
+                    send_to_candidate: sendToCandidate[i] === 'true',
+                };
+            }));
+        }
+        // ── 7. Encrypt SSN ─────────────────────────────────────────────────────────
+        const encryptedSSN = encryptSSN(ssn);
+        // Build tax payload once — reused in both upsert branches
+        const taxInfoPayload = {
+            filing_status,
+            additional_withholding: parseFloat(additional_withholding || '0'),
+            exempt_from_federal: exempt_from_federal === 'true',
+            exempt_from_state: exempt_from_state === 'true',
+            work_state,
+            resident_state: resident_state || work_state,
+        };
+        // ── 8. DB transaction ─────────────────────────────────────────────────────
+        // FIX 3: Parallel writes inside the transaction.
+        //
+        // Batch A — 3 status updates on independent tables/rows, no FK dependency
+        //           between them. Run simultaneously.
+        //
+        // Batch B — demographic upsert + assignment create + all document inserts
+        //           are also mutually independent. Run simultaneously after Batch A.
+        //
+        await prisma_config_1.default.$transaction(async (tx) => {
+            // Batch A: parallel status updates
+            await Promise.all([
+                tx.pipelineStage.update({
+                    where: { pipeline_stage_id: pipelineStageId },
+                    data: { stage_name: 'ONBOARDED' },
+                }),
+                tx.application.update({
+                    where: { application_id: application.application_id },
+                    data: { status: 'HIRED' },
+                }),
+                tx.applicant.update({
+                    where: { applicant_id: applicant.applicant_id },
+                    data: { status: 'PLACED' },
+                }),
+            ]);
+            // Batch B: demographic + assignment + document rows, all in parallel
+            await Promise.all([
+                tx.applicantDemographic.upsert({
+                    where: { applicant_id: applicant.applicant_id },
+                    update: { ssn_encrypted: encryptedSSN, tax_info: taxInfoPayload },
+                    create: {
+                        applicant_id: applicant.applicant_id,
+                        ssn_encrypted: encryptedSSN,
+                        tax_info: taxInfoPayload,
+                    },
+                }),
+                tx.assignment.create({
+                    data: {
+                        application_id: application.application_id,
+                        start_date: startDate,
+                        end_date: end_date ? new Date(end_date) : null,
+                        employment_type,
+                        workers_comp_code: workersCompCodes[0]?.code || null,
+                        workers_comp_codes: workersCompCodes,
+                        company_codes: companyCodes,
+                    },
+                }),
+                // Spread all document inserts into the same Promise.all
+                ...uploadedDocs.map(doc => tx.applicantDocument.create({
+                    data: {
+                        applicant_id: applicant.applicant_id,
+                        application_id: application.application_id,
+                        document_type: doc.document_type,
+                        file_url: JSON.stringify({
+                            originalFileName: doc.original_name,
+                            mimeType: doc.mime_type,
+                            blobName: doc.blob_name,
+                            size: doc.size,
+                            url: doc.file_url,
+                            sendToCandidate: doc.send_to_candidate,
+                        }),
+                    },
+                })),
+            ]);
+        });
+        // ── 9. Fetch full result for response ──────────────────────────────────────
+        // FIX 4: Lean select — only fetch what the response and emails actually need.
+        //         Removed unnecessary nested includes from the old version.
+        const result = await prisma_config_1.default.pipelineStage.findUnique({
+            where: { pipeline_stage_id: pipelineStageId },
+            include: {
+                application: {
+                    include: {
+                        job: { select: { job_title: true, organization: { select: { name: true } } } },
+                        applicant: {
+                            select: {
+                                full_name: true, status: true,
+                                contact: { select: { email: true, phone: true } },
+                            },
+                        },
+                        assignment: {
+                            select: {
+                                assignment_id: true,
+                                start_date: true,
+                                end_date: true,
+                                employment_type: true,
+                                workers_comp_code: true,
+                                workers_comp_codes: true,
+                                company_codes: true,
+                            },
+                        },
+                    },
+                },
+                credit_user: { select: { user_id: true, name: true, email: true } },
+                representative_user: { select: { user_id: true, name: true, email: true } },
+            },
+        });
+        const orgName = result.application.job.organization.name;
+        const jobTitle = result.application.job.job_title;
+        const aName = result.application.applicant.full_name;
+        const aEmail = result.application.applicant.contact?.email;
+        const docSummary = uploadedDocs.map(d => ({
+            document_name: d.document_name,
+            document_type: d.document_type,
+            send_to_candidate: d.send_to_candidate,
+        }));
+        // FIX 5: Build attachments array once — reused across all 3 emails
+        //         instead of rebuilding files.map(...) three separate times.
+        const allAttachments = files.map((f, i) => ({
+            filename: documentNames[i] || f.originalname,
+            content: f.buffer,
+            contentType: f.mimetype,
+        }));
+        // ── 10. Emails ─────────────────────────────────────────────────────────────
+        // FIX 5 cont.: All 3 emails fired simultaneously with Promise.all instead of
+        //              3 separate staggered .then() chains. True fire-and-forget —
+        //              response is sent before any email resolves.
+        const emailPromises = [];
+        if (aEmail) {
+            emailPromises.push((0, emailService_1.sendOnboardingWelcomeEmail)({
+                applicantEmail: aEmail,
+                applicantName: aName,
+                jobTitle,
+                organizationName: orgName,
+                startDate,
+                endDate: end_date ? new Date(end_date) : null,
+                employmentType: employment_type,
+                workersCompCodes,
+                uploadedDocuments: docSummary.filter(d => d.send_to_candidate),
+                attachments: allAttachments.filter((_, i) => sendToCandidate[i] === 'true'),
+            }));
+        }
+        // Shared base for both notification emails — avoids duplicating every field
+        const notificationBase = {
+            applicantName: aName,
+            applicantEmail: aEmail || '',
+            jobTitle,
+            organizationName: orgName,
+            startDate,
+            endDate: end_date ? new Date(end_date) : null,
+            employmentType: employment_type,
+            companyCodes,
+            workersCompCodes,
+            uploadedDocuments: docSummary,
+            attachments: allAttachments,
+        };
+        if (result.credit_user?.email) {
+            emailPromises.push((0, emailService_1.sendAssignmentNotificationEmail)({
+                ...notificationBase,
+                recipientEmail: result.credit_user.email,
+                recipientName: result.credit_user.name,
+                role: 'Credit User',
+            }));
+        }
+        if (result.representative_user?.email) {
+            emailPromises.push((0, emailService_1.sendAssignmentNotificationEmail)({
+                ...notificationBase,
+                recipientEmail: result.representative_user.email,
+                recipientName: result.representative_user.name,
+                role: 'Representative',
+            }));
+        }
+        Promise.all(emailPromises).catch(e => console.error('❌ One or more onboarding emails failed:', e.message));
+        // ── 11. Respond ────────────────────────────────────────────────────────────
+        return (0, response_1.sendSuccess)(res, {
+            ...result,
+            company_codes: companyCodes,
+            workers_comp_codes: workersCompCodes,
+            uploaded_documents: docSummary,
+        });
+    }
+    catch (err) {
+        console.error('Error onboarding candidate:', err);
+        return (0, response_1.sendError)(res, 'Failed to onboard candidate', 500);
+    }
+};
+// ══════════════════════════════════════════════════════════════════════════════
+// Onboardning docs upload + assignment creation endpoint
+// ══════════════════════════════════════════════════════════════════════════════
+const getAssignmentDetails = async (req, res) => {
+    try {
+        const { assignmentId } = req.params;
+        const assignment = await prisma_config_1.default.assignment.findUnique({
+            where: { assignment_id: assignmentId },
+            include: {
+                application: {
+                    include: {
+                        applicant: {
+                            include: {
+                                contact: true,
+                                demographic: true,
+                                documents: {
+                                    orderBy: { created_at: 'desc' },
+                                },
+                            },
+                        },
+                        job: {
+                            include: {
+                                organization: {
+                                    select: {
+                                        organization_id: true,
+                                        name: true,
+                                        website: true,
+                                        contacts: {
+                                            where: { contact_type: 'PRIMARY' },
+                                            select: { name: true, email: true, phone: true },
+                                            take: 1,
+                                        },
+                                    },
+                                },
+                                job_rates: {
+                                    select: {
+                                        bill_rate: true,
+                                        pay_rate: true,
+                                        ot_bill_rate: true,
+                                        ot_pay_rate: true,
+                                    },
+                                    take: 1,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        if (!assignment)
+            return (0, response_1.sendError)(res, 'Assignment not found', 404);
+        // ── Parse document file_url JSON ─────────────────────────────────────────
+        // Documents store a JSON string: { url, blobName, mimeType, size, sendToCandidate, originalFileName }
+        const documents = (assignment.application.applicant.documents ?? []).map((doc) => {
+            let fileInfo = {};
+            try {
+                fileInfo = typeof doc.file_url === 'string'
+                    ? JSON.parse(doc.file_url)
+                    : (doc.file_url ?? {});
+            }
+            catch {
+                fileInfo = { url: doc.file_url };
+            }
+            return {
+                document_id: doc.document_id ?? doc.applicant_document_id,
+                document_type: doc.document_type,
+                document_name: fileInfo.originalFileName ?? doc.document_type?.replace(/_/g, ' ') ?? 'Document',
+                file_url: fileInfo.url ?? null,
+                mime_type: fileInfo.mimeType ?? null,
+                size: fileInfo.size ?? null,
+                send_to_candidate: fileInfo.sendToCandidate ?? false,
+                created_at: doc.created_at,
+            };
+        });
+        // ── Safely parse Json[] fields ────────────────────────────────────────────
+        const parseJson = (v) => {
+            try {
+                if (Array.isArray(v))
+                    return v;
+                if (typeof v === 'string')
+                    return JSON.parse(v);
+                return [];
+            }
+            catch {
+                return [];
+            }
+        };
+        return (0, response_1.sendSuccess)(res, {
+            assignment: {
+                assignment_id: assignment.assignment_id,
+                application_id: assignment.application_id,
+                start_date: assignment.start_date,
+                end_date: assignment.end_date,
+                employment_type: assignment.employment_type,
+                workers_comp_code: assignment.workers_comp_code ?? null,
+                workers_comp_codes: parseJson(assignment.workers_comp_codes),
+                company_codes: parseJson(assignment.company_codes),
+                created_at: assignment.created_at,
+            },
+            applicant: {
+                applicant_id: assignment.application.applicant.applicant_id,
+                full_name: assignment.application.applicant.full_name,
+                status: assignment.application.applicant.status,
+                contact: assignment.application.applicant.contact,
+            },
+            job: {
+                job_id: assignment.application.job.job_id,
+                job_title: assignment.application.job.job_title,
+                location: assignment.application.job.location ?? null,
+                organization: assignment.application.job.organization,
+                rates: assignment.application.job.job_rates?.[0] ?? null,
+            },
+            documents,
+        });
+    }
+    catch (err) {
+        console.error('Error fetching assignment details:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch assignment details', 500);
+    }
+};
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1003,5 +1375,7 @@ exports.pipelineController = {
     getPipelineOverview,
     getPipelineByInterviewStatus,
     searchPipelinedApplicants,
+    uploadOnboardingDocs: exports.uploadOnboardingDocs,
+    getAssignmentDetails
 };
 //# sourceMappingURL=pipelineController.js.map

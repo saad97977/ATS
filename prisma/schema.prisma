@@ -529,6 +529,10 @@ model ApplicantDemographic {
   disability           String?
   work_authorization   String?
   authorization_expiry DateTime?
+  ssn_encrypted  String?   // AES-256-CBC encrypted SSN hex string
+  tax_info       Json?     // { filing_status, additional_withholding, exempt_from_federal,
+                           //   exempt_from_state, work_state, resident_state }
+
 
   // Relations
   applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
@@ -703,6 +707,9 @@ model Assignment {
   employment_type   EmploymentType
   workers_comp_code String?
   timesheets_enabled  Boolean  @default(true)
+  workers_comp_codes Json?     // [{ code, description, pct }] — full multi-code array
+  company_codes      Json?     // [{ code, description, allocation_pct }]
+
 
   // Existing relation
   application  Application  @relation(fields: [application_id], references: [application_id], onDelete: Cascade)

@@ -40,6 +40,7 @@ import applicantProfileRoutes from './routes/applicant/applicantProfileRoutes';
 import pipelineRoutes from './routes/application/pipelineRoutes';
 import initializeCronJobs from '../src/services/cronJobService'
 import timesheetRoutes from './routes/timesheets/timesheetRoutes';
+import payrollRoutes from './routes/timesheets/payrollRoutes';
 
 
 dotenv.config();
@@ -169,8 +170,9 @@ app.use('/api/applicant-work-history', applicantWorkHistoryRoutes);
 app.use('/api/applicant-documents', applicantDocumentsRoutes);
 
 
-// Timesheets
+// Timesheets and Payroll routes
 app.use('/api/timesheets', timesheetRoutes);
+app.use('/api/payroll', payrollRoutes);
 
 // Application routes
 app.use('/api/applications', applicationRoutes);

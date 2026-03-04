@@ -41,7 +41,8 @@ router.post('/auto-update-completed', pipelineController_1.pipelineController.au
 router.patch('/interview/:interviewId/reject', pipelineController_1.pipelineController.rejectInterview);
 router.patch('/interview/:interviewId/accept', pipelineController_1.pipelineController.acceptInterview);
 // Onboarding route
-router.patch('/:pipelineStageId/onboard', pipelineController_1.pipelineController.onboardCandidate);
+// router.patch('/:pipelineStageId/onboard', pipelineController.onboardCandidate);
+router.patch('/:pipelineStageId/onboard', pipelineController_1.pipelineController.uploadOnboardingDocs, pipelineController_1.pipelineController.onboardCandidate);
 // CRUD routes
 router.get('/', pipelineController_1.pipelineController.getAll);
 router.post('/', pipelineController_1.pipelineController.create);

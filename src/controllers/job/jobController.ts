@@ -1019,9 +1019,9 @@ const jobNoteUpdateSchema = z.object({
 
 const jobRateUpdateSchema = z.object({
   job_rate_id: z.string().uuid().optional(),
-  pay_rate: z.number().optional(),
+  pay_rate: z.number().optional().nullable(),
   bill_rate: z.number().min(0, 'Bill rate must be positive').optional(),
-  markup_percentage: z.number().optional(),
+  markup_percentage: z.number().optional().nullable(),
   overtime_rule: z.string().optional(),
   hours: z.number().int().min(0, 'Hours must be a positive integer').optional(),
   ot_pay_rate: z.number().optional(),

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const assignmentController_1 = require("../../controllers/application/assignmentController");
+const pipelineController_1 = require("../../controllers/application/pipelineController");
 const router = (0, express_1.Router)();
 /**
  * Assignment Routes
@@ -25,6 +26,8 @@ const router = (0, express_1.Router)();
  * - employment_type: Filter by W2 or CONTRACTOR_1099 (for GET all)
  * - active_only: Filter for active assignments only (for GET all)
  */
+// onboarding details endpoint - must come before :id route
+router.get('/:assignmentId/details', pipelineController_1.pipelineController.getAssignmentDetails);
 // Statistics endpoint - must come before :id route
 router.get('/stats', assignmentController_1.assignmentController.getAssignmentStats);
 // Active assignments endpoint - must come before :id route

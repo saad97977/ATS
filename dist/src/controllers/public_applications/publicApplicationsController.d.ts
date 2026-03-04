@@ -102,6 +102,8 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
             work_authorization: string | null;
             authorization_expiry: Date | null;
             applicant_demo_id: string;
+            ssn_encrypted: string | null;
+            tax_info: import("@prisma/client/runtime/library").JsonValue | null;
         } | null;
         social_profiles: {
             applicant_id: string;

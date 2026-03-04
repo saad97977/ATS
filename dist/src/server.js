@@ -44,6 +44,7 @@ const applicantProfileRoutes_1 = __importDefault(require("./routes/applicant/app
 const pipelineRoutes_1 = __importDefault(require("./routes/application/pipelineRoutes"));
 const cronJobService_1 = __importDefault(require("../src/services/cronJobService"));
 const timesheetRoutes_1 = __importDefault(require("./routes/timesheets/timesheetRoutes"));
+const payrollRoutes_1 = __importDefault(require("./routes/timesheets/payrollRoutes"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -141,8 +142,9 @@ app.use('/api/applicant-references', applicantReferencesRoutes_1.default);
 app.use('/api/applicant-social-profiles', applicantSocialProfilesRoutes_1.default);
 app.use('/api/applicant-work-history', applicantWorkHistoryRoutes_1.default);
 app.use('/api/applicant-documents', applicantDocumentsRoutes_1.default);
-// Timesheets
+// Timesheets and Payroll routes
 app.use('/api/timesheets', timesheetRoutes_1.default);
+app.use('/api/payroll', payrollRoutes_1.default);
 // Application routes
 app.use('/api/applications', applicationRoutes_1.default);
 app.use('/api/interviews', interviewRoutes_1.default);

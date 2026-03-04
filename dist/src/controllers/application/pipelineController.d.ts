@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+export declare const uploadOnboardingDocs: import("express").RequestHandler<import("express-serve-static-core").ParamsDictionary, any, any, import("qs").ParsedQs, Record<string, any>>;
 export declare const pipelineController: {
     getAll: (req: Request, res: Response) => Promise<void>;
     create: (req: Request, res: Response) => Promise<void>;
@@ -17,5 +18,7 @@ export declare const pipelineController: {
     getPipelineOverview: (req: Request, res: Response) => Promise<void>;
     getPipelineByInterviewStatus: (req: Request, res: Response) => Promise<void>;
     searchPipelinedApplicants: (req: Request, res: Response) => Promise<void>;
+    uploadOnboardingDocs: import("express").RequestHandler<import("express-serve-static-core").ParamsDictionary, any, any, import("qs").ParsedQs, Record<string, any>>;
+    getAssignmentDetails: (req: Request, res: Response) => Promise<void>;
 };
 //# sourceMappingURL=pipelineController.d.ts.map

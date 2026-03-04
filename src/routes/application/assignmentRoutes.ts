@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { assignmentController } from '../../controllers/application/assignmentController';
+import { pipelineController } from '../../controllers/application/pipelineController';
+import { pipeline } from 'node:stream';
 
 const router = Router();
 
@@ -25,6 +27,10 @@ const router = Router();
  * - employment_type: Filter by W2 or CONTRACTOR_1099 (for GET all)
  * - active_only: Filter for active assignments only (for GET all)
  */
+
+// onboarding details endpoint - must come before :id route
+router.get('/:assignmentId/details', pipelineController.getAssignmentDetails);
+
 
 // Statistics endpoint - must come before :id route
 router.get('/stats', assignmentController.getAssignmentStats);

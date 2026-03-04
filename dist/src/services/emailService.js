@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.verifyEmailConfiguration = exports.sendOnboardingWelcomeEmail = exports.sendOfferLetterEmail = exports.sendInterviewRejectionEmail = exports.sendInterviewRescheduleEmail = exports.sendInterviewInvitationEmail = void 0;
+exports.sendAssignmentNotificationEmail = exports.sendOnboardingWelcomeEmail = exports.verifyEmailConfiguration = exports.sendOfferLetterEmail = exports.sendInterviewRejectionEmail = exports.sendInterviewRescheduleEmail = exports.sendInterviewInvitationEmail = void 0;
 const nodemailer_1 = __importDefault(require("nodemailer"));
 /**
  * Email Service
@@ -273,47 +273,6 @@ const sendOfferLetterEmail = async (data) => {
     }
 };
 exports.sendOfferLetterEmail = sendOfferLetterEmail;
-const sendOnboardingWelcomeEmail = async (data) => {
-    try {
-        const content = `
-      <p>Welcome to ${data.organizationName}! We are thrilled to have you join our team as <strong>${data.jobTitle}</strong>.</p>
-
-      <div class="info-box">
-        <p><strong>Position:</strong> ${data.jobTitle}</p>
-        <p><strong>Company:</strong> ${data.organizationName}</p>
-        <p><strong>Employment Type:</strong> ${fmtEmploymentType(data.employmentType)}</p>
-        <p><strong>Start Date:</strong> ${fmtDate(data.startDate)}</p>
-        <p><strong>End Date:</strong> ${data.endDate ? fmtDate(data.endDate) : 'Open-ended'}</p>
-        ${data.workersCompCode ? `<p><strong>Workers' Comp Code:</strong> ${data.workersCompCode}</p>` : ''}
-      </div>
-
-      <p><strong>Next Steps:</strong></p>
-      <ul>
-        <li>Our HR team will contact you with detailed onboarding instructions</li>
-        <li>Documentation and paperwork will be sent separately before your start date</li>
-        <li>Details about orientation and training will follow shortly</li>
-        <li>Please ensure all required documents are ready prior to <strong>${fmtDate(data.startDate)}</strong></li>
-      </ul>
-
-      <p>If you have any questions before your start date, please don't hesitate to reach out to our HR department.</p>
-      <p>We look forward to working with you!</p>
-    `;
-        const transporter = createTransporter();
-        const info = await transporter.sendMail({
-            from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
-            to: data.applicantEmail,
-            subject: `Welcome to ${data.organizationName}!`,
-            text: generateBaseEmailText({ applicantName: data.applicantName, organizationName: data.organizationName, content: content.replace(/<[^>]*>/g, '').trim() }),
-            html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: 'Welcome to the Team', content }),
-        });
-        return { success: true, messageId: info.messageId };
-    }
-    catch (error) {
-        console.error('Error sending onboarding email:', error);
-        return { success: false, error: error.message || 'Failed to send email' };
-    }
-};
-exports.sendOnboardingWelcomeEmail = sendOnboardingWelcomeEmail;
 const verifyEmailConfiguration = async () => {
     try {
         const transporter = createTransporter();
@@ -327,12 +286,189 @@ const verifyEmailConfiguration = async () => {
     }
 };
 exports.verifyEmailConfiguration = verifyEmailConfiguration;
+// ══════════════════════════════════════════════════════════════════════════════
+//  sendOnboardingWelcomeEmail  (UPDATED — adds attachments + docs list)
+// ══════════════════════════════════════════════════════════════════════════════
+const sendOnboardingWelcomeEmail = async (data) => {
+    try {
+        const wcSection = data.workersCompCodes?.length
+            ? `<p><strong>Workers' Comp Classification${data.workersCompCodes.length > 1 ? 's' : ''}:</strong>
+         ${data.workersCompCodes.map(w => `<span style="display:inline-block;margin-right:8px;font-size:13px">
+             <strong>${w.code}</strong>${w.description ? ` — ${w.description}` : ''} (${w.pct}%)
+           </span>`).join('')}</p>`
+            : '';
+        const docsSection = data.uploadedDocuments?.length
+            ? `
+      <p style="margin-top:20px"><strong>Documents included with this email:</strong></p>
+      <ul style="margin:8px 0 0;padding-left:20px">
+        ${data.uploadedDocuments
+                .map(d => `<li style="margin-bottom:4px;font-size:13px">
+            <strong>${d.document_name}</strong>
+            <span style="color:#6c757d;font-size:11px;margin-left:6px">${d.document_type.replace(/_/g, ' ')}</span>
+          </li>`)
+                .join('')}
+      </ul>
+      <p style="font-size:12px;color:#6c757d;margin-top:6px">
+        Please review and complete any forms that require your signature.
+        Contact our HR team if you have questions.
+      </p>`
+            : '';
+        const content = `
+      <p>Welcome to <strong>${data.organizationName}</strong>!
+         We are thrilled to have you join our team as <strong>${data.jobTitle}</strong>.</p>
+
+      <div class="info-box">
+        <p><strong>Position:</strong> ${data.jobTitle}</p>
+        <p><strong>Company:</strong> ${data.organizationName}</p>
+        <p><strong>Employment Type:</strong> ${fmtEmploymentType(data.employmentType)}</p>
+        <p><strong>Start Date:</strong> ${fmtDate(data.startDate)}</p>
+        <p><strong>End Date:</strong> ${data.endDate ? fmtDate(data.endDate) : 'Open-ended'}</p>
+      </div>
+
+      ${wcSection}
+      ${docsSection}
+
+      <p style="margin-top:20px"><strong>Next Steps:</strong></p>
+      <ul>
+        <li>Review and complete any attached forms (W-4, I-9, direct deposit) and return them to HR</li>
+        <li>Our HR team will contact you with detailed onboarding instructions</li>
+        <li>Details about orientation and first-day logistics will follow shortly</li>
+        <li>Ensure all required documents are ready before <strong>${fmtDate(data.startDate)}</strong></li>
+      </ul>
+
+      <p>If you have any questions before your start date, please reach out to our HR department.</p>
+      <p>We look forward to working with you!</p>
+    `;
+        const transporter = createTransporter();
+        const info = await transporter.sendMail({
+            from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
+            to: data.applicantEmail,
+            subject: `Welcome to ${data.organizationName} — ${data.jobTitle}`,
+            text: generateBaseEmailText({ applicantName: data.applicantName, organizationName: data.organizationName, content: content.replace(/<[^>]*>/g, '').trim() }),
+            html: generateBaseEmailHTML({ applicantName: data.applicantName, organizationName: data.organizationName, subject: 'Welcome to the Team', content }),
+            attachments: (data.attachments || []).map(a => ({
+                filename: a.filename,
+                content: a.content,
+                contentType: a.contentType,
+            })),
+        });
+        return { success: true, messageId: info.messageId };
+    }
+    catch (error) {
+        console.error('Error sending onboarding welcome email:', error);
+        return { success: false, error: error.message || 'Failed to send email' };
+    }
+};
+exports.sendOnboardingWelcomeEmail = sendOnboardingWelcomeEmail;
+// ══════════════════════════════════════════════════════════════════════════════
+//  sendAssignmentNotificationEmail  (NEW — credit user + representative)
+// ══════════════════════════════════════════════════════════════════════════════
+const sendAssignmentNotificationEmail = async (data) => {
+    try {
+        const codesTable = data.companyCodes.map(c => `
+      <tr>
+        <td style="padding:6px 10px;border-bottom:1px solid #e9ecef;font-size:13px;font-weight:600">${c.code}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #e9ecef;font-size:13px;color:#495057">${c.description || '—'}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #e9ecef;font-size:13px;text-align:right">${c.allocation_pct}%</td>
+      </tr>`).join('');
+        const docsSection = data.uploadedDocuments.length
+            ? `
+      <p style="margin-top:20px"><strong>Onboarding Documents (${data.uploadedDocuments.length}):</strong></p>
+      <ul style="margin:8px 0 0;padding-left:20px">
+        ${data.uploadedDocuments.map(d => `
+          <li style="margin-bottom:4px;font-size:13px">
+            <strong>${d.document_name}</strong>
+            <span style="color:#6c757d;font-size:11px;margin-left:6px">${d.document_type.replace(/_/g, ' ')}</span>
+            ${d.send_to_candidate ? '<span style="color:#166534;font-size:10px;margin-left:4px">[sent to candidate]</span>' : ''}
+          </li>`).join('')}
+      </ul>`
+            : '';
+        // Build raw text content for plaintext fallback
+        const rawContent = `
+A new candidate has been onboarded. Here are the assignment details:
+
+Candidate: ${data.applicantName} (${data.applicantEmail})
+Position:  ${data.jobTitle} at ${data.organizationName}
+Start Date: ${fmtDate(data.startDate)}
+End Date:   ${data.endDate ? fmtDate(data.endDate) : 'Open-ended'}
+Employment Type: ${fmtEmploymentType(data.employmentType)}
+
+Company Codes:
+${data.companyCodes.map(c => `  ${c.code} — ${c.description || 'N/A'} (${c.allocation_pct}%)`).join('\n')}
+
+Your role: ${data.role}
+
+${data.uploadedDocuments.length ? `Documents:\n${data.uploadedDocuments.map(d => `  • ${d.document_name} (${d.document_type})`).join('\n')}` : ''}
+    `.trim();
+        const htmlContent = `
+      <p>A new candidate has been successfully onboarded. As the <strong>${data.role}</strong>
+         for this assignment, please find the full details below.</p>
+
+      <div class="info-box">
+        <p><strong>Candidate:</strong>
+           ${data.applicantName}
+           ${data.applicantEmail ? `<a href="mailto:${data.applicantEmail}" style="color:#0369a1;font-size:12px;margin-left:4px">${data.applicantEmail}</a>` : ''}</p>
+        <p><strong>Position:</strong> ${data.jobTitle}</p>
+        <p><strong>Organization:</strong> ${data.organizationName}</p>
+        <p><strong>Employment Type:</strong> ${fmtEmploymentType(data.employmentType)}</p>
+        <p><strong>Start Date:</strong> ${fmtDate(data.startDate)}</p>
+        <p><strong>End Date:</strong> ${data.endDate ? fmtDate(data.endDate) : 'Open-ended'}</p>
+      </div>
+
+      <p style="margin-top:20px"><strong>Company Code Allocation:</strong></p>
+      <table style="width:100%;border-collapse:collapse;margin-top:8px;border:1px solid #e9ecef;border-radius:6px;overflow:hidden">
+        <thead>
+          <tr style="background:#f8f9fa">
+            <th style="padding:8px 10px;text-align:left;font-size:12px;color:#6c757d;font-weight:700;border-bottom:2px solid #e9ecef">Code</th>
+            <th style="padding:8px 10px;text-align:left;font-size:12px;color:#6c757d;font-weight:700;border-bottom:2px solid #e9ecef">Description</th>
+            <th style="padding:8px 10px;text-align:right;font-size:12px;color:#6c757d;font-weight:700;border-bottom:2px solid #e9ecef">Allocation</th>
+          </tr>
+        </thead>
+        <tbody>${codesTable}</tbody>
+      </table>
+
+      ${docsSection}
+
+      <p style="margin-top:20px">All attached documents have been stored in the candidate's onboarding file.
+         Please ensure payroll and billing are set up accordingly.</p>
+    `;
+        const transporter = createTransporter();
+        const info = await transporter.sendMail({
+            from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
+            to: data.recipientEmail,
+            subject: `[Assignment Notification] ${data.applicantName} onboarded — ${data.jobTitle}`,
+            text: generateBaseEmailText({
+                applicantName: data.recipientName,
+                organizationName: data.organizationName,
+                content: rawContent,
+            }),
+            html: generateBaseEmailHTML({
+                applicantName: data.recipientName,
+                organizationName: data.organizationName,
+                subject: `Assignment Notification — ${data.applicantName}`,
+                content: htmlContent,
+            }),
+            attachments: (data.attachments || []).map(a => ({
+                filename: a.filename,
+                content: a.content,
+                contentType: a.contentType,
+            })),
+        });
+        return { success: true, messageId: info.messageId };
+    }
+    catch (error) {
+        console.error('Error sending assignment notification email:', error);
+        return { success: false, error: error.message || 'Failed to send email' };
+    }
+};
+exports.sendAssignmentNotificationEmail = sendAssignmentNotificationEmail;
 exports.default = {
     sendInterviewInvitationEmail: exports.sendInterviewInvitationEmail,
     sendInterviewRescheduleEmail: exports.sendInterviewRescheduleEmail,
     sendInterviewRejectionEmail: exports.sendInterviewRejectionEmail,
     sendOfferLetterEmail: exports.sendOfferLetterEmail,
     sendOnboardingWelcomeEmail: exports.sendOnboardingWelcomeEmail,
+    sendAssignmentNotificationEmail: exports.sendAssignmentNotificationEmail,
     verifyEmailConfiguration: exports.verifyEmailConfiguration,
 };
 //# sourceMappingURL=emailService.js.map

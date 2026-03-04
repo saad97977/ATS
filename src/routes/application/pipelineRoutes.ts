@@ -42,7 +42,8 @@ router.patch('/interview/:interviewId/reject', pipelineController.rejectIntervie
 router.patch('/interview/:interviewId/accept', pipelineController.acceptInterview);
 
 // Onboarding route
-router.patch('/:pipelineStageId/onboard', pipelineController.onboardCandidate);
+// router.patch('/:pipelineStageId/onboard', pipelineController.onboardCandidate);
+router.patch('/:pipelineStageId/onboard', pipelineController.uploadOnboardingDocs, pipelineController.onboardCandidate);
 
 // CRUD routes
 router.get('/', pipelineController.getAll);
