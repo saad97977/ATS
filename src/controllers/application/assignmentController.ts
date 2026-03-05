@@ -164,7 +164,7 @@ const getAssignments = async (req: Request, res: Response) => {
         where,
         skip,
         take: limit,
-        orderBy: { start_date: 'desc' },
+        orderBy: { created_at: 'desc' },
         include: LIST_INCLUDE,
       }),
       prisma.assignment.count({ where }),
@@ -428,7 +428,7 @@ const getActiveAssignments = async (req: Request, res: Response) => {
     const where = { OR: [{ end_date: null }, { end_date: { gte: now } }] };
 
     const [assignments, total] = await Promise.all([
-      prisma.assignment.findMany({ where, skip, take: limit, orderBy: { start_date: 'desc' }, include: LIST_INCLUDE }),
+      prisma.assignment.findMany({ where, skip, take: limit, orderBy: { created_at: 'desc' }, include: LIST_INCLUDE }),
       prisma.assignment.count({ where }),
     ]);
 
@@ -452,7 +452,7 @@ const getCompletedAssignments = async (req: Request, res: Response) => {
     const where = { end_date: { lt: now } };
 
     const [assignments, total] = await Promise.all([
-      prisma.assignment.findMany({ where, skip, take: limit, orderBy: { end_date: 'desc' }, include: LIST_INCLUDE }),
+      prisma.assignment.findMany({ where, skip, take: limit, orderBy: { created_at: 'desc' }, include: LIST_INCLUDE }),
       prisma.assignment.count({ where }),
     ]);
 
@@ -481,7 +481,7 @@ const getAssignmentsByEmploymentType = async (req: Request, res: Response) => {
     const where = { employment_type: type.toUpperCase() as any };
 
     const [assignments, total] = await Promise.all([
-      prisma.assignment.findMany({ where, skip, take: limit, orderBy: { start_date: 'desc' }, include: LIST_INCLUDE }),
+      prisma.assignment.findMany({ where, skip, take: limit, orderBy: { created_at: 'desc' }, include: LIST_INCLUDE }),
       prisma.assignment.count({ where }),
     ]);
 

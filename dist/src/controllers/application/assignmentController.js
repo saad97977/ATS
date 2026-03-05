@@ -157,7 +157,7 @@ const getAssignments = async (req, res) => {
                 where,
                 skip,
                 take: limit,
-                orderBy: { start_date: 'desc' },
+                orderBy: { created_at: 'desc' },
                 include: LIST_INCLUDE,
             }),
             prisma_config_1.default.assignment.count({ where }),
@@ -407,7 +407,7 @@ const getActiveAssignments = async (req, res) => {
         const now = new Date();
         const where = { OR: [{ end_date: null }, { end_date: { gte: now } }] };
         const [assignments, total] = await Promise.all([
-            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { start_date: 'desc' }, include: LIST_INCLUDE }),
+            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { created_at: 'desc' }, include: LIST_INCLUDE }),
             prisma_config_1.default.assignment.count({ where }),
         ]);
         return (0, response_1.sendSuccess)(res, { data: assignments, paging: { total, page, limit, totalPages: Math.ceil(total / limit) } });
@@ -428,7 +428,7 @@ const getCompletedAssignments = async (req, res) => {
         const now = new Date();
         const where = { end_date: { lt: now } };
         const [assignments, total] = await Promise.all([
-            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { end_date: 'desc' }, include: LIST_INCLUDE }),
+            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { created_at: 'desc' }, include: LIST_INCLUDE }),
             prisma_config_1.default.assignment.count({ where }),
         ]);
         return (0, response_1.sendSuccess)(res, { data: assignments, paging: { total, page, limit, totalPages: Math.ceil(total / limit) } });
@@ -453,7 +453,7 @@ const getAssignmentsByEmploymentType = async (req, res) => {
         const skip = (page - 1) * limit;
         const where = { employment_type: type.toUpperCase() };
         const [assignments, total] = await Promise.all([
-            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { start_date: 'desc' }, include: LIST_INCLUDE }),
+            prisma_config_1.default.assignment.findMany({ where, skip, take: limit, orderBy: { created_at: 'desc' }, include: LIST_INCLUDE }),
             prisma_config_1.default.assignment.count({ where }),
         ]);
         return (0, response_1.sendSuccess)(res, { data: assignments, paging: { total, page, limit, totalPages: Math.ceil(total / limit) } });

@@ -714,7 +714,8 @@ model Assignment {
   // Existing relation
   application  Application  @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
 
-  // NEW — purely additive, Prisma adds no DB column for these
+  created_at   DateTime       @default(now())
+
   timesheets   Timesheet[]
   time_entries TimeEntry[]
   invoices     Invoice[]
