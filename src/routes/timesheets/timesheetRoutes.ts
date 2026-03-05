@@ -33,8 +33,9 @@ import {
   getAssignmentsForTimesheets,
   getTimesheetNotifications,
   bulkUpsertTimeEntries,
-
-  // syncInvoiceToQuickBooks, // ← uncomment when QB is ready
+  syncTimesheetToQB,
+  syncInvoiceToQB,
+  bulkSyncInvoicesToQB,
 } from '../../controllers/timesheets/timesheetController';
 
 const router = Router();
@@ -58,20 +59,26 @@ const upload = multer({
 router.get('/stats', getTimesheetStats);
 
 // ─── Invoices ─────────────────────────────────────────────────────────────────
-router.get('/invoices',                     getAllInvoices);
-router.get('/invoices/:invoiceId',          getInvoiceById);
-router.get('/invoices/:invoiceId/download', downloadInvoicePdf);
-router.patch('/invoices/:invoiceId/status', updateInvoiceStatus);
+router.get('/invoices',                          getAllInvoices);
+router.get('/invoices/:invoiceId',               getInvoiceById);
+router.get('/invoices/:invoiceId/download',      downloadInvoicePdf);
+router.patch('/invoices/:invoiceId/status',      updateInvoiceStatus);
 
-// ── QB sync route — uncomment when QB credentials are configured ──────────────
-// router.post('/invoices/:invoiceId/sync-qb', syncInvoiceToQuickBooks);
-// ─────────────────────────────────────────────────────────────────────────────
+// QuickBooks — Invoice sync
+// POST /api/timesheets/invoices/qb-sync/bulk
+// Pushes all unsynced invoices to QB in one call
+// Optional body: { invoice_ids: string[] } to limit scope
+router.post('/invoices/qb-sync/bulk',            bulkSyncInvoicesToQB);
+
+// POST /api/timesheets/invoices/:invoiceId/qb-sync
+// Pushes a single invoice to QB and marks qb_synced=true
+router.post('/invoices/:invoiceId/qb-sync',      syncInvoiceToQB);
 
 // ─── Assignments ──────────────────────────────────────────────────────────────
 // Dropdown list with current-week timesheet status
 router.get('/assignments', getAssignmentsForTimesheets);
 
-// NEW: Enable / disable timesheet creation for a specific assignment
+// Enable / disable timesheet creation for a specific assignment
 // Body: { timesheets_enabled: boolean }
 router.patch('/assignments/:assignmentId/toggle', toggleAssignmentTimesheets);
 
@@ -79,10 +86,10 @@ router.patch('/assignments/:assignmentId/toggle', toggleAssignmentTimesheets);
 router.get('/notifications', getTimesheetNotifications);
 
 // ─── Import ───────────────────────────────────────────────────────────────────
-// NEW: Download the CSV import template
+// Download the CSV import template
 router.get('/import/template', downloadImportTemplate);
 
-// NEW: Upload CSV or Excel file to bulk-create timesheets
+// Upload CSV or Excel file to bulk-create timesheets
 // Form field name: "file"  |  Body fields: assignment_id, custom_bill_rate?, etc.
 router.post('/import', upload.single('file'), importTimesheets);
 
@@ -105,15 +112,12 @@ router.get('/:id', getTimesheetById);
 // Body: { assignment_id, week_start_date, notes?, custom_bill_rate?, ... }
 router.post('/', createOrGetTimesheet);
 
-// NEW: Update per-timesheet rate overrides (DRAFT / REJECTED only)
-// Body: { custom_bill_rate?, custom_ot_bill_rate?, custom_pay_rate?,
-//         custom_ot_pay_rate?, custom_markup_percentage?,
-//         custom_overtime_rule?, rate_override_reason? }
+// Update per-timesheet rate overrides (DRAFT / REJECTED only)
 router.patch('/:id/rates', updateTimesheetRates);
 
 // ─── Daily time entry CRUD ────────────────────────────────────────────────────
 
-// Upsert a daily entry (add or overwrite the same work_date)
+// Upsert a daily entry
 // Body: { work_date, regular_hours, ot_hours?, break_minutes?, work_type?, notes? }
 router.post('/:id/entries', upsertTimeEntry);
 
@@ -129,9 +133,15 @@ router.post('/:id/submit', submitTimesheet);
 // Body: { reviewed_by_user_id, tax_rate?, net_terms_days? }
 router.post('/:id/approve', approveTimesheet);
 
-// SUBMITTED / UNDER_REVIEW  →  REJECTED  (returns to editable DRAFT)
+// SUBMITTED / UNDER_REVIEW  →  REJECTED
 // Body: { reviewed_by_user_id, rejection_reason }
 router.post('/:id/reject', rejectTimesheet);
+
+// ─── QuickBooks — Timesheet sync ─────────────────────────────────────────────
+
+// POST /api/timesheets/:id/qb-sync
+// Pushes all time entries as QB TimeActivities — only works on APPROVED timesheets
+router.post('/:id/qb-sync', syncTimesheetToQB);
 
 export default router;
 
@@ -146,7 +156,7 @@ TIMESHEETS
   GET    /api/timesheets/assignment/:id           worker history
   GET    /api/timesheets/:id                      full detail
   POST   /api/timesheets                          create/get week (idempotent)
-  PATCH  /api/timesheets/:id/rates                update custom rate overrides  ← NEW
+  PATCH  /api/timesheets/:id/rates                update custom rate overrides
   POST   /api/timesheets/:id/entries              upsert daily entry
   POST   /api/timesheets/:id/entries/bulk         upsert all 7 days at once
   DELETE /api/timesheets/:id/entries/:entryId     delete daily entry
@@ -154,13 +164,16 @@ TIMESHEETS
   POST   /api/timesheets/:id/approve              SUBMITTED → APPROVED
   POST   /api/timesheets/:id/reject               SUBMITTED → REJECTED
 
+QUICKBOOKS — Timesheets
+  POST   /api/timesheets/:id/qb-sync              push time entries → QB TimeActivities
+
 ASSIGNMENTS
   GET    /api/timesheets/assignments              dropdown list + current-week status
-  PATCH  /api/timesheets/assignments/:id/toggle   enable/disable timesheets         ← NEW
+  PATCH  /api/timesheets/assignments/:id/toggle   enable/disable timesheets
 
 IMPORT
-  GET    /api/timesheets/import/template          download CSV template              ← NEW
-  POST   /api/timesheets/import                   upload CSV or Excel file           ← NEW
+  GET    /api/timesheets/import/template          download CSV template
+  POST   /api/timesheets/import                   upload CSV or Excel file
 
 INVOICES
   GET    /api/timesheets/invoices                 list (paginated + filtered)
@@ -168,7 +181,8 @@ INVOICES
   GET    /api/timesheets/invoices/:id/download    PDF download
   PATCH  /api/timesheets/invoices/:id/status      mark SENT/VIEWED/PAID/OVERDUE/VOID
 
-QB (disabled — enable when credentials are ready)
-  POST   /api/timesheets/invoices/:id/sync-qb     push to QuickBooks
+QUICKBOOKS — Invoices
+  POST   /api/timesheets/invoices/qb-sync/bulk    push all unsynced invoices → QB
+  POST   /api/timesheets/invoices/:id/qb-sync     push single invoice → QB
 ══════════════════════════════════════════════════════════════
 */

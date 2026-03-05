@@ -933,6 +933,17 @@ model Payroll {
   @@map("payrolls")
 }
 
+model QBTokenStore {
+  realm_id      String   @id
+  access_token  String
+  refresh_token String
+  expires_at    DateTime
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@map("qb_token_store")
+}
+
 // ============================================
 // ENUMS
 // ============================================

@@ -9,6 +9,11 @@ export declare const voidAndReplacePayroll: (req: Request, res: Response) => Pro
 export declare const deletePayroll: (req: Request, res: Response) => Promise<void>;
 export declare const markQbSynced: (req: Request, res: Response) => Promise<void>;
 export declare const bulkMarkQbSynced: (req: Request, res: Response) => Promise<void>;
+export declare const pushPayrollToQB: (req: Request, res: Response) => Promise<void>;
+export declare const bulkPushPayrollsToQB: (req: Request, res: Response) => Promise<void>;
+export declare const qbConnect: (req: Request, res: Response) => Promise<void>;
+export declare const qbCallback: (req: Request, res: Response) => Promise<void>;
+export declare const qbStatus: (req: Request, res: Response) => Promise<void>;
 export declare const getPayrollPeriods: (req: Request, res: Response) => Promise<void>;
 export declare const getPayrollsByPeriod: (req: Request, res: Response) => Promise<void>;
 export declare const payrollController: {
@@ -20,8 +25,13 @@ export declare const payrollController: {
     updatePayroll: (req: Request, res: Response) => Promise<void>;
     deletePayroll: (req: Request, res: Response) => Promise<void>;
     voidAndReplacePayroll: (req: Request, res: Response) => Promise<void>;
+    qbConnect: (req: Request, res: Response) => Promise<void>;
+    qbCallback: (req: Request, res: Response) => Promise<void>;
+    qbStatus: (req: Request, res: Response) => Promise<void>;
     markQbSynced: (req: Request, res: Response) => Promise<void>;
     bulkMarkQbSynced: (req: Request, res: Response) => Promise<void>;
+    pushPayrollToQB: (req: Request, res: Response) => Promise<void>;
+    bulkPushPayrollsToQB: (req: Request, res: Response) => Promise<void>;
     getPayrollPeriods: (req: Request, res: Response) => Promise<void>;
     getPayrollsByPeriod: (req: Request, res: Response) => Promise<void>;
 };

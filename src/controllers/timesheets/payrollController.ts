@@ -2,6 +2,13 @@ import { Request, Response } from 'express';
 import prisma from '../../prisma.config';
 import { sendSuccess, sendError } from '../../utils/response';
 import { Decimal } from '@prisma/client/runtime/library';
+import {
+  getAuthorizationUrl,
+  exchangeCodeForTokens,
+  pushPayrollJournalEntry,
+  getRealmId,
+  qbQuery,
+} from '../../services/qbService';
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
@@ -9,7 +16,7 @@ import { Decimal } from '@prisma/client/runtime/library';
 
 /** Convert a date to ISO week label, e.g. "2025-W12" */
 const getWeekLabel = (date: Date): string => {
-  const d   = new Date(date);
+  const d    = new Date(date);
   const jan1 = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   const weekNo = Math.ceil(
     ((d.getTime() - jan1.getTime()) / 86_400_000 + jan1.getUTCDay() + 1) / 7
@@ -23,8 +30,7 @@ const weekLabelToDate = (label: string): Date | null => {
   if (!m) return null;
   const year = parseInt(m[1], 10);
   const week = parseInt(m[2], 10);
-  // Jan 4 is always in ISO week 1
-  const jan4  = new Date(Date.UTC(year, 0, 4));
+  const jan4 = new Date(Date.UTC(year, 0, 4));
   const monday = new Date(jan4);
   monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7) + (week - 1) * 7);
   monday.setUTCHours(0, 0, 0, 0);
@@ -68,15 +74,6 @@ const PAYROLL_INCLUDE = {
 // ─────────────────────────────────────────────────────────────
 // GET ALL PAYROLLS  — paginated, filterable
 // GET /api/payroll
-//
-// Query params:
-//   assignmentId   – filter by assignment
-//   payPeriod      – exact "2025-W12" match
-//   weekStart      – any date → resolves to the Monday of that week
-//   weekEnd        – inclusive upper bound (week_start_date of the payroll)
-//   search         – worker name, job title, or company (case-insensitive)
-//   qbSynced       – "true" | "false"
-//   page, limit
 // ─────────────────────────────────────────────────────────────
 export const getAllPayrolls = async (req: Request, res: Response) => {
   try {
@@ -92,7 +89,6 @@ export const getAllPayrolls = async (req: Request, res: Response) => {
     if (payPeriod) {
       andClauses.push({ pay_period: payPeriod as string });
     } else {
-      // Date-range filter on the timesheet's week_start_date for user-friendliness
       if (weekStart || weekEnd) {
         const timesheetFilter: any = {};
         if (weekStart) {
@@ -150,9 +146,6 @@ export const getAllPayrolls = async (req: Request, res: Response) => {
 // ─────────────────────────────────────────────────────────────
 // GET PAYROLL STATS
 // GET /api/payroll/stats
-//
-// Query params (all optional):
-//   assignmentId, weekStart, weekEnd, payPeriod, qbSynced
 // ─────────────────────────────────────────────────────────────
 export const getPayrollStats = async (req: Request, res: Response) => {
   try {
@@ -264,7 +257,6 @@ export const getPayrollsByAssignment = async (req: Request, res: Response) => {
       prisma.payroll.count({ where: { assignment_id: assignmentId } }),
     ]);
 
-    // Running totals for this assignment
     const summary = await prisma.payroll.aggregate({
       where:  { assignment_id: assignmentId },
       _sum:   { gross_pay: true, net_pay: true, regular_hours: true, ot_hours: true },
@@ -291,22 +283,6 @@ export const getPayrollsByAssignment = async (req: Request, res: Response) => {
 // ─────────────────────────────────────────────────────────────
 // MANUAL CREATE PAYROLL
 // POST /api/payroll
-//
-// Normally payroll is auto-created during timesheet approval.
-// This endpoint handles edge-cases: standalone payroll entries,
-// corrections, or assignments without timesheets.
-//
-// Body: {
-//   assignment_id   (required)
-//   timesheet_id?   (optional — links to an approved timesheet)
-//   pay_period?     (e.g. "2025-W12" — auto-derived from timesheet if omitted)
-//   regular_hours   (required)
-//   ot_hours?
-//   pay_rate        (required)
-//   ot_pay_rate?
-//   gross_pay?      (auto-calculated if omitted: reg*pay + ot*ot_pay)
-//   net_pay?        (defaults to gross_pay if omitted)
-// }
 // ─────────────────────────────────────────────────────────────
 export const createPayroll = async (req: Request, res: Response) => {
   try {
@@ -322,15 +298,13 @@ export const createPayroll = async (req: Request, res: Response) => {
       net_pay,
     } = req.body;
 
-    // ── Validate required fields ──────────────────────────────
-    if (!assignment_id)   return sendError(res, 'assignment_id is required', 400);
+    if (!assignment_id)        return sendError(res, 'assignment_id is required', 400);
     if (regular_hours == null) return sendError(res, 'regular_hours is required', 400);
     if (pay_rate      == null) return sendError(res, 'pay_rate is required', 400);
 
     const assignment = await prisma.assignment.findUnique({ where: { assignment_id } });
     if (!assignment) return sendError(res, 'Assignment not found', 404);
 
-    // ── Optional timesheet link ───────────────────────────────
     let linkedTimesheet: any = null;
     if (timesheet_id) {
       linkedTimesheet = await prisma.timesheet.findUnique({ where: { timesheet_id } });
@@ -338,26 +312,21 @@ export const createPayroll = async (req: Request, res: Response) => {
       if (linkedTimesheet.assignment_id !== assignment_id) {
         return sendError(res, 'Timesheet does not belong to this assignment', 409);
       }
-      // Guard against duplicate payroll for the same timesheet
       const existing = await prisma.payroll.findUnique({ where: { timesheet_id } });
       if (existing) {
         return sendError(res, `A payroll record already exists for timesheet ${timesheet_id}`, 409);
       }
     }
 
-    // ── Derive pay period ─────────────────────────────────────
     let resolvedPayPeriod = pay_period;
     if (!resolvedPayPeriod) {
-      if (linkedTimesheet) {
-        resolvedPayPeriod = getWeekLabel(linkedTimesheet.week_start_date);
-      } else {
-        resolvedPayPeriod = getWeekLabel(new Date());
-      }
+      resolvedPayPeriod = linkedTimesheet
+        ? getWeekLabel(linkedTimesheet.week_start_date)
+        : getWeekLabel(new Date());
     }
 
-    // ── Calculate amounts ─────────────────────────────────────
-    const regHours  = new Decimal(regular_hours);
-    const otHrs     = new Decimal(ot_hours);
+    const regHours     = new Decimal(regular_hours);
+    const otHrs        = new Decimal(ot_hours);
     const payRateDec   = new Decimal(pay_rate);
     const otPayRateDec = ot_pay_rate != null ? new Decimal(ot_pay_rate) : payRateDec.mul(1.5);
 
@@ -390,15 +359,6 @@ export const createPayroll = async (req: Request, res: Response) => {
 // ─────────────────────────────────────────────────────────────
 // UPDATE PAYROLL
 // PATCH /api/payroll/:payrollId
-//
-// Allows correcting pay rates, hours, or net_pay on a payroll
-// that has NOT yet been QB-synced. Once synced, corrections must
-// go through voidAndReplace.
-//
-// Body: any subset of {
-//   regular_hours, ot_hours, pay_rate, ot_pay_rate,
-//   gross_pay, net_pay
-// }
 // ─────────────────────────────────────────────────────────────
 export const updatePayroll = async (req: Request, res: Response) => {
   try {
@@ -415,36 +375,26 @@ export const updatePayroll = async (req: Request, res: Response) => {
       );
     }
 
-    const {
-      regular_hours,
-      ot_hours,
-      pay_rate,
-      ot_pay_rate,
-      gross_pay,
-      net_pay,
-    } = req.body;
+    const { regular_hours, ot_hours, pay_rate, ot_pay_rate, gross_pay, net_pay } = req.body;
 
     const updateData: any = {};
 
-    // Resolve updated values, falling back to current stored values
-    const newRegHours    = regular_hours != null ? new Decimal(regular_hours) : payroll.regular_hours;
-    const newOtHours     = ot_hours      != null ? new Decimal(ot_hours)      : payroll.ot_hours;
-    const newPayRate     = pay_rate      != null ? new Decimal(pay_rate)      : payroll.pay_rate;
-    const newOtPayRate   = ot_pay_rate   != null ? new Decimal(ot_pay_rate)   : (payroll.ot_pay_rate ?? newPayRate.mul(1.5));
+    const newRegHours  = regular_hours != null ? new Decimal(regular_hours) : payroll.regular_hours;
+    const newOtHours   = ot_hours      != null ? new Decimal(ot_hours)      : payroll.ot_hours;
+    const newPayRate   = pay_rate      != null ? new Decimal(pay_rate)      : payroll.pay_rate;
+    const newOtPayRate = ot_pay_rate   != null ? new Decimal(ot_pay_rate)   : (payroll.ot_pay_rate ?? newPayRate.mul(1.5));
 
     if (regular_hours != null) updateData.regular_hours = newRegHours;
     if (ot_hours      != null) updateData.ot_hours      = newOtHours;
     if (pay_rate      != null) updateData.pay_rate      = newPayRate;
     if (ot_pay_rate   != null) updateData.ot_pay_rate   = newOtPayRate;
 
-    // Recalculate gross unless explicitly provided
     if (gross_pay != null) {
       updateData.gross_pay = new Decimal(gross_pay);
     } else if (regular_hours != null || ot_hours != null || pay_rate != null || ot_pay_rate != null) {
       updateData.gross_pay = newPayRate.mul(newRegHours).add(newOtPayRate.mul(newOtHours));
     }
 
-    // net_pay: explicit value → use it; else default to recalculated gross
     if (net_pay != null) {
       updateData.net_pay = new Decimal(net_pay);
     } else if (updateData.gross_pay) {
@@ -471,12 +421,6 @@ export const updatePayroll = async (req: Request, res: Response) => {
 // ─────────────────────────────────────────────────────────────
 // VOID AND REPLACE
 // POST /api/payroll/:payrollId/void-and-replace
-//
-// Used when a QB-synced payroll needs correction.
-// The original record is soft-voided (qb_synced stays true as a
-// historical marker) and a new corrected record is created.
-//
-// Body: same fields as PATCH /api/payroll/:payrollId
 // ─────────────────────────────────────────────────────────────
 export const voidAndReplacePayroll = async (req: Request, res: Response) => {
   try {
@@ -507,12 +451,10 @@ export const voidAndReplacePayroll = async (req: Request, res: Response) => {
       : newPayRate.mul(newRegHours).add(newOtPayRate.mul(newOtHours));
     const newNet = net_pay != null ? new Decimal(net_pay) : newGross;
 
-    // Replacement record cannot reuse the same timesheet_id (unique constraint)
-    // so it is created as a standalone record referencing the same assignment + pay period
     const replacement = await prisma.payroll.create({
       data: {
         assignment_id:  original.assignment_id,
-        timesheet_id:   undefined,          // intentionally unlinked — original keeps the link
+        timesheet_id:   undefined,
         pay_period:     original.pay_period,
         regular_hours:  newRegHours,
         ot_hours:       newOtHours,
@@ -564,10 +506,8 @@ export const deletePayroll = async (req: Request, res: Response) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// QUICKBOOKS SYNC
+// MARK QB SYNCED (manual / after external push)
 // POST /api/payroll/:payrollId/qb-sync
-//
-// Marks a payroll as synced to QuickBooks.
 // Body: { qb_payroll_id: string }
 // ─────────────────────────────────────────────────────────────
 export const markQbSynced = async (req: Request, res: Response) => {
@@ -602,10 +542,8 @@ export const markQbSynced = async (req: Request, res: Response) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// BULK QB SYNC
+// BULK QB SYNC (manual mark)
 // POST /api/payroll/qb-sync/bulk
-//
-// Marks multiple payrolls as QB-synced in one call.
 // Body: { records: [ { payroll_id, qb_payroll_id }, ... ] }
 // ─────────────────────────────────────────────────────────────
 export const bulkMarkQbSynced = async (req: Request, res: Response) => {
@@ -650,13 +588,207 @@ export const bulkMarkQbSynced = async (req: Request, res: Response) => {
 };
 
 // ─────────────────────────────────────────────────────────────
+// ★ NEW: PUSH PAYROLL TO QUICKBOOKS AS JOURNAL ENTRY
+// POST /api/payroll/:payrollId/qb-push
+//
+// Automatically pushes payroll to QB as a JournalEntry
+// (Debit: Wages Expense / Credit: Accounts Payable).
+// On success, marks qb_synced = true and stores qb_payroll_id.
+// ─────────────────────────────────────────────────────────────
+export const pushPayrollToQB = async (req: Request, res: Response) => {
+  try {
+    const { payrollId } = req.params;
+
+    const payroll = await prisma.payroll.findUnique({
+      where: { payroll_id: payrollId },
+      include: PAYROLL_INCLUDE,
+    });
+    if (!payroll) return sendError(res, 'Payroll record not found', 404);
+
+    if (payroll.qb_synced) {
+      return sendError(res, 'Payroll is already synced to QuickBooks', 409);
+    }
+
+    // Resolve worker display name for the journal entry memo
+    const workerName = (payroll.assignment as any)
+      ?.application?.applicant?.full_name ?? 'Unknown Worker';
+
+    const qbJournalEntryId = await pushPayrollJournalEntry(payroll, workerName);
+
+    const updated = await prisma.payroll.update({
+      where: { payroll_id: payrollId },
+      data: {
+        qb_synced:     true,
+        qb_synced_at:  new Date(),
+        qb_payroll_id: qbJournalEntryId,
+      },
+      include: PAYROLL_INCLUDE,
+    });
+
+    return sendSuccess(res, {
+      message:              'Payroll pushed to QuickBooks as a Journal Entry',
+      qb_journal_entry_id:  qbJournalEntryId,
+      payroll:              updated,
+    });
+  } catch (err: any) {
+    console.error('pushPayrollToQB:', err);
+    return sendError(res, `QB push failed: ${err.message}`, 500);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// ★ NEW: BULK PUSH UNSYNCED PAYROLLS TO QUICKBOOKS
+// POST /api/payroll/qb-push/bulk
+//
+// Pushes all payrolls where qb_synced = false.
+// Optional body: { payroll_ids: string[] } to limit scope.
+// ─────────────────────────────────────────────────────────────
+export const bulkPushPayrollsToQB = async (req: Request, res: Response) => {
+  try {
+    const { payroll_ids } = req.body;
+
+    const where: any = { qb_synced: false };
+    if (Array.isArray(payroll_ids) && payroll_ids.length > 0) {
+      where.payroll_id = { in: payroll_ids };
+    }
+
+    const pending = await prisma.payroll.findMany({
+      where,
+      include: PAYROLL_INCLUDE,
+      orderBy: { processed_at: 'asc' },
+    });
+
+    if (pending.length === 0) {
+      return sendSuccess(res, { message: 'No unsynced payrolls found', pushed: 0, errors: [] });
+    }
+
+    const pushed:  { payroll_id: string; qb_journal_entry_id: string }[] = [];
+    const errors:  { payroll_id: string; message: string }[] = [];
+
+    for (const payroll of pending) {
+      try {
+        const workerName = (payroll.assignment as any)
+          ?.application?.applicant?.full_name ?? 'Unknown Worker';
+
+        const qbJournalEntryId = await pushPayrollJournalEntry(payroll, workerName);
+
+        await prisma.payroll.update({
+          where: { payroll_id: payroll.payroll_id },
+          data: {
+            qb_synced:     true,
+            qb_synced_at:  new Date(),
+            qb_payroll_id: qbJournalEntryId,
+          },
+        });
+
+        pushed.push({ payroll_id: payroll.payroll_id, qb_journal_entry_id: qbJournalEntryId });
+      } catch (err: any) {
+        errors.push({ payroll_id: payroll.payroll_id, message: err.message });
+      }
+    }
+
+    return sendSuccess(res, {
+      total_attempted: pending.length,
+      pushed_count:    pushed.length,
+      error_count:     errors.length,
+      pushed,
+      errors,
+    });
+  } catch (err: any) {
+    console.error('bulkPushPayrollsToQB:', err);
+    return sendError(res, 'Failed to bulk push payrolls to QB', 500);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// ★ NEW: QUICKBOOKS OAUTH — Start Connect Flow
+// GET /api/payroll/quickbooks/connect
+//
+// Redirects browser to QuickBooks authorization page.
+// ─────────────────────────────────────────────────────────────
+export const qbConnect = async (req: Request, res: Response) => {
+  try {
+    const url = getAuthorizationUrl('payroll_auth');
+    return res.redirect(url);
+  } catch (err: any) {
+    console.error('qbConnect:', err);
+    return sendError(res, 'Failed to initiate QB OAuth', 500);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// ★ NEW: QUICKBOOKS OAUTH — Callback Handler
+// GET /api/payroll/quickbooks/callback
+//
+// QB redirects here after user authorizes.
+// Exchanges code for tokens and stores them.
+// ─────────────────────────────────────────────────────────────
+export const qbCallback = async (req: Request, res: Response) => {
+  try {
+    const { code, realmId, error, error_description } = req.query;
+
+    if (error) {
+      return sendError(res, `QB authorization denied: ${error_description ?? error}`, 400);
+    }
+
+    if (!code || !realmId) {
+      return sendError(res, 'Missing code or realmId from QuickBooks callback', 400);
+    }
+
+    const tokens = await exchangeCodeForTokens(code as string, realmId as string);
+
+    return sendSuccess(res, {
+      message:   'QuickBooks connected successfully',
+      realm_id:  tokens.realm_id,
+      expires_at: tokens.expires_at,
+    });
+  } catch (err: any) {
+    console.error('qbCallback:', err);
+    return sendError(res, `QB callback failed: ${err.message}`, 500);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// ★ NEW: QUICKBOOKS CONNECTION STATUS
+// GET /api/payroll/quickbooks/status
+// ─────────────────────────────────────────────────────────────
+export const qbStatus = async (req: Request, res: Response) => {
+  try {
+    const realmId = await getRealmId().catch(() => null);
+
+    if (!realmId) {
+      return sendSuccess(res, {
+        connected: false,
+        message:   'No QuickBooks company connected. Visit /api/payroll/quickbooks/connect to authorize.',
+      });
+    }
+
+    // Quick ping — fetch company info
+    const companyInfo = await (async () => {
+      try {
+        const { qbGet } = await import('../../services/qbService');
+        const data = await qbGet('/companyinfo/' + realmId);
+        return data?.CompanyInfo ?? null;
+      } catch {
+        return null;
+      }
+    })();
+
+    return sendSuccess(res, {
+      connected:    true,
+      realm_id:     realmId,
+      company_name: companyInfo?.CompanyName ?? null,
+      environment:  process.env.QB_ENVIRONMENT ?? 'sandbox',
+    });
+  } catch (err: any) {
+    console.error('qbStatus:', err);
+    return sendError(res, 'Failed to check QB status', 500);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
 // GET PAYROLL SUMMARY BY PAY PERIOD
 // GET /api/payroll/periods
-//
-// Groups all payrolls by pay_period — useful for a "payroll run" view.
-// Returns each period with total gross, net, worker count, hours.
-//
-// Query params: weekStart, weekEnd, assignmentId
 // ─────────────────────────────────────────────────────────────
 export const getPayrollPeriods = async (req: Request, res: Response) => {
   try {
@@ -681,7 +813,6 @@ export const getPayrollPeriods = async (req: Request, res: Response) => {
       orderBy: { pay_period: 'desc' },
     });
 
-    // Enrich each period with its Monday date for display
     const periods = groups.map(g => {
       const monday = weekLabelToDate(g.pay_period);
       return {
@@ -706,7 +837,6 @@ export const getPayrollPeriods = async (req: Request, res: Response) => {
 // ─────────────────────────────────────────────────────────────
 // GET PAYROLLS FOR A SPECIFIC PERIOD
 // GET /api/payroll/periods/:payPeriod
-//   e.g. /api/payroll/periods/2025-W12
 // ─────────────────────────────────────────────────────────────
 export const getPayrollsByPeriod = async (req: Request, res: Response) => {
   try {
@@ -765,9 +895,16 @@ export const payrollController = {
   // Correction flow
   voidAndReplacePayroll,
 
-  // QuickBooks sync
+  // QuickBooks — OAuth
+  qbConnect,
+  qbCallback,
+  qbStatus,
+
+  // QuickBooks — Sync
   markQbSynced,
   bulkMarkQbSynced,
+  pushPayrollToQB,
+  bulkPushPayrollsToQB,
 
   // Period views
   getPayrollPeriods,

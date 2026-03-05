@@ -36,11 +36,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.timesheetController = exports.bulkUpsertTimeEntries = exports.getTimesheetNotifications = exports.getAssignmentsForTimesheets = exports.updateInvoiceStatus = exports.downloadInvoicePdf = exports.getInvoiceById = exports.getAllInvoices = exports.importTimesheets = exports.downloadImportTemplate = exports.toggleAssignmentTimesheets = exports.rejectTimesheet = exports.approveTimesheet = exports.submitTimesheet = exports.deleteTimeEntry = exports.upsertTimeEntry = exports.updateTimesheetRates = exports.createOrGetTimesheet = exports.getTimesheetById = exports.getTimesheetsByAssignment = exports.getTimesheetStats = exports.getAllTimesheets = void 0;
+exports.timesheetController = exports.bulkUpsertTimeEntries = exports.getTimesheetNotifications = exports.getAssignmentsForTimesheets = exports.updateInvoiceStatus = exports.downloadInvoicePdf = exports.getInvoiceById = exports.getAllInvoices = exports.importTimesheets = exports.downloadImportTemplate = exports.toggleAssignmentTimesheets = exports.bulkSyncInvoicesToQB = exports.syncInvoiceToQB = exports.syncTimesheetToQB = exports.rejectTimesheet = exports.approveTimesheet = exports.submitTimesheet = exports.deleteTimeEntry = exports.upsertTimeEntry = exports.updateTimesheetRates = exports.createOrGetTimesheet = exports.getTimesheetById = exports.getTimesheetsByAssignment = exports.getTimesheetStats = exports.getAllTimesheets = void 0;
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const response_1 = require("../../utils/response");
 const library_1 = require("@prisma/client/runtime/library");
 const invoiceService_1 = require("./../../services/invoiceService");
+const qbService_1 = require("../../services/qbService");
 // ─────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────
@@ -83,7 +84,7 @@ const recalculateTimesheetTotals = async (timesheetId) => {
     });
 };
 /**
- * Compute billing. Now respects per-timesheet custom rates.
+ * Compute billing. Respects per-timesheet custom rates.
  * Priority: timesheet.custom_* → JobRate → error
  */
 const computeBilling = async (assignmentId, regularHours, otHours, timesheetRateOverrides) => {
@@ -102,7 +103,6 @@ const computeBilling = async (assignmentId, regularHours, otHours, timesheetRate
     if (!assignment)
         throw new Error('Assignment not found');
     const rate = assignment.application.job.job_rates[0];
-    // Resolve rates: custom override → job rate → error
     const resolveRate = (custom, jobVal, fallback) => {
         if (custom != null)
             return new library_1.Decimal(custom);
@@ -311,17 +311,6 @@ const getTimesheetById = async (req, res) => {
     }
 };
 exports.getTimesheetById = getTimesheetById;
-/**
- * POST /api/timesheets
- * Create or retrieve the timesheet for a given assignment + week (idempotent).
- * NEW: checks timesheets_enabled on the assignment.
- * NEW: accepts optional rate override fields.
- * Body: {
- *   assignment_id, week_start_date, notes?,
- *   custom_bill_rate?, custom_ot_bill_rate?, custom_pay_rate?, custom_ot_pay_rate?,
- *   custom_markup_percentage?, custom_overtime_rule?, rate_override_reason?
- * }
- */
 const createOrGetTimesheet = async (req, res) => {
     try {
         const { assignment_id, week_start_date, notes, custom_bill_rate, custom_ot_bill_rate, custom_pay_rate, custom_ot_pay_rate, custom_markup_percentage, custom_overtime_rule, rate_override_reason, } = req.body;
@@ -331,7 +320,6 @@ const createOrGetTimesheet = async (req, res) => {
         const assignment = await prisma_config_1.default.assignment.findUnique({ where: { assignment_id } });
         if (!assignment)
             return (0, response_1.sendError)(res, 'Assignment not found', 404);
-        // Block if timesheets are disabled for this assignment
         if (assignment.timesheets_enabled === false) {
             return (0, response_1.sendError)(res, 'Timesheets are disabled for this assignment', 403);
         }
@@ -344,7 +332,6 @@ const createOrGetTimesheet = async (req, res) => {
         if (existing) {
             return (0, response_1.sendSuccess)(res, { ...existing, _returned_existing: true }, 200);
         }
-        // Build rate override data — only set fields that were provided
         const rateData = {};
         if (custom_bill_rate != null)
             rateData.custom_bill_rate = new library_1.Decimal(custom_bill_rate);
@@ -379,10 +366,6 @@ const createOrGetTimesheet = async (req, res) => {
     }
 };
 exports.createOrGetTimesheet = createOrGetTimesheet;
-/**
- * PATCH /api/timesheets/:id/rates
- * Update per-timesheet rate overrides on a DRAFT or REJECTED timesheet.
- */
 const updateTimesheetRates = async (req, res) => {
     try {
         const { id } = req.params;
@@ -504,10 +487,6 @@ const submitTimesheet = async (req, res) => {
     }
 };
 exports.submitTimesheet = submitTimesheet;
-/**
- * POST /api/timesheets/:id/approve
- * Now reads custom rate overrides from the timesheet row itself.
- */
 const approveTimesheet = async (req, res) => {
     try {
         const { id } = req.params;
@@ -526,7 +505,6 @@ const approveTimesheet = async (req, res) => {
         const reviewer = await prisma_config_1.default.user.findUnique({ where: { user_id: reviewed_by_user_id } });
         if (!reviewer)
             return (0, response_1.sendError)(res, 'Reviewer user not found', 404);
-        // Pass custom overrides from the timesheet row
         const billing = await computeBilling(timesheet.assignment_id, timesheet.total_regular_hours, timesheet.total_ot_hours, {
             custom_bill_rate: timesheet.custom_bill_rate,
             custom_ot_bill_rate: timesheet.custom_ot_bill_rate,
@@ -628,13 +606,234 @@ const rejectTimesheet = async (req, res) => {
 };
 exports.rejectTimesheet = rejectTimesheet;
 // ─────────────────────────────────────────────────────────────
+// ★ NEW: PUSH TIMESHEET TIME ENTRIES TO QUICKBOOKS
+// POST /api/timesheets/:id/qb-sync
+//
+// Pushes each TimeEntry as a QB TimeActivity.
+// Requires QB connection (authorize first at /api/payroll/quickbooks/connect).
+// ─────────────────────────────────────────────────────────────
+const syncTimesheetToQB = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const timesheet = await prisma_config_1.default.timesheet.findUnique({
+            where: { timesheet_id: id },
+            include: {
+                time_entries: { orderBy: { work_date: 'asc' } },
+                assignment: {
+                    include: {
+                        application: {
+                            include: {
+                                applicant: { select: { full_name: true } },
+                                job: {
+                                    include: {
+                                        organization: { select: { name: true } },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        if (!timesheet)
+            return (0, response_1.sendError)(res, 'Timesheet not found', 404);
+        if (timesheet.status !== 'APPROVED') {
+            return (0, response_1.sendError)(res, 'Only APPROVED timesheets can be pushed to QuickBooks', 409);
+        }
+        if (timesheet.qb_synced) {
+            return (0, response_1.sendError)(res, 'Timesheet is already synced to QuickBooks', 409);
+        }
+        if (timesheet.time_entries.length === 0) {
+            return (0, response_1.sendError)(res, 'Timesheet has no time entries to sync', 400);
+        }
+        const workerName = timesheet.assignment.application?.applicant?.full_name ?? 'Unknown Worker';
+        const companyName = timesheet.assignment.application?.job?.organization?.name ?? 'Unknown Company';
+        const jobTitle = timesheet.assignment.application?.job?.job_title ?? 'Staffing Services';
+        const rid = await (0, qbService_1.getRealmId)();
+        const employeeQbId = await (0, qbService_1.findOrCreateEmployee)(workerName, rid);
+        const customerQbId = await (0, qbService_1.findOrCreateCustomer)(companyName, rid);
+        const itemQbId = await (0, qbService_1.findOrCreateServiceItem)(jobTitle, '1', rid);
+        const pushedIds = [];
+        const errors = [];
+        for (const entry of timesheet.time_entries) {
+            if (Number(entry.regular_hours) <= 0 && Number(entry.ot_hours) <= 0)
+                continue;
+            try {
+                const qbId = await (0, qbService_1.pushTimeActivityToQB)(entry, employeeQbId, customerQbId, itemQbId, rid);
+                pushedIds.push(qbId);
+            }
+            catch (err) {
+                errors.push({ date: entry.work_date.toISOString().slice(0, 10), message: err.message });
+            }
+        }
+        if (pushedIds.length === 0) {
+            return (0, response_1.sendError)(res, `All entries failed to push to QB: ${errors.map(e => e.message).join('; ')}`, 500);
+        }
+        // Mark timesheet as synced (store first activity ID as reference)
+        const updated = await prisma_config_1.default.timesheet.update({
+            where: { timesheet_id: id },
+            data: {
+                qb_synced: true,
+                qb_synced_at: new Date(),
+                qb_timesheet_id: pushedIds[0],
+            },
+        });
+        return (0, response_1.sendSuccess)(res, {
+            message: 'Timesheet entries pushed to QuickBooks',
+            activities_pushed: pushedIds.length,
+            activity_ids: pushedIds,
+            errors,
+            timesheet: updated,
+        });
+    }
+    catch (err) {
+        console.error('syncTimesheetToQB:', err);
+        return (0, response_1.sendError)(res, `QB timesheet sync failed: ${err.message}`, 500);
+    }
+};
+exports.syncTimesheetToQB = syncTimesheetToQB;
+// ─────────────────────────────────────────────────────────────
+// ★ NEW: PUSH INVOICE TO QUICKBOOKS
+// POST /api/timesheets/invoices/:invoiceId/qb-sync
+//
+// Pushes the invoice to QB, finds/creates the customer,
+// then marks it as QB-synced.
+// ─────────────────────────────────────────────────────────────
+const syncInvoiceToQB = async (req, res) => {
+    try {
+        const { invoiceId } = req.params;
+        const invoice = await prisma_config_1.default.invoice.findUnique({
+            where: { invoice_id: invoiceId },
+            include: {
+                assignment: {
+                    include: {
+                        application: {
+                            include: {
+                                job: {
+                                    include: { organization: { select: { name: true } } },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        if (!invoice)
+            return (0, response_1.sendError)(res, 'Invoice not found', 404);
+        if (invoice.qb_synced) {
+            return (0, response_1.sendError)(res, 'Invoice is already synced to QuickBooks', 409);
+        }
+        if (invoice.status === 'VOID') {
+            return (0, response_1.sendError)(res, 'Cannot sync a voided invoice to QuickBooks', 409);
+        }
+        const companyName = invoice.assignment.application?.job?.organization?.name ?? 'Unknown Company';
+        const rid = await (0, qbService_1.getRealmId)();
+        const customerQbId = await (0, qbService_1.findOrCreateCustomer)(companyName, rid);
+        const qbInvoiceId = await (0, qbService_1.pushInvoiceToQB)(invoice, customerQbId, rid);
+        const updated = await prisma_config_1.default.invoice.update({
+            where: { invoice_id: invoiceId },
+            data: {
+                qb_invoice_id: qbInvoiceId,
+                qb_synced: true,
+                qb_synced_at: new Date(),
+                qb_sync_error: null,
+            },
+        });
+        return (0, response_1.sendSuccess)(res, {
+            message: 'Invoice pushed to QuickBooks successfully',
+            qb_invoice_id: qbInvoiceId,
+            invoice: updated,
+        });
+    }
+    catch (err) {
+        console.error('syncInvoiceToQB:', err);
+        // Persist the error for retry tracking
+        const { invoiceId } = req.params;
+        await prisma_config_1.default.invoice.update({
+            where: { invoice_id: invoiceId },
+            data: { qb_sync_error: err.message },
+        }).catch(() => { });
+        return (0, response_1.sendError)(res, `QB invoice sync failed: ${err.message}`, 500);
+    }
+};
+exports.syncInvoiceToQB = syncInvoiceToQB;
+// ─────────────────────────────────────────────────────────────
+// ★ NEW: BULK PUSH UNSYNCED INVOICES TO QUICKBOOKS
+// POST /api/timesheets/invoices/qb-sync/bulk
+//
+// Optional body: { invoice_ids: string[] }
+// ─────────────────────────────────────────────────────────────
+const bulkSyncInvoicesToQB = async (req, res) => {
+    try {
+        const { invoice_ids } = req.body;
+        const where = { qb_synced: false, status: { not: 'VOID' } };
+        if (Array.isArray(invoice_ids) && invoice_ids.length > 0) {
+            where.invoice_id = { in: invoice_ids };
+        }
+        const pending = await prisma_config_1.default.invoice.findMany({
+            where,
+            include: {
+                assignment: {
+                    include: {
+                        application: {
+                            include: {
+                                job: {
+                                    include: { organization: { select: { name: true } } },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            orderBy: { invoice_date: 'asc' },
+        });
+        if (pending.length === 0) {
+            return (0, response_1.sendSuccess)(res, { message: 'No unsynced invoices found', pushed: 0, errors: [] });
+        }
+        const pushed = [];
+        const errors = [];
+        const rid = await (0, qbService_1.getRealmId)();
+        for (const invoice of pending) {
+            try {
+                const companyName = invoice.assignment.application?.job?.organization?.name ?? 'Unknown Company';
+                const customerQbId = await (0, qbService_1.findOrCreateCustomer)(companyName, rid);
+                const qbInvoiceId = await (0, qbService_1.pushInvoiceToQB)(invoice, customerQbId, rid);
+                await prisma_config_1.default.invoice.update({
+                    where: { invoice_id: invoice.invoice_id },
+                    data: {
+                        qb_invoice_id: qbInvoiceId,
+                        qb_synced: true,
+                        qb_synced_at: new Date(),
+                        qb_sync_error: null,
+                    },
+                });
+                pushed.push({ invoice_id: invoice.invoice_id, qb_invoice_id: qbInvoiceId });
+            }
+            catch (err) {
+                await prisma_config_1.default.invoice.update({
+                    where: { invoice_id: invoice.invoice_id },
+                    data: { qb_sync_error: err.message },
+                }).catch(() => { });
+                errors.push({ invoice_id: invoice.invoice_id, message: err.message });
+            }
+        }
+        return (0, response_1.sendSuccess)(res, {
+            total_attempted: pending.length,
+            pushed_count: pushed.length,
+            error_count: errors.length,
+            pushed,
+            errors,
+        });
+    }
+    catch (err) {
+        console.error('bulkSyncInvoicesToQB:', err);
+        return (0, response_1.sendError)(res, 'Failed to bulk sync invoices to QB', 500);
+    }
+};
+exports.bulkSyncInvoicesToQB = bulkSyncInvoicesToQB;
+// ─────────────────────────────────────────────────────────────
 // ASSIGNMENT TIMESHEET TOGGLE
 // ─────────────────────────────────────────────────────────────
-/**
- * PATCH /api/timesheets/assignments/:assignmentId/toggle
- * Enable or disable timesheet creation for this assignment.
- * Body: { timesheets_enabled: boolean }
- */
 const toggleAssignmentTimesheets = async (req, res) => {
     try {
         const { assignmentId } = req.params;
@@ -664,10 +863,6 @@ exports.toggleAssignmentTimesheets = toggleAssignmentTimesheets;
 // ─────────────────────────────────────────────────────────────
 // CSV / EXCEL IMPORT
 // ─────────────────────────────────────────────────────────────
-/**
- * GET /api/timesheets/import/template
- * Returns CSV column headers and example rows as text/csv.
- */
 const downloadImportTemplate = async (_req, res) => {
     const header = 'week_start_date,worker_email,work_date,regular_hours,ot_hours,break_minutes,work_type,notes';
     const example = '2025-01-06,worker@example.com,2025-01-06,8,0,30,REGULAR,Normal day';
@@ -678,25 +873,9 @@ const downloadImportTemplate = async (_req, res) => {
     return res.send(csv);
 };
 exports.downloadImportTemplate = downloadImportTemplate;
-/**
- * POST /api/timesheets/import
- * Accepts a multipart/form-data upload with field "file" (CSV or XLSX).
- * Additional fields: assignment_id, (optional) custom_bill_rate etc.
- *
- * Parsing strategy:
- *   - CSV: built-in line-by-line parse (no dep needed)
- *   - XLSX: uses the 'xlsx' npm package (install: npm i xlsx)
- *
- * One timesheet is created per unique week_start_date found in the file.
- * Rows with errors are skipped; all valid rows are upserted.
- *
- * Returns a detailed import result summary.
- */
 const importTimesheets = async (req, res) => {
     let importRecord = null;
     try {
-        // multer (or similar) must be configured on this route.
-        // Here we read from req.file (memStorage) or req.body.fileContent (base64).
         const { assignment_id, custom_bill_rate, custom_ot_bill_rate, custom_pay_rate, custom_ot_pay_rate, custom_markup_percentage, custom_overtime_rule, rate_override_reason, imported_by_user_id, } = req.body;
         if (!assignment_id)
             return (0, response_1.sendError)(res, 'assignment_id is required', 400);
@@ -706,7 +885,6 @@ const importTimesheets = async (req, res) => {
         if (assignment.timesheets_enabled === false) {
             return (0, response_1.sendError)(res, 'Timesheets are disabled for this assignment', 403);
         }
-        // Get uploaded file
         const file = req.file;
         if (!file)
             return (0, response_1.sendError)(res, 'No file uploaded. Use multipart/form-data with field name "file"', 400);
@@ -716,7 +894,6 @@ const importTimesheets = async (req, res) => {
         if (!isXlsx && !isCsv) {
             return (0, response_1.sendError)(res, 'Only CSV (.csv) and Excel (.xlsx / .xls) files are supported', 400);
         }
-        // Create import tracking record
         importRecord = await prisma_config_1.default.timesheetImport.create({
             data: {
                 assignment_id,
@@ -726,13 +903,11 @@ const importTimesheets = async (req, res) => {
                 status: 'PROCESSING',
             },
         });
-        // Parse rows
         let rawRows = [];
         if (isCsv) {
             rawRows = parseCsv(file.buffer.toString('utf-8'));
         }
         else {
-            // xlsx
             try {
                 const XLSX = require('xlsx');
                 const wb = XLSX.read(file.buffer, { type: 'buffer', cellDates: true });
@@ -754,7 +929,6 @@ const importTimesheets = async (req, res) => {
             });
             return (0, response_1.sendSuccess)(res, { message: 'File contained no data rows', import_id: importRecord.import_id, success_count: 0, error_count: 0, errors: [] });
         }
-        // Rate override object for timesheet creation
         const rateData = {};
         if (custom_bill_rate != null)
             rateData.custom_bill_rate = new library_1.Decimal(custom_bill_rate);
@@ -773,13 +947,11 @@ const importTimesheets = async (req, res) => {
         const VALID_WORK_TYPES = ['REGULAR', 'OVERTIME', 'HOLIDAY', 'SICK', 'PTO', 'UNPAID'];
         const errors = [];
         let successCount = 0;
-        // Group rows by week
         const weekMap = new Map();
         for (let i = 0; i < rawRows.length; i++) {
             const row = rawRows[i];
-            const rowNum = i + 2; // 1-indexed + header row
+            const rowNum = i + 2;
             const rowErrs = [];
-            // Normalize column names (trim, lowercase)
             const get = (key) => {
                 const val = row[key] ?? row[key.toLowerCase()] ?? row[key.toUpperCase()] ?? '';
                 return String(val).trim();
@@ -832,14 +1004,11 @@ const importTimesheets = async (req, res) => {
                 notes: notes || null,
             });
         }
-        // Process each week
         for (const [, { weekStart, entries }] of weekMap.entries()) {
             const weekEnd = getWeekEnd(weekStart);
-            // Validate all entries fall within the week
             const weekErrors = [];
             const validEntries = entries.filter(e => {
                 if (e.work_date < weekStart || e.work_date > weekEnd) {
-                    // we don't have original row numbers here, so just note the date
                     weekErrors.push({ row: 0, message: `work_date ${e.work_date.toISOString().slice(0, 10)} is outside week ${weekStart.toISOString().slice(0, 10)}` });
                     return false;
                 }
@@ -849,7 +1018,6 @@ const importTimesheets = async (req, res) => {
             if (validEntries.length === 0)
                 continue;
             try {
-                // Create or get timesheet for this week
                 let timesheet = await prisma_config_1.default.timesheet.findUnique({
                     where: { assignment_id_week_start_date: { assignment_id, week_start_date: weekStart } },
                 });
@@ -869,7 +1037,6 @@ const importTimesheets = async (req, res) => {
                     errors.push({ row: 0, message: `Week ${weekStart.toISOString().slice(0, 10)}: timesheet is ${timesheet.status} — cannot import to it` });
                     continue;
                 }
-                // Upsert all entries for this week
                 await prisma_config_1.default.$transaction(validEntries.map(e => prisma_config_1.default.timeEntry.upsert({
                     where: { timesheet_id_work_date: { timesheet_id: timesheet.timesheet_id, work_date: e.work_date } },
                     update: { regular_hours: e.regular_hours, ot_hours: e.ot_hours, total_hours: e.total_hours, break_minutes: e.break_minutes, work_type: e.work_type, notes: e.notes },
@@ -882,7 +1049,6 @@ const importTimesheets = async (req, res) => {
                 errors.push({ row: 0, message: `Week ${weekStart.toISOString().slice(0, 10)}: ${e.message}` });
             }
         }
-        // Finalise import record
         await prisma_config_1.default.timesheetImport.update({
             where: { import_id: importRecord.import_id },
             data: {
@@ -1049,7 +1215,6 @@ const downloadInvoicePdf = async (req, res) => {
         if (!invoice)
             return (0, response_1.sendError)(res, 'Invoice not found', 404);
         let pdfUrl = invoice.pdf_url;
-        // Generate if missing, or regenerate if it's an old local URL (pre-Azure migration)
         const isLocalUrl = pdfUrl && (pdfUrl.includes('localhost') ||
             pdfUrl.includes('generated-invoices'));
         if (!pdfUrl || isLocalUrl) {
@@ -1059,7 +1224,6 @@ const downloadInvoicePdf = async (req, res) => {
                 data: { pdf_url: pdfUrl, pdf_generated_at: new Date() },
             });
         }
-        // Stream the PDF through our server — the Azure blob URL is never exposed to the client
         const { BlobServiceClient } = await Promise.resolve().then(() => __importStar(require('@azure/storage-blob')));
         const blobServiceClient = BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION_STRING);
         const containerName = process.env.AZURE_INVOICES_CONTAINER_NAME || 'invoices';
@@ -1339,10 +1503,17 @@ exports.timesheetController = {
     toggleAssignmentTimesheets: exports.toggleAssignmentTimesheets,
     downloadImportTemplate: exports.downloadImportTemplate,
     importTimesheets: exports.importTimesheets,
+    // Invoices
     getAllInvoices: exports.getAllInvoices,
     getInvoiceById: exports.getInvoiceById,
     downloadInvoicePdf: exports.downloadInvoicePdf,
     updateInvoiceStatus: exports.updateInvoiceStatus,
+    // QuickBooks sync — Timesheets
+    syncTimesheetToQB: exports.syncTimesheetToQB,
+    // QuickBooks sync — Invoices
+    syncInvoiceToQB: exports.syncInvoiceToQB,
+    bulkSyncInvoicesToQB: exports.bulkSyncInvoicesToQB,
+    // Assignment listing & notifications
     getAssignmentsForTimesheets: exports.getAssignmentsForTimesheets,
     getTimesheetNotifications: exports.getTimesheetNotifications,
     bulkUpsertTimeEntries: exports.bulkUpsertTimeEntries,
