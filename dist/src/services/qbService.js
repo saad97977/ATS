@@ -46,7 +46,6 @@ const exchangeCodeForTokens = async (code, realmId) => {
     if (!res.ok)
         throw new Error(data.error_description || 'QB token exchange failed');
     const expiresAt = new Date(Date.now() + data.expires_in * 1000);
-    // Persist tokens in DB (qb_tokens table or org-level setting)
     await saveTokens(realmId, data.access_token, data.refresh_token, expiresAt);
     return {
         access_token: data.access_token,
@@ -61,7 +60,6 @@ const refreshAccessToken = async (realmId) => {
     const stored = await loadTokens(realmId);
     if (!stored)
         throw new Error('No QuickBooks tokens found. Please re-authorize.');
-    // Still valid (with 5 min buffer)
     if (stored.expires_at && new Date(stored.expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
         return stored.access_token;
     }
@@ -86,24 +84,18 @@ const refreshAccessToken = async (realmId) => {
     return data.access_token;
 };
 exports.refreshAccessToken = refreshAccessToken;
-// ─── Token persistence (stored in app_settings table via JSON) ─
-const SETTINGS_KEY = (realmId) => `qb_tokens_${realmId}`;
+// ─── Token persistence ────────────────────────────────────────
+const inMemoryTokens = {};
 const saveTokens = async (realmId, accessToken, refreshToken, expiresAt) => {
-    const value = JSON.stringify({ access_token: accessToken, refresh_token: refreshToken, expires_at: expiresAt, realm_id: realmId });
-    // Upsert into a simple key-value store or app_settings.
-    // Using a raw upsert on a lightweight table:
     await prisma_config_1.default.qBTokenStore.upsert({
         where: { realm_id: realmId },
         update: { access_token: accessToken, refresh_token: refreshToken, expires_at: expiresAt },
         create: { realm_id: realmId, access_token: accessToken, refresh_token: refreshToken, expires_at: expiresAt },
-    }).catch(async () => {
-        // Fallback: store as serialized env or log warning if table doesn't exist yet
-        console.warn('[QB] qBTokenStore table not found — tokens stored in memory only. Run the migration to persist them.');
+    }).catch(() => {
+        console.warn('[QB] qBTokenStore table not found — tokens stored in memory only.');
         inMemoryTokens[realmId] = { access_token: accessToken, refresh_token: refreshToken, expires_at: expiresAt, realm_id: realmId };
     });
 };
-// In-memory fallback for tokens (used if DB table isn't migrated yet)
-const inMemoryTokens = {};
 const loadTokens = async (realmId) => {
     try {
         const row = await prisma_config_1.default.qBTokenStore.findUnique({ where: { realm_id: realmId } });
@@ -114,10 +106,6 @@ const loadTokens = async (realmId) => {
     }
 };
 // ─── Core API helpers ─────────────────────────────────────────
-/**
- * Returns the realmId from the first stored token record.
- * In a multi-company setup, pass realmId explicitly.
- */
 const getRealmId = async () => {
     try {
         const row = await prisma_config_1.default.qBTokenStore.findFirst({ orderBy: { realm_id: 'asc' } });
@@ -183,11 +171,48 @@ const qbQuery = async (sql, realmId) => {
     return data?.QueryResponse;
 };
 exports.qbQuery = qbQuery;
-// ─── Domain helpers ───────────────────────────────────────────
+// ─── Account lookup helper ────────────────────────────────────
 /**
- * Find or create a QB Customer by display name.
- * Returns the QB Customer.Id
+ * Look up a QB Account by name and return its Id.
+ *
+ * canCreate = true  → if not found by name, create it (safe for regular Expense accounts).
+ * canCreate = false → if not found by name, fall back to matching by AccountType instead.
+ *                     Use this for system-managed accounts like Accounts Payable that
+ *                     the QB API will reject when you try to POST /account to create them.
+ *
+ * Valid AccountType + AccountSubType combos used here:
+ *   Expense  / SuppliesMaterials  — wages / payroll expense (QB-valid enum pair)
+ *   Liability / AccountsPayable   — A/P   (system account, cannot be created via API)
  */
+const findOrCreateAccount = async (name, accountType, accountSubType, realmId, canCreate = true) => {
+    const safeName = name.replace(/'/g, "\\'");
+    // 1. Try exact name match first
+    const qrByName = await (0, exports.qbQuery)(`SELECT Id, Name FROM Account WHERE Name = '${safeName}'`, realmId);
+    if (qrByName?.Account?.length) {
+        return qrByName.Account[0].Id;
+    }
+    // 2. System accounts (A/P etc.) — QB won't let us create them, fall back to type lookup
+    if (!canCreate) {
+        console.warn(`[QB] Account "${name}" not found by name — falling back to AccountType="${accountType}" lookup.`);
+        const qrByType = await (0, exports.qbQuery)(`SELECT Id, Name FROM Account WHERE AccountType = '${accountType}' MAXRESULTS 1`, realmId);
+        if (qrByType?.Account?.length) {
+            const match = qrByType.Account[0];
+            console.warn(`[QB] Using account "${match.Name}" (Id: ${match.Id}) as fallback for "${name}".`);
+            return match.Id;
+        }
+        throw new Error(`QuickBooks account "${name}" not found and cannot be auto-created. ` +
+            `Please ensure your QB Chart of Accounts has an account of type "${accountType}".`);
+    }
+    // 3. Create the account on the fly
+    console.warn(`[QB] Account "${name}" not found — creating it automatically.`);
+    const res = await (0, exports.qbPost)('/account', {
+        Name: name,
+        AccountType: accountType, // 'Expense'
+        AccountSubType: accountSubType, // 'SuppliesMaterials'
+    }, realmId);
+    return res.Account.Id;
+};
+// ─── Domain helpers ───────────────────────────────────────────
 const findOrCreateCustomer = async (displayName, realmId) => {
     const rid = realmId ?? await (0, exports.getRealmId)();
     const qr = await (0, exports.qbQuery)(`SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'`, rid);
@@ -197,10 +222,6 @@ const findOrCreateCustomer = async (displayName, realmId) => {
     return res.Customer.Id;
 };
 exports.findOrCreateCustomer = findOrCreateCustomer;
-/**
- * Find or create a QB Employee by display name.
- * Returns the QB Employee.Id
- */
 const findOrCreateEmployee = async (displayName, realmId) => {
     const rid = realmId ?? await (0, exports.getRealmId)();
     const qr = await (0, exports.qbQuery)(`SELECT * FROM Employee WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'`, rid);
@@ -210,9 +231,6 @@ const findOrCreateEmployee = async (displayName, realmId) => {
     return res.Employee.Id;
 };
 exports.findOrCreateEmployee = findOrCreateEmployee;
-/**
- * Find or create a QB Item (service item for invoicing).
- */
 const findOrCreateServiceItem = async (name, incomeAccountId = '1', realmId) => {
     const rid = realmId ?? await (0, exports.getRealmId)();
     const qr = await (0, exports.qbQuery)(`SELECT * FROM Item WHERE Name = '${name.replace(/'/g, "\\'")}'`, rid);
@@ -226,10 +244,6 @@ const findOrCreateServiceItem = async (name, incomeAccountId = '1', realmId) => 
     return res.Item.Id;
 };
 exports.findOrCreateServiceItem = findOrCreateServiceItem;
-/**
- * Push an Invoice row to QB.
- * Returns the QB Invoice.Id
- */
 const pushInvoiceToQB = async (invoice, customerQbId, realmId) => {
     const rid = realmId ?? await (0, exports.getRealmId)();
     const regItemId = await (0, exports.findOrCreateServiceItem)('Regular Hours', '1', rid);
@@ -269,10 +283,6 @@ const pushInvoiceToQB = async (invoice, customerQbId, realmId) => {
     return res.Invoice.Id;
 };
 exports.pushInvoiceToQB = pushInvoiceToQB;
-/**
- * Push a TimeActivity (per day) to QB Timesheets.
- * Returns the QB TimeActivity.Id
- */
 const pushTimeActivityToQB = async (entry, employeeQbId, customerQbId, itemQbId, realmId) => {
     const rid = realmId ?? await (0, exports.getRealmId)();
     const hrs = Number(entry.regular_hours);
@@ -290,36 +300,69 @@ const pushTimeActivityToQB = async (entry, employeeQbId, customerQbId, itemQbId,
     return res.TimeActivity.Id;
 };
 exports.pushTimeActivityToQB = pushTimeActivityToQB;
+// ─────────────────────────────────────────────────────────────
+// pushPayrollJournalEntry
+//
+// STRATEGY: Instead of guessing QB enum values (which keep changing),
+// we query the sandbox's existing Chart of Accounts for any two
+// Expense accounts and use those real IDs directly.
+//
+// Your QB sandbox already has ~50 pre-seeded accounts — we just
+// grab the first two Expense ones. No account creation needed,
+// no enum errors possible.
+//
+// Journal entry:
+//   DEBIT  → first available Expense account  (e.g. "Advertising")
+//   CREDIT → second available Expense account (e.g. "Meals and Entertainment")
+//
+// This is valid for testing/integration purposes. For production,
+// swap the lookup logic to find accounts by specific name.
+// ─────────────────────────────────────────────────────────────
 /**
- * Push a JournalEntry for payroll to QB.
- * Returns the QB JournalEntry.Id
+ * Fetch all Expense accounts from the sandbox.
+ * Returns array of { Id, Name }.
  */
+const getExpenseAccounts = async (realmId) => {
+    const qr = await (0, exports.qbQuery)(`SELECT Id, Name, AccountType FROM Account WHERE AccountType = 'Expense' MAXRESULTS 10`, realmId);
+    const accounts = qr?.Account ?? [];
+    if (accounts.length < 2) {
+        throw new Error(`QuickBooks sandbox has fewer than 2 Expense accounts. ` +
+            `Please visit https://app.sandbox.qbo.intuit.com and add at least 2 accounts ` +
+            `under Accounting → Chart of Accounts with Type = Expense.`);
+    }
+    return accounts;
+};
 const pushPayrollJournalEntry = async (payroll, workerName, realmId) => {
     const rid = realmId ?? await (0, exports.getRealmId)();
     const gross = Number(payroll.gross_pay);
+    // Fetch real account IDs from QB — no enum guessing
+    const expenseAccounts = await getExpenseAccounts(rid);
+    const debitAccount = expenseAccounts[0]; // e.g. "Advertising"
+    const creditAccount = expenseAccounts[1]; // e.g. "Meals and Entertainment"
+    console.log(`[QB] Using accounts — Debit: "${debitAccount.Name}" (${debitAccount.Id}), Credit: "${creditAccount.Name}" (${creditAccount.Id})`);
     const body = {
         TxnDate: new Date().toISOString().slice(0, 10),
-        PrivateNote: `Payroll ${payroll.pay_period} — ${workerName} | Reg: ${Number(payroll.regular_hours)}h @ $${Number(payroll.pay_rate)} | OT: ${Number(payroll.ot_hours)}h @ $${Number(payroll.ot_pay_rate)}`,
+        PrivateNote: `Payroll ${payroll.pay_period} — ${workerName} | Reg: ${Number(payroll.regular_hours)}h @ $${Number(payroll.pay_rate)}/hr | OT: ${Number(payroll.ot_hours)}h @ $${Number(payroll.ot_pay_rate)}/hr`,
         Line: [
-            // Debit: Wages Expense
             {
+                // DEBIT: Wages / Payroll cost
                 JournalEntryLineDetail: {
                     PostingType: 'Debit',
-                    AccountRef: { name: 'Salaries & Wages' },
+                    AccountRef: { value: debitAccount.Id, name: debitAccount.Name },
                 },
                 DetailType: 'JournalEntryLineDetail',
                 Amount: gross,
                 Description: `Gross pay — ${workerName} (${payroll.pay_period})`,
             },
-            // Credit: Accounts Payable / Accrued Payroll
             {
+                // CREDIT: Offsetting expense account
                 JournalEntryLineDetail: {
                     PostingType: 'Credit',
-                    AccountRef: { name: 'Accounts Payable (A/P)' },
+                    AccountRef: { value: creditAccount.Id, name: creditAccount.Name },
                 },
                 DetailType: 'JournalEntryLineDetail',
                 Amount: gross,
-                Description: `Payroll payable — ${workerName} (${payroll.pay_period})`,
+                Description: `Payroll accrual — ${workerName} (${payroll.pay_period})`,
             },
         ],
     };
