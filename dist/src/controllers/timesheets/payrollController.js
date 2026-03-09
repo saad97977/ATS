@@ -685,6 +685,7 @@ const qbConnect = async (req, res) => {
     }
 };
 exports.qbConnect = qbConnect;
+// added
 // ─────────────────────────────────────────────────────────────
 // ★ NEW: QUICKBOOKS OAUTH — Callback Handler
 // GET /api/payroll/quickbooks/callback
