@@ -1118,6 +1118,7 @@ const onboardCandidate = async (req, res) => {
                             size: doc.size,
                             url: doc.file_url,
                             sendToCandidate: doc.send_to_candidate,
+                            containerName: ONBOARDING_CONTAINER,
                         }),
                     },
                 })),
@@ -1234,126 +1235,6 @@ const onboardCandidate = async (req, res) => {
         return (0, response_1.sendError)(res, 'Failed to onboard candidate', 500);
     }
 };
-// ══════════════════════════════════════════════════════════════════════════════
-// Onboardning docs upload + assignment creation endpoint
-// ══════════════════════════════════════════════════════════════════════════════
-const getAssignmentDetails = async (req, res) => {
-    try {
-        const { assignmentId } = req.params;
-        const assignment = await prisma_config_1.default.assignment.findUnique({
-            where: { assignment_id: assignmentId },
-            include: {
-                application: {
-                    include: {
-                        applicant: {
-                            include: {
-                                contact: true,
-                                demographic: true,
-                                documents: {
-                                    orderBy: { created_at: 'desc' },
-                                },
-                            },
-                        },
-                        job: {
-                            include: {
-                                organization: {
-                                    select: {
-                                        organization_id: true,
-                                        name: true,
-                                        website: true,
-                                        contacts: {
-                                            where: { contact_type: 'PRIMARY' },
-                                            select: { name: true, email: true, phone: true },
-                                            take: 1,
-                                        },
-                                    },
-                                },
-                                job_rates: {
-                                    select: {
-                                        bill_rate: true,
-                                        pay_rate: true,
-                                        ot_bill_rate: true,
-                                        ot_pay_rate: true,
-                                    },
-                                    take: 1,
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        });
-        if (!assignment)
-            return (0, response_1.sendError)(res, 'Assignment not found', 404);
-        // ── Parse document file_url JSON ─────────────────────────────────────────
-        // Documents store a JSON string: { url, blobName, mimeType, size, sendToCandidate, originalFileName }
-        const documents = (assignment.application.applicant.documents ?? []).map((doc) => {
-            let fileInfo = {};
-            try {
-                fileInfo = typeof doc.file_url === 'string'
-                    ? JSON.parse(doc.file_url)
-                    : (doc.file_url ?? {});
-            }
-            catch {
-                fileInfo = { url: doc.file_url };
-            }
-            return {
-                document_id: doc.document_id ?? doc.applicant_document_id,
-                document_type: doc.document_type,
-                document_name: fileInfo.originalFileName ?? doc.document_type?.replace(/_/g, ' ') ?? 'Document',
-                file_url: fileInfo.url ?? null,
-                mime_type: fileInfo.mimeType ?? null,
-                size: fileInfo.size ?? null,
-                send_to_candidate: fileInfo.sendToCandidate ?? false,
-                created_at: doc.created_at,
-            };
-        });
-        // ── Safely parse Json[] fields ────────────────────────────────────────────
-        const parseJson = (v) => {
-            try {
-                if (Array.isArray(v))
-                    return v;
-                if (typeof v === 'string')
-                    return JSON.parse(v);
-                return [];
-            }
-            catch {
-                return [];
-            }
-        };
-        return (0, response_1.sendSuccess)(res, {
-            assignment: {
-                assignment_id: assignment.assignment_id,
-                application_id: assignment.application_id,
-                start_date: assignment.start_date,
-                end_date: assignment.end_date,
-                employment_type: assignment.employment_type,
-                workers_comp_code: assignment.workers_comp_code ?? null,
-                workers_comp_codes: parseJson(assignment.workers_comp_codes),
-                company_codes: parseJson(assignment.company_codes),
-                created_at: assignment.created_at,
-            },
-            applicant: {
-                applicant_id: assignment.application.applicant.applicant_id,
-                full_name: assignment.application.applicant.full_name,
-                status: assignment.application.applicant.status,
-                contact: assignment.application.applicant.contact,
-            },
-            job: {
-                job_id: assignment.application.job.job_id,
-                job_title: assignment.application.job.job_title,
-                location: assignment.application.job.location ?? null,
-                organization: assignment.application.job.organization,
-                rates: assignment.application.job.job_rates?.[0] ?? null,
-            },
-            documents,
-        });
-    }
-    catch (err) {
-        console.error('Error fetching assignment details:', err);
-        return (0, response_1.sendError)(res, 'Failed to fetch assignment details', 500);
-    }
-};
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1376,6 +1257,5 @@ exports.pipelineController = {
     getPipelineByInterviewStatus,
     searchPipelinedApplicants,
     uploadOnboardingDocs: exports.uploadOnboardingDocs,
-    getAssignmentDetails
 };
 //# sourceMappingURL=pipelineController.js.map

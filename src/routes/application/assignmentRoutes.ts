@@ -1,7 +1,5 @@
 import { Router } from 'express';
 import { assignmentController } from '../../controllers/application/assignmentController';
-import { pipelineController } from '../../controllers/application/pipelineController';
-import { pipeline } from 'node:stream';
 
 const router = Router();
 
@@ -17,6 +15,7 @@ const router = Router();
  * - GET    /api/assignments/employment-type/:type    - Get assignments by employment type
  * - GET    /api/assignments/application/:applicationId - Get assignment by application ID
  * - GET    /api/assignments/:id                      - Get assignment by ID
+ * - GET    /api/assignments/:assignmentId/documents/:documentId/view - Stream/view an applicant document
  * - POST   /api/assignments                          - Create new assignment
  * - PATCH  /api/assignments/:id                      - Update assignment
  * - DELETE /api/assignments/:id                      - Delete assignment
@@ -28,8 +27,11 @@ const router = Router();
  * - active_only: Filter for active assignments only (for GET all)
  */
 
+router.get('/:assignmentId/documents/:documentId/view',     assignmentController.viewAssignmentDocument);
+router.get('/:assignmentId/documents/:documentId/download', assignmentController.downloadAssignmentDocument);
+
 // onboarding details endpoint - must come before :id route
-router.get('/:assignmentId/details', pipelineController.getAssignmentDetails);
+router.get('/:assignmentId/details', assignmentController.getAssignmentDetails);
 
 
 // Statistics endpoint - must come before :id route

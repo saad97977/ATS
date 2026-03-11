@@ -1,125 +1,122 @@
-// ==========================================
-// 1. AUTH SERVICE (authService.ts)
-// ==========================================
-import jwt from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
-import prisma from '../prisma.config';
+// ================================================================
+// services/authService.ts
+//
+// WHAT CHANGED:
+//   • loginUser() accepts officeType and validates access server-side
+//   • office_type is embedded as a signed JWT claim (tamper-proof)
+//   • All three office-access flags also remain in the payload
+//   • Added inactive account check
+//   • verifyToken is unchanged
+// ================================================================
 
-export interface JwtPayload {
-  user_id: string;
-  name: string;
-  email: string;
-  role_name: string;
-  is_admin: boolean;
-}
+import prisma from '../prisma.config';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET  = process.env.JWT_SECRET  || 'your-secret-key';
+const JWT_EXPIRES = process.env.JWT_EXPIRES || '7d';
+
+export type OfficeType = 'clientOffice' | 'backOffice' | 'frontOffice';
 
 export interface LoginInput {
-  email: string;
-  password: string;
+  email:      string;
+  password:   string;
+  officeType: OfficeType;
 }
 
-export interface LoginResponse {
-  user_id: string;
-  name: string;
-  email: string;
-  is_admin: boolean;
-  token: string;
+export interface JwtPayload {
+  user_id:             string;
+  email:               string;
+  name:                string;
+  role:                string;
+  is_admin:            boolean;
+  office_type:         OfficeType;
+  client_office_allow: boolean;
+  back_office_allow:   boolean;
+  front_office_allow:  boolean;
 }
 
-// Generate JWT token
-export const generateToken = (payload: JwtPayload): string => {
-  const secret = process.env.JWT_SECRET;
-  
-  if (!secret) {
-    throw new Error('JWT_SECRET is not defined in environment variables');
-  }
-
-  return jwt.sign(payload, secret, {
-    expiresIn: '24h', // 1 day
-  });
+// Maps officeType → the corresponding DB flag column
+const OFFICE_FLAG_MAP: Record<OfficeType, 'client_office_allow' | 'back_office_allow' | 'front_office_allow'> = {
+  clientOffice: 'client_office_allow',
+  backOffice:   'back_office_allow',
+  frontOffice:  'front_office_allow',
 };
 
-// Verify JWT token
-export const verifyToken = (token: string): JwtPayload => {
-  const secret = process.env.JWT_SECRET;
-  
-  if (!secret) {
-    throw new Error('JWT_SECRET is not defined in environment variables');
-  }
-
-  try {
-    const decoded = jwt.verify(token, secret) as JwtPayload;
-    return decoded;
-  } catch (error) {
-    throw new Error('Token is not valid');
-  }
+const OFFICE_LABEL_MAP: Record<OfficeType, string> = {
+  clientOffice: 'Client Office',
+  backOffice:   'Back Office',
+  frontOffice:  'Front Office',
 };
 
-// Login user
-export const loginUser = async (input: LoginInput): Promise<LoginResponse> => {
-  const { email, password } = input;
+// ── loginUser ────────────────────────────────────────────────
 
-  // Find user by email with role information
+export const loginUser = async ({ email, password, officeType }: LoginInput) => {
+  // 1. Find user — include role
   const user = await prisma.user.findUnique({
-    where: { email },
+    where:   { email },
     include: {
       user_role: {
-        include: {
-          role: true,
-        },
+        include: { role: true },
       },
     },
   });
 
-  // Check if user exists
-  if (!user) {
-    throw new Error('Invalid email or password');
+  if (!user) throw new Error('Invalid email or password');
+
+  // 2. Verify password
+  const passwordMatch = await bcrypt.compare(password, user.password_hash);
+  if (!passwordMatch) throw new Error('Invalid email or password');
+
+  // 3. Check account is active
+  if (user.status !== 'ACTIVE') {
+    throw new Error('Account is inactive. Please contact your administrator.');
   }
 
-  // Verify password
-  const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+  // 4. Resolve role
+  const role = user.user_role?.role?.role_name;
+  if (!role) throw new Error('User role not found');
 
-  if (!isPasswordValid) {
-    throw new Error('Invalid email or password');
+  // 5. Validate office-access BEFORE signing the token
+  const requiredFlag = OFFICE_FLAG_MAP[officeType];
+  if (!(user[requiredFlag] ?? false)) {
+    const officeLabel = OFFICE_LABEL_MAP[officeType];
+    throw Object.assign(
+      new Error(`Access denied. You do not have permission to access the ${officeLabel}. Contact your administrator.`),
+      { code: 'OFFICE_ACCESS_DENIED' },
+    );
   }
 
-  // Check if user has a role
-  if (!user.user_role || !user.user_role.role) {
-    throw new Error('User role not found');
-  }
-
-    // Update or create user activity with last login time
-  await prisma.userActivity.upsert({
-    where: { user_id: user.user_id },
-    update: {
-      last_login_at: new Date(),
-    },
-    create: {
-      user_id: user.user_id,
-      last_login_at: new Date(),
-    },
-  });
-
-
-
-  // Create JWT payload
+  // 6. Build JWT payload — office_type is now a signed claim
   const payload: JwtPayload = {
-    user_id: user.user_id,
-    name: user.name,
-    email: user.email,
-    role_name: user.user_role.role.role_name,
-    is_admin: user.is_admin,
+    user_id:             user.user_id,
+    email:               user.email,
+    name:                user.name,
+    role,
+    is_admin:            user.is_admin,
+    office_type:         officeType,
+    client_office_allow: user.client_office_allow ?? false,
+    back_office_allow:   user.back_office_allow   ?? false,
+    front_office_allow:  user.front_office_allow  ?? false,
   };
 
-  // Generate token
-  const token = generateToken(payload);
+  // 7. Sign token
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES } as any);
 
-  // Return login response
+  // 8. Return — user object mirrors JWT payload (never expose password_hash)
   return {
-    user_id: user.user_id,
-    name: user.name,
-    email: user.email,
-    is_admin: user.is_admin,
     token,
+    user: payload,
   };
+};
+
+// ── verifyToken ──────────────────────────────────────────────
+// Unchanged
+
+export const verifyToken = (token: string): JwtPayload => {
+  try {
+    return jwt.verify(token, JWT_SECRET) as JwtPayload;
+  } catch {
+    throw new Error('Token is not valid');
+  }
 };

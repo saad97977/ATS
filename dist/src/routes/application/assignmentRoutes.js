@@ -2,7 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const assignmentController_1 = require("../../controllers/application/assignmentController");
-const pipelineController_1 = require("../../controllers/application/pipelineController");
 const router = (0, express_1.Router)();
 /**
  * Assignment Routes
@@ -16,6 +15,7 @@ const router = (0, express_1.Router)();
  * - GET    /api/assignments/employment-type/:type    - Get assignments by employment type
  * - GET    /api/assignments/application/:applicationId - Get assignment by application ID
  * - GET    /api/assignments/:id                      - Get assignment by ID
+ * - GET    /api/assignments/:assignmentId/documents/:documentId/view - Stream/view an applicant document
  * - POST   /api/assignments                          - Create new assignment
  * - PATCH  /api/assignments/:id                      - Update assignment
  * - DELETE /api/assignments/:id                      - Delete assignment
@@ -26,8 +26,10 @@ const router = (0, express_1.Router)();
  * - employment_type: Filter by W2 or CONTRACTOR_1099 (for GET all)
  * - active_only: Filter for active assignments only (for GET all)
  */
+router.get('/:assignmentId/documents/:documentId/view', assignmentController_1.assignmentController.viewAssignmentDocument);
+router.get('/:assignmentId/documents/:documentId/download', assignmentController_1.assignmentController.downloadAssignmentDocument);
 // onboarding details endpoint - must come before :id route
-router.get('/:assignmentId/details', pipelineController_1.pipelineController.getAssignmentDetails);
+router.get('/:assignmentId/details', assignmentController_1.assignmentController.getAssignmentDetails);
 // Statistics endpoint - must come before :id route
 router.get('/stats', assignmentController_1.assignmentController.getAssignmentStats);
 // Active assignments endpoint - must come before :id route

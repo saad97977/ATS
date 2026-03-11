@@ -1,22 +1,23 @@
-export interface JwtPayload {
-    user_id: string;
-    name: string;
-    email: string;
-    role_name: string;
-    is_admin: boolean;
-}
+export type OfficeType = 'clientOffice' | 'backOffice' | 'frontOffice';
 export interface LoginInput {
     email: string;
     password: string;
+    officeType: OfficeType;
 }
-export interface LoginResponse {
+export interface JwtPayload {
     user_id: string;
-    name: string;
     email: string;
+    name: string;
+    role: string;
     is_admin: boolean;
-    token: string;
+    office_type: OfficeType;
+    client_office_allow: boolean;
+    back_office_allow: boolean;
+    front_office_allow: boolean;
 }
-export declare const generateToken: (payload: JwtPayload) => string;
+export declare const loginUser: ({ email, password, officeType }: LoginInput) => Promise<{
+    token: string;
+    user: JwtPayload;
+}>;
 export declare const verifyToken: (token: string) => JwtPayload;
-export declare const loginUser: (input: LoginInput) => Promise<LoginResponse>;
 //# sourceMappingURL=authService.d.ts.map

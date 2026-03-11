@@ -23,6 +23,11 @@ model User {
   created_at    DateTime   @default(now())
   updated_at    DateTime   @updatedAt
 
+  // ── Office-access flags (nullable = safe for existing rows) ──
+  client_office_allow Boolean?  @default(true)
+  back_office_allow   Boolean?  @default(true)
+  front_office_allow  Boolean?  @default(true)
+
   // Relations
   user_role            UserRole?
   user_activity        UserActivity?
