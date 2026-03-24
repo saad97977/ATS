@@ -173,6 +173,7 @@ const getOrganizationById = async (req, res) => {
         const organization = await prisma_config_1.default.organization.findUnique({
             where: { organization_id: id },
             include: {
+                // Base Relations
                 created_by: {
                     select: {
                         user_id: true,
@@ -189,21 +190,38 @@ const getOrganizationById = async (req, res) => {
                         },
                     },
                 },
+                representative: {
+                    select: {
+                        user_id: true,
+                        name: true,
+                        email: true,
+                    },
+                },
+                // Organization Details (from update schema)
                 addresses: true,
                 accounting: true,
                 company_offices: true,
-                contacts: true,
-                organization_users: {
-                    select: {
-                        organization_user_id: true,
-                        division: true,
-                        department: true,
-                        title: true,
-                        work_phone: true,
-                        user: {
+                // Contacts with representative details
+                contacts: {
+                    include: {
+                        representative: {
                             select: {
+                                user_id: true,
                                 name: true,
                                 email: true,
+                            },
+                        },
+                    },
+                },
+                // Organization Users with User details
+                organization_users: {
+                    include: {
+                        user: {
+                            select: {
+                                user_id: true,
+                                name: true,
+                                email: true,
+                                status: true,
                             },
                         },
                     },
@@ -218,12 +236,14 @@ const getOrganizationById = async (req, res) => {
             ...organization,
             organization_users: organization.organization_users.map((ou) => ({
                 organization_user_id: ou.organization_user_id,
+                user_id: ou.user?.user_id || null,
                 division: ou.division,
                 department: ou.department,
                 title: ou.title,
                 work_phone: ou.work_phone,
                 name: ou.user?.name || null,
                 email: ou.user?.email || null,
+                status: ou.user?.status || null,
             })),
         };
         return (0, response_1.sendSuccess)(res, formattedOrganization);
@@ -233,88 +253,126 @@ const getOrganizationById = async (req, res) => {
         return (0, response_1.sendError)(res, 'Failed to fetch organization', 500);
     }
 };
-/**
- * Organization Complete Update Controller
- * PATCH request to update Organization with all related data in a single transaction
- *
- * Updates:
- * - Organization (base fields)
- * - CompanyOffice(s) - create, update, or delete
- * - OrganizationAccounting(s) - create, update, or delete
- * - OrganizationAddress(es) - create, update, or delete
- * - OrganizationContact(s) - create, update, or delete
- */
-// Validation Schemas for nested updates
+// ============================================
+// VALIDATION SCHEMAS
+// ============================================
 const companyOfficeUpdateSchema = zod_1.z.object({
-    company_office_id: zod_1.z.string().uuid().optional(), // If provided, update existing; if not, create new
-    office_name: zod_1.z.string().min(1, 'Office name is required').optional(),
-    city: zod_1.z.string().min(1, 'City is required').optional(),
-    state: zod_1.z.string().min(1, 'State is required').optional(),
-    country: zod_1.z.string().min(1, 'Country is required').optional(),
+    company_office_id: zod_1.z.string().uuid().optional(),
+    office_name: zod_1.z.string().min(1).optional(),
+    city: zod_1.z.string().min(1).optional(),
+    state: zod_1.z.string().min(1).optional(),
+    country: zod_1.z.string().min(1).optional(),
     type: zod_1.z.enum(['REMOTE', 'HYBRID', 'ONSITE']).optional(),
-    address: zod_1.z.string().min(1, 'Address is required').optional(),
+    address: zod_1.z.string().min(1).optional(),
     is_primary: zod_1.z.boolean().optional(),
-    _action: zod_1.z.enum(['create', 'update', 'delete']).optional(), // Explicit action
+    _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
 });
 const organizationAccountingUpdateSchema = zod_1.z.object({
     organization_accounting_id: zod_1.z.string().uuid().optional(),
-    account_type: zod_1.z.string().min(1, 'Account type is required').optional(),
-    bank_name: zod_1.z.string().min(1, 'Bank name is required').optional(),
-    account_number: zod_1.z.string().min(1, 'Account number is required').optional(),
-    routing_number: zod_1.z.string().min(1, 'Routing number is required').optional(),
-    country: zod_1.z.string().min(1, 'Country is required').optional(),
+    account_type: zod_1.z.string().min(1).optional(),
+    bank_name: zod_1.z.string().min(1).optional(),
+    account_number: zod_1.z.string().min(1).optional(),
+    routing_number: zod_1.z.string().min(1).optional(),
+    country: zod_1.z.string().min(1).optional(),
     _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
 });
 const organizationAddressUpdateSchema = zod_1.z.object({
     organization_address_id: zod_1.z.string().uuid().optional(),
     address_type: zod_1.z.enum(['WORKSITE', 'BILLING']).optional(),
-    address1: zod_1.z.string().min(1, 'Address line 1 is required').optional(),
+    address1: zod_1.z.string().min(1).optional(),
     address2: zod_1.z.string().optional(),
-    city: zod_1.z.string().min(1, 'City is required').optional(),
-    state: zod_1.z.string().min(1, 'State is required').optional(),
-    zip: zod_1.z.string().min(1, 'ZIP code is required').optional(),
+    city: zod_1.z.string().min(1).optional(),
+    state: zod_1.z.string().min(1).optional(),
+    zip: zod_1.z.string().min(1).optional(),
     phone: zod_1.z.string().optional(),
     _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
 });
 const organizationContactUpdateSchema = zod_1.z.object({
     organization_contact_id: zod_1.z.string().uuid().optional(),
-    name: zod_1.z.string().min(1, 'Contact name is required').optional(),
-    email: zod_1.z.string().email('Valid email is required').optional(),
-    phone: zod_1.z.string().min(1, 'Phone number is required').optional(),
+    // Original fields
+    name: zod_1.z.string().min(1).optional(),
+    email: zod_1.z.string().email().optional(),
+    phone: zod_1.z.string().min(1).optional(),
     contact_type: zod_1.z.enum(['PRIMARY', 'EMERGENCY', 'BILLING']).optional(),
+    // New fields
+    first_name: zod_1.z.string().optional(),
+    last_name: zod_1.z.string().optional(),
+    contact_title: zod_1.z.string().optional(),
+    address: zod_1.z.string().optional(),
+    mobile_phone: zod_1.z.string().optional(),
+    fax: zod_1.z.string().optional(),
+    city: zod_1.z.string().optional(),
+    state: zod_1.z.string().optional(),
+    zip: zod_1.z.string().optional(),
+    division: zod_1.z.string().optional(),
+    department: zod_1.z.string().optional(),
+    title: zod_1.z.string().optional(),
+    representative_id: zod_1.z.string().uuid().optional().nullable(),
+    last_contacted_at: zod_1.z.string().datetime().optional().nullable(),
+    _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
+});
+const organizationUserUpdateSchema = zod_1.z.object({
+    organization_user_id: zod_1.z.string().uuid().optional(),
+    user_id: zod_1.z.string().uuid().optional(),
+    division: zod_1.z.string().optional(),
+    department: zod_1.z.string().optional(),
+    title: zod_1.z.string().optional(),
+    work_phone: zod_1.z.string().optional(),
     _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
 });
 const updateOrganizationCompleteSchema = zod_1.z.object({
-    // Organization base fields (all optional for PATCH)
-    name: zod_1.z.string().min(1, 'Organization name is required').optional(),
-    website: zod_1.z.string().optional().or(zod_1.z.literal('')).or(zod_1.z.string().url('Valid URL is required')),
-    status: zod_1.z.enum(['ACTIVE', 'INACTIVE']).optional(),
+    // Original fields
+    name: zod_1.z.string().min(1).optional(),
+    website: zod_1.z.string().optional().or(zod_1.z.literal('')).or(zod_1.z.string().url()),
+    status: zod_1.z.enum([
+        'ACTIVE', 'INACTIVE', 'CREDIT_HOLD', 'DELETE',
+        'DO_NOT_SERVICE', 'FORMER_CLIENT', 'ON_HOLD', 'PROSPECT',
+    ]).optional(),
     phone: zod_1.z.string().optional(),
-    // Related entities arrays
+    // New Organization fields
+    fax: zod_1.z.string().optional().nullable(),
+    zip: zod_1.z.string().optional().nullable(),
+    industry: zod_1.z.string().optional().nullable(),
+    revenue: zod_1.z.string().optional().nullable(),
+    employee_count: zod_1.z.number().int().positive().optional().nullable(),
+    last_contacted_at: zod_1.z.string().datetime().optional().nullable(),
+    representative_id: zod_1.z.string().uuid().optional().nullable(),
+    branch_region: zod_1.z.string().optional().nullable(),
+    branch_name: zod_1.z.string().optional().nullable(),
+    default_ot_rule: zod_1.z.string().optional().nullable(),
+    contract_markup: zod_1.z.number().optional().nullable(),
+    permanent_markup: zod_1.z.number().optional().nullable(),
+    overview: zod_1.z.string().optional().nullable(),
+    custom_company_id: zod_1.z.string().optional().nullable(),
+    org_branch_division: zod_1.z.enum([
+        'SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN',
+        'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC',
+    ]).optional().nullable(),
+    // Related entities
     company_offices: zod_1.z.array(companyOfficeUpdateSchema).optional(),
     accounting: zod_1.z.array(organizationAccountingUpdateSchema).optional(),
     addresses: zod_1.z.array(organizationAddressUpdateSchema).optional(),
     contacts: zod_1.z.array(organizationContactUpdateSchema).optional(),
+    organization_users: zod_1.z.array(organizationUserUpdateSchema).optional(),
 });
+// ============================================
+// CONTROLLER
+// ============================================
 /**
  * PATCH /api/organizations/:id
  * Updates organization with all related data in a single transaction
  *
- * Usage patterns:
- * 1. Update organization base fields only: { name: "New Name" }
- * 2. Create new nested records: { company_offices: [{ office_name: "...", _action: "create" }] }
- * 3. Update existing nested records: { company_offices: [{ company_office_id: "uuid", office_name: "...", _action: "update" }] }
- * 4. Delete nested records: { company_offices: [{ company_office_id: "uuid", _action: "delete" }] }
- * 5. Mixed operations: Combine create, update, delete in same request
+ * _action patterns per nested item:
+ *   "create" — insert new record
+ *   "update" — patch existing record (requires the PK field)
+ *   "delete" — remove record (requires the PK field)
+ *   omitted  — treated as "create" if no PK, "update" if PK present
  */
-// organization user is yet to add in this complete update controller
 const updateOrganizationComplete = async (req, res) => {
     try {
         const { id } = req.params;
-        if (!id) {
+        if (!id)
             return (0, response_1.sendError)(res, 'Organization ID is required', 400);
-        }
-        // Validate request body
         const validation = updateOrganizationCompleteSchema.safeParse(req.body);
         if (!validation.success) {
             const errors = validation.error.issues.map((err) => ({
@@ -323,8 +381,8 @@ const updateOrganizationComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { name, website, status, phone, company_offices, accounting, addresses, contacts } = validation.data;
-        // Check if organization exists
+        const { name, website, status, phone, fax, zip, industry, revenue, employee_count, last_contacted_at, representative_id, branch_region, branch_name, default_ot_rule, contract_markup, permanent_markup, overview, custom_company_id, org_branch_division, company_offices, accounting, addresses, contacts, organization_users, } = validation.data;
+        // Check organization exists
         const existingOrg = await prisma_config_1.default.organization.findUnique({
             where: { organization_id: id },
             include: {
@@ -332,105 +390,130 @@ const updateOrganizationComplete = async (req, res) => {
                 accounting: true,
                 addresses: true,
                 contacts: true,
+                organization_users: true,
             },
         });
-        if (!existingOrg) {
+        if (!existingOrg)
             return (0, response_1.sendError)(res, 'Organization not found', 404);
-        }
-        // Check for duplicate organization name (if updating name)
+        // Duplicate name check
         if (name && name !== existingOrg.name) {
             const duplicateName = await prisma_config_1.default.organization.findFirst({
-                where: {
-                    name,
-                    organization_id: { not: id },
-                },
+                where: { name, organization_id: { not: id } },
             });
             if (duplicateName) {
                 return (0, response_1.sendError)(res, 'Organization with this name already exists', 409, [{
-                        field: 'name',
-                        message: 'An organization with this name already exists',
+                        field: 'name', message: 'An organization with this name already exists',
                     }]);
             }
         }
-        // Validate: Only one primary office allowed across all offices
+        // Duplicate custom_company_id check
+        if (custom_company_id && custom_company_id !== existingOrg.custom_company_id) {
+            const duplicateCustomId = await prisma_config_1.default.organization.findFirst({
+                where: { custom_company_id, organization_id: { not: id } },
+            });
+            if (duplicateCustomId) {
+                return (0, response_1.sendError)(res, 'Company ID already in use', 409, [{
+                        field: 'custom_company_id', message: 'This Company ID is already in use',
+                    }]);
+            }
+        }
+        // Representative exists check
+        if (representative_id) {
+            const repExists = await prisma_config_1.default.user.findFirst({ where: { user_id: representative_id } });
+            if (!repExists)
+                return (0, response_1.sendError)(res, 'Representative user not found', 404);
+        }
+        // Primary office validation
         if (company_offices && company_offices.length > 0) {
-            const newPrimaryOffices = company_offices.filter(office => office.is_primary === true && office._action !== 'delete');
-            const existingPrimaryOffices = existingOrg.company_offices.filter(office => office.is_primary &&
-                !company_offices.some(co => co.company_office_id === office.company_office_id && co._action === 'delete'));
-            const totalPrimaryCount = newPrimaryOffices.length +
-                existingPrimaryOffices.filter(epo => !company_offices.some(co => co.company_office_id === epo.company_office_id && co.is_primary === false)).length;
-            if (totalPrimaryCount > 1) {
+            const incomingPrimary = company_offices.filter(o => o.is_primary === true && o._action !== 'delete');
+            const survivingExistingPrimary = existingOrg.company_offices.filter(eo => eo.is_primary &&
+                !company_offices.some(co => co.company_office_id === eo.company_office_id &&
+                    (co._action === 'delete' || co.is_primary === false)));
+            if (incomingPrimary.length + survivingExistingPrimary.length > 1) {
                 return (0, response_1.sendError)(res, 'Only one company office can be marked as primary', 400);
             }
         }
-        // Validate: At least one PRIMARY contact must remain
+        // Primary contact validation
         if (contacts && contacts.length > 0) {
-            const existingPrimaryContacts = existingOrg.contacts.filter(contact => contact.contact_type === 'PRIMARY' &&
-                !contacts.some(c => c.organization_contact_id === contact.organization_contact_id && c._action === 'delete'));
-            const newPrimaryContacts = contacts.filter(contact => contact.contact_type === 'PRIMARY' && contact._action !== 'delete');
-            if (existingPrimaryContacts.length === 0 && newPrimaryContacts.length === 0) {
+            const survivingExistingPrimary = existingOrg.contacts.filter(ec => ec.contact_type === 'PRIMARY' &&
+                !contacts.some(c => c.organization_contact_id === ec.organization_contact_id && c._action === 'delete'));
+            const incomingPrimary = contacts.filter(c => c.contact_type === 'PRIMARY' && c._action !== 'delete');
+            if (survivingExistingPrimary.length === 0 && incomingPrimary.length === 0) {
                 return (0, response_1.sendError)(res, 'At least one PRIMARY contact must exist', 400);
             }
         }
-        // Perform update in a transaction
+        // ── Transaction ──────────────────────────────────────────
         const result = await prisma_config_1.default.$transaction(async (tx) => {
             // 1. Update Organization base fields
-            const organizationUpdateData = {};
+            const orgData = {};
             if (name !== undefined)
-                organizationUpdateData.name = name;
+                orgData.name = name;
             if (website !== undefined)
-                organizationUpdateData.website = website;
+                orgData.website = website;
             if (status !== undefined)
-                organizationUpdateData.status = status;
+                orgData.status = status;
             if (phone !== undefined)
-                organizationUpdateData.phone = phone;
-            const updatedOrganization = Object.keys(organizationUpdateData).length > 0
-                ? await tx.organization.update({
-                    where: { organization_id: id },
-                    data: organizationUpdateData,
-                })
+                orgData.phone = phone;
+            if (fax !== undefined)
+                orgData.fax = fax;
+            if (zip !== undefined)
+                orgData.zip = zip;
+            if (industry !== undefined)
+                orgData.industry = industry;
+            if (revenue !== undefined)
+                orgData.revenue = revenue;
+            if (employee_count !== undefined)
+                orgData.employee_count = employee_count;
+            if (last_contacted_at !== undefined)
+                orgData.last_contacted_at = last_contacted_at ? new Date(last_contacted_at) : null;
+            if (representative_id !== undefined)
+                orgData.representative_id = representative_id;
+            if (branch_region !== undefined)
+                orgData.branch_region = branch_region;
+            if (branch_name !== undefined)
+                orgData.branch_name = branch_name;
+            if (default_ot_rule !== undefined)
+                orgData.default_ot_rule = default_ot_rule;
+            if (contract_markup !== undefined)
+                orgData.contract_markup = contract_markup;
+            if (permanent_markup !== undefined)
+                orgData.permanent_markup = permanent_markup;
+            if (overview !== undefined)
+                orgData.overview = overview;
+            if (custom_company_id !== undefined)
+                orgData.custom_company_id = custom_company_id;
+            if (org_branch_division !== undefined)
+                orgData.org_branch_division = org_branch_division;
+            const updatedOrganization = Object.keys(orgData).length > 0
+                ? await tx.organization.update({ where: { organization_id: id }, data: orgData })
                 : existingOrg;
-            // 2. Handle Company Offices
-            const officeResults = {
-                created: [],
-                updated: [],
-                deleted: [],
-            };
+            // 2. Company Offices
+            const officeResults = { created: [], updated: [], deleted: [] };
             if (company_offices && company_offices.length > 0) {
                 for (const office of company_offices) {
                     if (office._action === 'delete' && office.company_office_id) {
-                        // Delete office
-                        const deleted = await tx.companyOffice.delete({
-                            where: { company_office_id: office.company_office_id },
-                        });
-                        officeResults.deleted.push(deleted);
+                        officeResults.deleted.push(await tx.companyOffice.delete({ where: { company_office_id: office.company_office_id } }));
                     }
                     else if (office._action === 'update' && office.company_office_id) {
-                        // Update existing office
-                        const updateData = {};
+                        const d = {};
                         if (office.office_name !== undefined)
-                            updateData.office_name = office.office_name;
+                            d.office_name = office.office_name;
                         if (office.city !== undefined)
-                            updateData.city = office.city;
+                            d.city = office.city;
                         if (office.state !== undefined)
-                            updateData.state = office.state;
+                            d.state = office.state;
                         if (office.country !== undefined)
-                            updateData.country = office.country;
+                            d.country = office.country;
                         if (office.type !== undefined)
-                            updateData.type = office.type;
+                            d.type = office.type;
                         if (office.address !== undefined)
-                            updateData.address = office.address;
+                            d.address = office.address;
                         if (office.is_primary !== undefined)
-                            updateData.is_primary = office.is_primary;
-                        const updated = await tx.companyOffice.update({
-                            where: { company_office_id: office.company_office_id },
-                            data: updateData,
-                        });
-                        officeResults.updated.push(updated);
+                            d.is_primary = office.is_primary;
+                        officeResults.updated.push(await tx.companyOffice.update({ where: { company_office_id: office.company_office_id }, data: d }));
                     }
-                    else if (office._action === 'create' || !office.company_office_id) {
-                        // Create new office
-                        const created = await tx.companyOffice.create({
+                    else {
+                        officeResults.created.push(await tx.companyOffice.create({
                             data: {
                                 organization_id: id,
                                 office_name: office.office_name,
@@ -441,45 +524,33 @@ const updateOrganizationComplete = async (req, res) => {
                                 address: office.address,
                                 is_primary: office.is_primary || false,
                             },
-                        });
-                        officeResults.created.push(created);
+                        }));
                     }
                 }
             }
-            // 3. Handle Organization Accounting
-            const accountingResults = {
-                created: [],
-                updated: [],
-                deleted: [],
-            };
+            // 3. Accounting
+            const accountingResults = { created: [], updated: [], deleted: [] };
             if (accounting && accounting.length > 0) {
                 for (const acc of accounting) {
                     if (acc._action === 'delete' && acc.organization_accounting_id) {
-                        const deleted = await tx.organizationAccounting.delete({
-                            where: { organization_accounting_id: acc.organization_accounting_id },
-                        });
-                        accountingResults.deleted.push(deleted);
+                        accountingResults.deleted.push(await tx.organizationAccounting.delete({ where: { organization_accounting_id: acc.organization_accounting_id } }));
                     }
                     else if (acc._action === 'update' && acc.organization_accounting_id) {
-                        const updateData = {};
+                        const d = {};
                         if (acc.account_type !== undefined)
-                            updateData.account_type = acc.account_type;
+                            d.account_type = acc.account_type;
                         if (acc.bank_name !== undefined)
-                            updateData.bank_name = acc.bank_name;
+                            d.bank_name = acc.bank_name;
                         if (acc.account_number !== undefined)
-                            updateData.account_number = acc.account_number;
+                            d.account_number = acc.account_number;
                         if (acc.routing_number !== undefined)
-                            updateData.routing_number = acc.routing_number;
+                            d.routing_number = acc.routing_number;
                         if (acc.country !== undefined)
-                            updateData.country = acc.country;
-                        const updated = await tx.organizationAccounting.update({
-                            where: { organization_accounting_id: acc.organization_accounting_id },
-                            data: updateData,
-                        });
-                        accountingResults.updated.push(updated);
+                            d.country = acc.country;
+                        accountingResults.updated.push(await tx.organizationAccounting.update({ where: { organization_accounting_id: acc.organization_accounting_id }, data: d }));
                     }
-                    else if (acc._action === 'create' || !acc.organization_accounting_id) {
-                        const created = await tx.organizationAccounting.create({
+                    else {
+                        accountingResults.created.push(await tx.organizationAccounting.create({
                             data: {
                                 organization_id: id,
                                 account_type: acc.account_type,
@@ -488,49 +559,37 @@ const updateOrganizationComplete = async (req, res) => {
                                 routing_number: acc.routing_number,
                                 country: acc.country,
                             },
-                        });
-                        accountingResults.created.push(created);
+                        }));
                     }
                 }
             }
-            // 4. Handle Organization Addresses
-            const addressResults = {
-                created: [],
-                updated: [],
-                deleted: [],
-            };
+            // 4. Addresses
+            const addressResults = { created: [], updated: [], deleted: [] };
             if (addresses && addresses.length > 0) {
                 for (const addr of addresses) {
                     if (addr._action === 'delete' && addr.organization_address_id) {
-                        const deleted = await tx.organizationAddress.delete({
-                            where: { organization_address_id: addr.organization_address_id },
-                        });
-                        addressResults.deleted.push(deleted);
+                        addressResults.deleted.push(await tx.organizationAddress.delete({ where: { organization_address_id: addr.organization_address_id } }));
                     }
                     else if (addr._action === 'update' && addr.organization_address_id) {
-                        const updateData = {};
+                        const d = {};
                         if (addr.address_type !== undefined)
-                            updateData.address_type = addr.address_type;
+                            d.address_type = addr.address_type;
                         if (addr.address1 !== undefined)
-                            updateData.address1 = addr.address1;
+                            d.address1 = addr.address1;
                         if (addr.address2 !== undefined)
-                            updateData.address2 = addr.address2;
+                            d.address2 = addr.address2;
                         if (addr.city !== undefined)
-                            updateData.city = addr.city;
+                            d.city = addr.city;
                         if (addr.state !== undefined)
-                            updateData.state = addr.state;
+                            d.state = addr.state;
                         if (addr.zip !== undefined)
-                            updateData.zip = addr.zip;
+                            d.zip = addr.zip;
                         if (addr.phone !== undefined)
-                            updateData.phone = addr.phone;
-                        const updated = await tx.organizationAddress.update({
-                            where: { organization_address_id: addr.organization_address_id },
-                            data: updateData,
-                        });
-                        addressResults.updated.push(updated);
+                            d.phone = addr.phone;
+                        addressResults.updated.push(await tx.organizationAddress.update({ where: { organization_address_id: addr.organization_address_id }, data: d }));
                     }
-                    else if (addr._action === 'create' || !addr.organization_address_id) {
-                        const created = await tx.organizationAddress.create({
+                    else {
+                        addressResults.created.push(await tx.organizationAddress.create({
                             data: {
                                 organization_id: id,
                                 address_type: addr.address_type,
@@ -541,52 +600,116 @@ const updateOrganizationComplete = async (req, res) => {
                                 zip: addr.zip,
                                 phone: addr.phone,
                             },
-                        });
-                        addressResults.created.push(created);
+                        }));
                     }
                 }
             }
-            // 5. Handle Organization Contacts
-            const contactResults = {
-                created: [],
-                updated: [],
-                deleted: [],
-            };
+            // 5. Contacts (with new fields)
+            const contactResults = { created: [], updated: [], deleted: [] };
             if (contacts && contacts.length > 0) {
                 for (const contact of contacts) {
                     if (contact._action === 'delete' && contact.organization_contact_id) {
-                        const deleted = await tx.organizationContact.delete({
-                            where: { organization_contact_id: contact.organization_contact_id },
-                        });
-                        contactResults.deleted.push(deleted);
+                        contactResults.deleted.push(await tx.organizationContact.delete({ where: { organization_contact_id: contact.organization_contact_id } }));
                     }
                     else if (contact._action === 'update' && contact.organization_contact_id) {
-                        const updateData = {};
+                        const d = {};
                         if (contact.name !== undefined)
-                            updateData.name = contact.name;
+                            d.name = contact.name;
                         if (contact.email !== undefined)
-                            updateData.email = contact.email;
+                            d.email = contact.email;
                         if (contact.phone !== undefined)
-                            updateData.phone = contact.phone;
+                            d.phone = contact.phone;
                         if (contact.contact_type !== undefined)
-                            updateData.contact_type = contact.contact_type;
-                        const updated = await tx.organizationContact.update({
-                            where: { organization_contact_id: contact.organization_contact_id },
-                            data: updateData,
-                        });
-                        contactResults.updated.push(updated);
+                            d.contact_type = contact.contact_type;
+                        if (contact.first_name !== undefined)
+                            d.first_name = contact.first_name;
+                        if (contact.last_name !== undefined)
+                            d.last_name = contact.last_name;
+                        if (contact.contact_title !== undefined)
+                            d.contact_title = contact.contact_title;
+                        if (contact.address !== undefined)
+                            d.address = contact.address;
+                        if (contact.mobile_phone !== undefined)
+                            d.mobile_phone = contact.mobile_phone;
+                        if (contact.fax !== undefined)
+                            d.fax = contact.fax;
+                        if (contact.city !== undefined)
+                            d.city = contact.city;
+                        if (contact.state !== undefined)
+                            d.state = contact.state;
+                        if (contact.zip !== undefined)
+                            d.zip = contact.zip;
+                        if (contact.division !== undefined)
+                            d.division = contact.division;
+                        if (contact.department !== undefined)
+                            d.department = contact.department;
+                        if (contact.title !== undefined)
+                            d.title = contact.title;
+                        if (contact.representative_id !== undefined)
+                            d.representative_id = contact.representative_id;
+                        if (contact.last_contacted_at !== undefined)
+                            d.last_contacted_at = contact.last_contacted_at ? new Date(contact.last_contacted_at) : null;
+                        contactResults.updated.push(await tx.organizationContact.update({ where: { organization_contact_id: contact.organization_contact_id }, data: d }));
                     }
-                    else if (contact._action === 'create' || !contact.organization_contact_id) {
-                        const created = await tx.organizationContact.create({
+                    else {
+                        contactResults.created.push(await tx.organizationContact.create({
                             data: {
                                 organization_id: id,
                                 name: contact.name,
                                 email: contact.email,
                                 phone: contact.phone,
                                 contact_type: contact.contact_type,
+                                first_name: contact.first_name,
+                                last_name: contact.last_name,
+                                contact_title: contact.contact_title,
+                                address: contact.address,
+                                mobile_phone: contact.mobile_phone,
+                                fax: contact.fax,
+                                city: contact.city,
+                                state: contact.state,
+                                zip: contact.zip,
+                                division: contact.division,
+                                department: contact.department,
+                                title: contact.title,
+                                representative_id: contact.representative_id,
+                                last_contacted_at: contact.last_contacted_at
+                                    ? new Date(contact.last_contacted_at)
+                                    : undefined,
                             },
-                        });
-                        contactResults.created.push(created);
+                        }));
+                    }
+                }
+            }
+            // 6. Organization Users
+            const orgUserResults = { created: [], updated: [], deleted: [] };
+            if (organization_users && organization_users.length > 0) {
+                for (const ou of organization_users) {
+                    if (ou._action === 'delete' && ou.organization_user_id) {
+                        orgUserResults.deleted.push(await tx.organizationUser.delete({ where: { organization_user_id: ou.organization_user_id } }));
+                    }
+                    else if (ou._action === 'update' && ou.organization_user_id) {
+                        const d = {};
+                        if (ou.division !== undefined)
+                            d.division = ou.division;
+                        if (ou.department !== undefined)
+                            d.department = ou.department;
+                        if (ou.title !== undefined)
+                            d.title = ou.title;
+                        if (ou.work_phone !== undefined)
+                            d.work_phone = ou.work_phone;
+                        orgUserResults.updated.push(await tx.organizationUser.update({ where: { organization_user_id: ou.organization_user_id }, data: d }));
+                    }
+                    else {
+                        orgUserResults.created.push(await tx.organizationUser.create({
+                            data: {
+                                organization_id: id,
+                                user_id: ou.user_id,
+                                division: ou.division,
+                                department: ou.department,
+                                title: ou.title,
+                                work_phone: ou.work_phone,
+                            },
+                        }));
                     }
                 }
             }
@@ -596,26 +719,38 @@ const updateOrganizationComplete = async (req, res) => {
                 accounting: accountingResults,
                 addresses: addressResults,
                 contacts: contactResults,
+                organization_users: orgUserResults,
             };
         });
-        // Fetch complete updated organization data
+        // Fetch complete updated data
         const completeOrganization = await prisma_config_1.default.organization.findUnique({
             where: { organization_id: id },
             include: {
                 company_offices: true,
                 accounting: true,
                 addresses: true,
-                contacts: true,
-                created_by: {
-                    select: {
-                        user_id: true,
-                        name: true,
-                        email: true,
+                contacts: {
+                    include: {
+                        representative: {
+                            select: { user_id: true, name: true, email: true },
+                        },
                     },
+                },
+                organization_users: {
+                    include: {
+                        user: {
+                            select: { user_id: true, name: true, email: true, status: true },
+                        },
+                    },
+                },
+                created_by: {
+                    select: { user_id: true, name: true, email: true },
+                },
+                representative: {
+                    select: { user_id: true, name: true, email: true },
                 },
             },
         });
-        // ✅ UPDATE USER ACTIVITY - Log organization update
         await (0, activityService_1.updateUserActivity)(existingOrg.created_by_user_id, {
             action_type: 'UPDATE',
             entity_type: 'ORGANIZATION',
@@ -646,21 +781,22 @@ const updateOrganizationComplete = async (req, res) => {
                     updated: result.contacts.updated.length,
                     deleted: result.contacts.deleted.length,
                 },
+                organization_users: {
+                    created: result.organization_users.created.length,
+                    updated: result.organization_users.updated.length,
+                    deleted: result.organization_users.deleted.length,
+                },
             },
         });
     }
     catch (err) {
-        console.error('Error updating organization with complete data:', err);
-        // Handle Prisma errors
-        if (err.code === 'P2002') {
+        console.error('Error updating organization:', err);
+        if (err.code === 'P2002')
             return (0, response_1.sendError)(res, 'Duplicate entry found', 409);
-        }
-        if (err.code === 'P2003') {
+        if (err.code === 'P2003')
             return (0, response_1.sendError)(res, 'Related record not found', 404);
-        }
-        if (err.code === 'P2025') {
+        if (err.code === 'P2025')
             return (0, response_1.sendError)(res, 'Record to update not found', 404);
-        }
         return (0, response_1.sendError)(res, 'Failed to update organization', 500);
     }
 };

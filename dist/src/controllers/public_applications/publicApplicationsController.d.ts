@@ -51,7 +51,22 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
             website: string | null;
             phone: string | null;
             organization_id: string;
+            zip: string | null;
             last_updated_at: Date | null;
+            fax: string | null;
+            industry: string | null;
+            revenue: string | null;
+            employee_count: number | null;
+            last_contacted_at: Date | null;
+            representative_id: string | null;
+            branch_region: string | null;
+            branch_name: string | null;
+            default_ot_rule: string | null;
+            contract_markup: import("@prisma/client/runtime/library").Decimal | null;
+            permanent_markup: import("@prisma/client/runtime/library").Decimal | null;
+            overview: string | null;
+            custom_company_id: string | null;
+            org_branch_division: import(".prisma/client").$Enums.OrgBranchDivision | null;
         };
     } & {
         status: import(".prisma/client").$Enums.JobStatus;
