@@ -281,7 +281,7 @@ const organizationContactUpdateSchema = zod_1.z.object({
     name: zod_1.z.string().min(1, 'Contact name is required').optional(),
     email: zod_1.z.string().email('Valid email is required').optional(),
     phone: zod_1.z.string().min(1, 'Phone number is required').optional(),
-    contact_type: zod_1.z.enum(['PRIMARY', 'EMERGENCY']).optional(),
+    contact_type: zod_1.z.enum(['PRIMARY', 'EMERGENCY', 'BILLING']).optional(),
     _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
 });
 const updateOrganizationCompleteSchema = zod_1.z.object({

@@ -189,6 +189,17 @@ export declare const createJobSchema: z.ZodObject<{
     job_type: z.ZodEnum<{
         TEMPORARY: "TEMPORARY";
         PERMANENT: "PERMANENT";
+        CONSULTANT: "CONSULTANT";
+        CONTRACT: "CONTRACT";
+        HOURLY_FULL_TIME: "HOURLY_FULL_TIME";
+        INTERN: "INTERN";
+        PART_TIME: "PART_TIME";
+        REGULAR_FULL_TIME: "REGULAR_FULL_TIME";
+        SALARY: "SALARY";
+        TEMP_TO_HIRE: "TEMP_TO_HIRE";
+        TEMP_TO_PERM: "TEMP_TO_PERM";
+        EOR: "EOR";
+        DIRECT_HIRE: "DIRECT_HIRE";
     }>;
     location: z.ZodString;
     days_active: z.ZodOptional<z.ZodNumber>;
@@ -210,6 +221,17 @@ export declare const updateJobSchema: z.ZodObject<{
     job_type: z.ZodOptional<z.ZodEnum<{
         TEMPORARY: "TEMPORARY";
         PERMANENT: "PERMANENT";
+        CONSULTANT: "CONSULTANT";
+        CONTRACT: "CONTRACT";
+        HOURLY_FULL_TIME: "HOURLY_FULL_TIME";
+        INTERN: "INTERN";
+        PART_TIME: "PART_TIME";
+        REGULAR_FULL_TIME: "REGULAR_FULL_TIME";
+        SALARY: "SALARY";
+        TEMP_TO_HIRE: "TEMP_TO_HIRE";
+        TEMP_TO_PERM: "TEMP_TO_PERM";
+        EOR: "EOR";
+        DIRECT_HIRE: "DIRECT_HIRE";
     }>>;
     location: z.ZodOptional<z.ZodString>;
     days_active: z.ZodOptional<z.ZodOptional<z.ZodNumber>>;

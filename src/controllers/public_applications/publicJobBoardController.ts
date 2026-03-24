@@ -3,6 +3,29 @@ import prisma from '../../prisma.config';
 import { sendSuccess, sendError } from '../../utils/response';
 import { JobStatus, OrganizationStatus, JobType, OfficeType } from '@prisma/client';
 
+const JOB_TYPE_VALUES = [
+  'TEMPORARY',
+  'PERMANENT',
+  'CONSULTANT',
+  'CONTRACT',
+  'HOURLY_FULL_TIME',
+  'INTERN',
+  'PART_TIME',
+  'REGULAR_FULL_TIME',
+  'SALARY',
+  'TEMP_TO_HIRE',
+  'TEMP_TO_PERM',
+  'EOR',
+  'DIRECT_HIRE',
+] as const;
+
+const normalizeJobType = (value: unknown): JobType | null => {
+  if (!value || typeof value !== 'string') return null;
+  const normalized = value.toUpperCase();
+  if (!JOB_TYPE_VALUES.includes(normalized as typeof JOB_TYPE_VALUES[number])) return null;
+  return normalized as JobType;
+};
+
 /**
  * Public Job Board Controller
  * 
@@ -23,7 +46,7 @@ import { JobStatus, OrganizationStatus, JobType, OfficeType } from '@prisma/clie
  * Query params:
  * - search: Search in job title, location, organization name
  * - location: Filter by location
- * - job_type: Filter by TEMPORARY or PERMANENT
+ * - job_type: Filter by JobType enum values
  * - organization_name: Filter by organization name
  * - page: Page number (default: 1)
  * - limit: Items per page (default: 10, max: 50)
@@ -45,8 +68,15 @@ export const getPublicJobs = async (req: Request, res: Response) => {
     };
 
     // Apply filters
-    if (job_type && ['TEMPORARY', 'PERMANENT'].includes((job_type as string).toUpperCase())) {
-      whereClause.job_type = (job_type as string).toUpperCase() as JobType;
+    if (job_type) {
+      const normalizedJobType = normalizeJobType(job_type);
+      if (!normalizedJobType) {
+        return sendError(res, 'Invalid job_type filter value', 400, [{
+          field: 'job_type',
+          message: `Allowed values: ${JOB_TYPE_VALUES.join(', ')}`,
+        }]);
+      }
+      whereClause.job_type = normalizedJobType;
     }
 
     if (location) {
@@ -385,8 +415,15 @@ export const searchPublicJobs = async (req: Request, res: Response) => {
     }
 
     // Job type filter
-    if (job_type && ['TEMPORARY', 'PERMANENT'].includes((job_type as string).toUpperCase())) {
-      whereClause.job_type = (job_type as string).toUpperCase() as JobType;
+    if (job_type) {
+      const normalizedJobType = normalizeJobType(job_type);
+      if (!normalizedJobType) {
+        return sendError(res, 'Invalid job_type filter value', 400, [{
+          field: 'job_type',
+          message: `Allowed values: ${JOB_TYPE_VALUES.join(', ')}`,
+        }]);
+      }
+      whereClause.job_type = normalizedJobType;
     }
 
     // Organization filter

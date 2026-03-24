@@ -10,6 +10,21 @@ const schemas_1 = require("../../validators/schemas");
 const response_1 = require("../../utils/response");
 const zod_1 = require("zod");
 const activityService_1 = require("../../services/activityService");
+const JOB_TYPE_VALUES = [
+    'TEMPORARY',
+    'PERMANENT',
+    'CONSULTANT',
+    'CONTRACT',
+    'HOURLY_FULL_TIME',
+    'INTERN',
+    'PART_TIME',
+    'REGULAR_FULL_TIME',
+    'SALARY',
+    'TEMP_TO_HIRE',
+    'TEMP_TO_PERM',
+    'EOR',
+    'DIRECT_HIRE',
+];
 /**
  * Job Controller - Custom CRUD for Job management
  * Provides: GET all, GET by id, GET by organization, GET by status, POST, PATCH, DELETE
@@ -19,7 +34,7 @@ const activityService_1 = require("../../services/activityService");
  * - manager_id: Optional UUID
  * - job_title: Required string
  * - status: Enum (DRAFT, PENDING, OPEN, CLOSED, DECLINED)
- * - job_type: Enum (TEMPORARY, PERMANENT)
+ * - job_type: Enum (JobType values from Prisma schema)
  * - location: Required string
  * - approved: Boolean (derived from status: OPEN = approved)
  *
@@ -429,7 +444,7 @@ const getJobById = async (req, res) => {
                     orderBy: { created_at: 'desc' },
                 },
                 job_postings: true,
-                job_rates: true,
+                job_rates: true, // all new rate fields auto-included
                 _count: {
                     select: {
                         applications: true,
@@ -945,6 +960,22 @@ const jobRateUpdateSchema = zod_1.z.object({
     ot_pay_rate: zod_1.z.number().optional(),
     ot_bill_rate: zod_1.z.number().optional(),
     _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
+    // ── NEW ──
+    min_bill_rate: zod_1.z.number().optional().nullable(),
+    max_bill_rate: zod_1.z.number().optional().nullable(),
+    target_bill_rate: zod_1.z.number().optional().nullable(),
+    min_pay_rate: zod_1.z.number().optional().nullable(),
+    max_pay_rate: zod_1.z.number().optional().nullable(),
+    target_pay_rate: zod_1.z.number().optional().nullable(),
+    burden: zod_1.z.number().optional().nullable(),
+    discounts: zod_1.z.number().optional().nullable(),
+    gross_margin_hourly: zod_1.z.number().optional().nullable(),
+    estimated_hours: zod_1.z.number().int().optional().nullable(),
+    estimated_gp: zod_1.z.number().optional().nullable(),
+    dt_markup_percentage: zod_1.z.number().optional().nullable(),
+    dt_bill_rate: zod_1.z.number().optional().nullable(),
+    dt_pay_rate: zod_1.z.number().optional().nullable(),
+    expenses: zod_1.z.string().optional().nullable(),
 });
 const jobOwnerUpdateSchema = zod_1.z.object({
     job_owner_id: zod_1.z.string().uuid().optional(),
@@ -959,7 +990,7 @@ const updateJobCompleteSchema = zod_1.z.object({
     company_office_id: zod_1.z.string().uuid('Valid company office ID is required').optional().nullable(),
     job_title: zod_1.z.string().min(1, 'Job title is required').optional(),
     status: zod_1.z.enum(['DRAFT', 'PENDING', 'OPEN', 'CLOSED', 'DECLINED']).optional(),
-    job_type: zod_1.z.enum(['TEMPORARY', 'PERMANENT']).optional(),
+    job_type: zod_1.z.enum(JOB_TYPE_VALUES).optional(),
     location: zod_1.z.string().min(1, 'Location is required').optional(),
     days_active: zod_1.z.number().int().optional().nullable(),
     days_inactive: zod_1.z.number().int().optional().nullable(),
@@ -972,6 +1003,37 @@ const updateJobCompleteSchema = zod_1.z.object({
     interview_Round1: zod_1.z.boolean().optional(),
     interview_Round2: zod_1.z.boolean().optional(),
     interview_rounds: zod_1.z.number().int().min(0).optional().nullable(),
+    // ── NEW Job fields ──
+    open_date: zod_1.z.string().datetime().optional().nullable(),
+    contract_duration: zod_1.z.number().int().min(1).optional().nullable(),
+    address: zod_1.z.string().optional().nullable(),
+    city: zod_1.z.string().optional().nullable(),
+    state: zod_1.z.string().optional().nullable(),
+    manager_last_contacted: zod_1.z.string().datetime().optional().nullable(),
+    job_branch: zod_1.z.enum([
+        'SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN',
+        'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC',
+    ]).optional().nullable(),
+    job_category: zod_1.z.enum([
+        'ACCOUNTING', 'ADMIN', 'BILINGUAL_CSR', 'CLERICAL',
+        'CLIENT_RELATIONS', 'CONSTRUCTION', 'ENGINEERING', 'EXECUTIVE',
+        'FIELD_TECHNICIAN', 'FOOD_SERVICE', 'FORKLIFT', 'GENERAL_LABOR',
+        'HOTEL_FOOD_BEVERAGE', 'HUMAN_RESOURCES', 'INDUSTRIAL', 'INTERNSHIP',
+        'LANGUAGE', 'MACHINE_OPERATOR', 'MANAGEMENT', 'MARKETING',
+        'PRODUCTION', 'QUALITY_CONTROL', 'SALES', 'SEMICONDUCTOR',
+        'SOFTWARE_OS', 'SPECIFIC', 'SUPERVISORY', 'TECHNICAL',
+        'TRANSPORTATION', 'WAREHOUSE', 'WELDING',
+    ]).optional().nullable(),
+    custom_job_id: zod_1.z.string().optional().nullable(),
+    po_number: zod_1.z.string().optional().nullable(),
+    po_amount: zod_1.z.number().optional().nullable(),
+    withhold_emails: zod_1.z.boolean().optional(),
+    invoice_with_hours: zod_1.z.boolean().optional(),
+    time_capture: zod_1.z.enum(['TIMESHEET', 'MANUAL', 'CLOCK_IN_OUT']).optional(),
+    pay_period: zod_1.z.enum(['WEEKLY', 'BI_WEEKLY', 'SEMI_MONTHLY', 'MONTHLY']).optional(),
+    week_duration: zod_1.z.enum(['MON_SUN', 'SUN_SAT', 'SAT_FRI']).optional(),
+    rate_type: zod_1.z.enum(['HOURLY', 'SALARY', 'DAILY']).optional(),
+    paycom_position: zod_1.z.string().optional().nullable(),
     // Related entities
     job_detail: jobDetailUpdateSchema.optional(),
     job_notes: zod_1.z.array(jobNoteUpdateSchema).optional(),
@@ -997,7 +1059,7 @@ const updateJobComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, start_date, end_date, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, interview_rounds, job_detail, job_notes, job_rates, job_owners, } = validation.data;
+        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, start_date, end_date, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, interview_rounds, job_detail, job_notes, job_rates, job_owners, open_date, contract_duration, address, city, state, manager_last_contacted, job_branch, job_category, custom_job_id, po_number, po_amount, withhold_emails, invoice_with_hours, time_capture, pay_period, week_duration, rate_type, paycom_position, } = validation.data;
         // Check if job exists
         const existingJob = await prisma_config_1.default.job.findUnique({
             where: { job_id: id },
@@ -1160,6 +1222,43 @@ const updateJobComplete = async (req, res) => {
                 jobUpdateData.interview_Round2 = interview_Round2;
             if (interview_rounds !== undefined)
                 jobUpdateData.interview_rounds = interview_rounds;
+            // ── NEW Job fields ──
+            if (open_date !== undefined)
+                jobUpdateData.open_date = open_date ? new Date(open_date) : null;
+            if (contract_duration !== undefined)
+                jobUpdateData.contract_duration = contract_duration;
+            if (address !== undefined)
+                jobUpdateData.address = address;
+            if (city !== undefined)
+                jobUpdateData.city = city;
+            if (state !== undefined)
+                jobUpdateData.state = state;
+            if (manager_last_contacted !== undefined)
+                jobUpdateData.manager_last_contacted = manager_last_contacted ? new Date(manager_last_contacted) : null;
+            if (job_branch !== undefined)
+                jobUpdateData.job_branch = job_branch;
+            if (job_category !== undefined)
+                jobUpdateData.job_category = job_category;
+            if (custom_job_id !== undefined)
+                jobUpdateData.custom_job_id = custom_job_id;
+            if (po_number !== undefined)
+                jobUpdateData.po_number = po_number;
+            if (po_amount !== undefined)
+                jobUpdateData.po_amount = po_amount;
+            if (withhold_emails !== undefined)
+                jobUpdateData.withhold_emails = withhold_emails;
+            if (invoice_with_hours !== undefined)
+                jobUpdateData.invoice_with_hours = invoice_with_hours;
+            if (time_capture !== undefined)
+                jobUpdateData.time_capture = time_capture;
+            if (pay_period !== undefined)
+                jobUpdateData.pay_period = pay_period;
+            if (week_duration !== undefined)
+                jobUpdateData.week_duration = week_duration;
+            if (rate_type !== undefined)
+                jobUpdateData.rate_type = rate_type;
+            if (paycom_position !== undefined)
+                jobUpdateData.paycom_position = paycom_position;
             const updatedJob = Object.keys(jobUpdateData).length > 0
                 ? await tx.job.update({
                     where: { job_id: id },
@@ -1257,6 +1356,37 @@ const updateJobComplete = async (req, res) => {
                             updateData.ot_pay_rate = rate.ot_pay_rate;
                         if (rate.ot_bill_rate !== undefined)
                             updateData.ot_bill_rate = rate.ot_bill_rate;
+                        // ── NEW ──
+                        if (rate.min_bill_rate !== undefined)
+                            updateData.min_bill_rate = rate.min_bill_rate;
+                        if (rate.max_bill_rate !== undefined)
+                            updateData.max_bill_rate = rate.max_bill_rate;
+                        if (rate.target_bill_rate !== undefined)
+                            updateData.target_bill_rate = rate.target_bill_rate;
+                        if (rate.min_pay_rate !== undefined)
+                            updateData.min_pay_rate = rate.min_pay_rate;
+                        if (rate.max_pay_rate !== undefined)
+                            updateData.max_pay_rate = rate.max_pay_rate;
+                        if (rate.target_pay_rate !== undefined)
+                            updateData.target_pay_rate = rate.target_pay_rate;
+                        if (rate.burden !== undefined)
+                            updateData.burden = rate.burden;
+                        if (rate.discounts !== undefined)
+                            updateData.discounts = rate.discounts;
+                        if (rate.gross_margin_hourly !== undefined)
+                            updateData.gross_margin_hourly = rate.gross_margin_hourly;
+                        if (rate.estimated_hours !== undefined)
+                            updateData.estimated_hours = rate.estimated_hours;
+                        if (rate.estimated_gp !== undefined)
+                            updateData.estimated_gp = rate.estimated_gp;
+                        if (rate.dt_markup_percentage !== undefined)
+                            updateData.dt_markup_percentage = rate.dt_markup_percentage;
+                        if (rate.dt_bill_rate !== undefined)
+                            updateData.dt_bill_rate = rate.dt_bill_rate;
+                        if (rate.dt_pay_rate !== undefined)
+                            updateData.dt_pay_rate = rate.dt_pay_rate;
+                        if (rate.expenses !== undefined)
+                            updateData.expenses = rate.expenses;
                         const updated = await tx.jobRate.update({
                             where: { job_rate_id: rate.job_rate_id },
                             data: updateData,
@@ -1274,6 +1404,22 @@ const updateJobComplete = async (req, res) => {
                                 hours: rate.hours,
                                 ot_pay_rate: rate.ot_pay_rate,
                                 ot_bill_rate: rate.ot_bill_rate,
+                                // ── NEW ──
+                                min_bill_rate: rate.min_bill_rate,
+                                max_bill_rate: rate.max_bill_rate,
+                                target_bill_rate: rate.target_bill_rate,
+                                min_pay_rate: rate.min_pay_rate,
+                                max_pay_rate: rate.max_pay_rate,
+                                target_pay_rate: rate.target_pay_rate,
+                                burden: rate.burden,
+                                discounts: rate.discounts,
+                                gross_margin_hourly: rate.gross_margin_hourly,
+                                estimated_hours: rate.estimated_hours,
+                                estimated_gp: rate.estimated_gp,
+                                dt_markup_percentage: rate.dt_markup_percentage,
+                                dt_bill_rate: rate.dt_bill_rate,
+                                dt_pay_rate: rate.dt_pay_rate,
+                                expenses: rate.expenses,
                             },
                         });
                         rateResults.created.push(created);

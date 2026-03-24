@@ -35,11 +35,42 @@ const jobRateSchema = zod_1.z.object({
     hours: zod_1.z.number().int().min(0, 'Hours must be a positive integer'),
     ot_pay_rate: zod_1.z.number().optional(),
     ot_bill_rate: zod_1.z.number().optional(),
+    // ── NEW ──
+    min_bill_rate: zod_1.z.number().optional(),
+    max_bill_rate: zod_1.z.number().optional(),
+    target_bill_rate: zod_1.z.number().optional(),
+    min_pay_rate: zod_1.z.number().optional(),
+    max_pay_rate: zod_1.z.number().optional(),
+    target_pay_rate: zod_1.z.number().optional(),
+    burden: zod_1.z.number().optional(),
+    discounts: zod_1.z.number().optional(),
+    gross_margin_hourly: zod_1.z.number().optional(),
+    estimated_hours: zod_1.z.number().int().optional(),
+    estimated_gp: zod_1.z.number().optional(),
+    dt_markup_percentage: zod_1.z.number().optional(),
+    dt_bill_rate: zod_1.z.number().optional(),
+    dt_pay_rate: zod_1.z.number().optional(),
+    expenses: zod_1.z.string().optional(),
 });
 const jobOwnerSchema = zod_1.z.object({
     user_id: zod_1.z.string().uuid('Valid user ID is required'),
     role_type: zod_1.z.enum(['SALES', 'RECRUITER']),
 });
+const JOB_TYPE_VALUES = [
+    'TEMPORARY',
+    'PERMANENT',
+    'CONSULTANT',
+    'CONTRACT',
+    'HOURLY_FULL_TIME',
+    'INTERN',
+    'PART_TIME',
+    'REGULAR_FULL_TIME',
+    'SALARY',
+    'TEMP_TO_HIRE',
+    'TEMP_TO_PERM',
+    'EOR',
+    'DIRECT_HIRE',
+];
 const createJobCompleteSchema = zod_1.z.object({
     // Core Job fields
     organization_id: zod_1.z.string().uuid('Valid organization ID is required'),
@@ -47,7 +78,7 @@ const createJobCompleteSchema = zod_1.z.object({
     company_office_id: zod_1.z.string().uuid('Valid company office ID is required').optional(),
     job_title: zod_1.z.string().min(1, 'Job title is required'),
     status: zod_1.z.enum(['DRAFT', 'OPEN', 'CLOSED']).optional().default('DRAFT'),
-    job_type: zod_1.z.enum(['TEMPORARY', 'PERMANENT']),
+    job_type: zod_1.z.enum(JOB_TYPE_VALUES),
     location: zod_1.z.string().min(1, 'Location is required'),
     days_active: zod_1.z.number().int().optional(),
     days_inactive: zod_1.z.number().int().optional(),
@@ -62,6 +93,41 @@ const createJobCompleteSchema = zod_1.z.object({
     interview_Round1: zod_1.z.boolean().optional().default(true),
     interview_Round2: zod_1.z.boolean().optional().default(false),
     interview_rounds: zod_1.z.number().int().min(0).optional().default(1),
+    // ── NEW ──
+    open_date: zod_1.z.string().datetime().optional(),
+    contract_duration: zod_1.z.number().int().min(1).optional(),
+    address: zod_1.z.string().optional(),
+    city: zod_1.z.string().optional(),
+    state: zod_1.z.string().optional(),
+    manager_last_contacted: zod_1.z.string().datetime().optional(),
+    job_branch: zod_1.z.enum([
+        'SMS_HOSPITALITY',
+        'SMS_MCL_JASCO_GOC',
+        'SMS_ADMIN',
+        'SMS_STAFFING_SOLUTIONS',
+        'SPECIAL_MULTI_ADMIN',
+        'SPECIAL_MULTI_INC',
+    ]).optional(),
+    job_category: zod_1.z.enum([
+        'ACCOUNTING', 'ADMIN', 'BILINGUAL_CSR', 'CLERICAL',
+        'CLIENT_RELATIONS', 'CONSTRUCTION', 'ENGINEERING', 'EXECUTIVE',
+        'FIELD_TECHNICIAN', 'FOOD_SERVICE', 'FORKLIFT', 'GENERAL_LABOR',
+        'HOTEL_FOOD_BEVERAGE', 'HUMAN_RESOURCES', 'INDUSTRIAL', 'INTERNSHIP',
+        'LANGUAGE', 'MACHINE_OPERATOR', 'MANAGEMENT', 'MARKETING',
+        'PRODUCTION', 'QUALITY_CONTROL', 'SALES', 'SEMICONDUCTOR',
+        'SOFTWARE_OS', 'SPECIFIC', 'SUPERVISORY', 'TECHNICAL',
+        'TRANSPORTATION', 'WAREHOUSE', 'WELDING',
+    ]).optional(),
+    custom_job_id: zod_1.z.string().optional(),
+    po_number: zod_1.z.string().optional(),
+    po_amount: zod_1.z.number().optional(),
+    withhold_emails: zod_1.z.boolean().optional().default(false),
+    invoice_with_hours: zod_1.z.boolean().optional().default(false),
+    time_capture: zod_1.z.enum(['TIMESHEET', 'MANUAL', 'CLOCK_IN_OUT']).optional().default('TIMESHEET'),
+    pay_period: zod_1.z.enum(['WEEKLY', 'BI_WEEKLY', 'SEMI_MONTHLY', 'MONTHLY']).optional().default('WEEKLY'),
+    week_duration: zod_1.z.enum(['MON_SUN', 'SUN_SAT', 'SAT_FRI']).optional().default('MON_SUN'),
+    rate_type: zod_1.z.enum(['HOURLY', 'SALARY', 'DAILY']).optional().default('HOURLY'),
+    paycom_position: zod_1.z.string().optional(),
     // Related entities
     job_detail: jobDetailSchema.optional(),
     job_notes: zod_1.z.array(jobNoteSchema).optional(),
@@ -83,7 +149,9 @@ const createJobComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, approved, start_date, end_date, created_by_user_id, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, interview_rounds, job_detail, job_notes, job_rates, job_owners, } = validation.data;
+        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, approved, start_date, end_date, created_by_user_id, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, interview_rounds, job_detail, job_notes, job_rates, job_owners, 
+        // ── NEW ──
+        open_date, contract_duration, address, city, state, manager_last_contacted, job_branch, job_category, custom_job_id, po_number, po_amount, withhold_emails, invoice_with_hours, time_capture, pay_period, week_duration, rate_type, paycom_position, } = validation.data;
         // Check if organization exists
         const organizationExists = await prisma_config_1.default.organization.findUnique({
             where: { organization_id },
@@ -191,6 +259,25 @@ const createJobComplete = async (req, res) => {
                     interview_Round1,
                     interview_Round2,
                     interview_rounds,
+                    // ── NEW ──
+                    open_date: open_date ? new Date(open_date) : undefined,
+                    contract_duration,
+                    address,
+                    city,
+                    state,
+                    manager_last_contacted: manager_last_contacted ? new Date(manager_last_contacted) : undefined,
+                    job_branch,
+                    job_category,
+                    custom_job_id,
+                    po_number,
+                    po_amount,
+                    withhold_emails,
+                    invoice_with_hours,
+                    time_capture,
+                    pay_period,
+                    week_duration,
+                    rate_type,
+                    paycom_position,
                 },
             });
             // 2. Create JobDetail (if provided)
@@ -228,6 +315,22 @@ const createJobComplete = async (req, res) => {
                         hours: rate.hours,
                         ot_pay_rate: rate.ot_pay_rate,
                         ot_bill_rate: rate.ot_bill_rate,
+                        // ── NEW ──
+                        min_bill_rate: rate.min_bill_rate,
+                        max_bill_rate: rate.max_bill_rate,
+                        target_bill_rate: rate.target_bill_rate,
+                        min_pay_rate: rate.min_pay_rate,
+                        max_pay_rate: rate.max_pay_rate,
+                        target_pay_rate: rate.target_pay_rate,
+                        burden: rate.burden,
+                        discounts: rate.discounts,
+                        gross_margin_hourly: rate.gross_margin_hourly,
+                        estimated_hours: rate.estimated_hours,
+                        estimated_gp: rate.estimated_gp,
+                        dt_markup_percentage: rate.dt_markup_percentage,
+                        dt_bill_rate: rate.dt_bill_rate,
+                        dt_pay_rate: rate.dt_pay_rate,
+                        expenses: rate.expenses,
                     })),
                 });
                 createdJobRates = job_rates; // For response tracking

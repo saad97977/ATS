@@ -45,8 +45,12 @@ model User {
   created_organizations Organization[]        @relation("OrganizationCreatedBy")
   document_signatures  DocumentSignature[]
   reviewed_timesheets  Timesheet[] @relation("TimesheetReviewer")
+  
 
-
+  represented_organizations Organization[] @relation("OrganizationRepresentative")
+  logged_activities OrganizationActivity[] @relation("ActivityLoggedBy")
+  contact_previews ContactPreview[] @relation("PreviewLoggedBy")
+  contact_representative OrganizationContact[] @relation("ContactRepresentative")
 
   @@index([email])
   @@map("users")
@@ -118,6 +122,24 @@ model Organization {
   created_by_user_id String
   created_at      DateTime           @default(now())
   last_updated_at DateTime?          @updatedAt   // automatically set whenever the row is updated
+ 
+ 
+  fax                   String?
+  zip                   String?
+  industry              String?
+  revenue               String?          // e.g. "$1M–$5M" — use String for flexibility
+  employee_count        Int?
+  last_contacted_at     DateTime?
+  representative_id     String?          // FK → users.user_id
+  branch_region         String?
+  branch_name           String?
+  default_ot_rule       String?
+  contract_markup       Decimal?         @db.Decimal(5, 2)
+  permanent_markup      Decimal?         @db.Decimal(5, 2)
+  overview              String?
+  custom_company_id     String?          @unique   // "Company ID" display field
+  org_branch_division   OrgBranchDivision?
+
 
   // Relations
   addresses          OrganizationAddress[]
@@ -131,6 +153,11 @@ model Organization {
   jobs               Job[]
   company_offices    CompanyOffice[]
   created_by         User @relation("OrganizationCreatedBy", fields: [created_by_user_id], references: [user_id])
+
+  representative        User?            @relation("OrganizationRepresentative", fields: [representative_id], references: [user_id])
+  activities OrganizationActivity[]
+
+
 
   @@index([created_by_user_id])
   @@map("organizations")
@@ -162,12 +189,54 @@ model OrganizationContact {
   phone                   String
   contact_type            ContactType
 
+  first_name        String?
+  last_name         String?
+  contact_title     String?          // "Contact Title" (job title of the contact)
+  address           String?
+  mobile_phone      String?
+  fax               String?
+  city              String?
+  state             String?
+  zip               String?
+  division          String?
+  department        String?
+  title             String?
+  representative_id String?
+  last_updated_at   DateTime?        @updatedAt
+  last_contacted_at DateTime?
+  created_at        DateTime         @default(now())
+
+
   // Relations
   organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+
+  representative    User?            @relation("ContactRepresentative", fields: [representative_id], references: [user_id])
+  previews          ContactPreview[]
+  associated_jobs   ContactJob[]
+
 
   @@index([organization_id])
   @@map("organization_contacts")
 }
+
+model ContactPreview {
+  preview_id  String              @id @default(uuid())
+  contact_id  String
+  user_id     String
+  type        ContactPreviewType
+  notes       String?
+  date        DateTime            @default(now())
+  job_id      String?
+
+  contact     OrganizationContact @relation(fields: [contact_id], references: [organization_contact_id], onDelete: Cascade)
+  user        User                @relation("PreviewLoggedBy", fields: [user_id], references: [user_id])
+  job         Job?                @relation(fields: [job_id], references: [job_id])
+
+  @@index([contact_id])
+  @@index([job_id])
+  @@map("contact_previews")
+}
+
 
 model OrganizationAccounting {
   organization_accounting_id String @id @default(uuid())
@@ -217,6 +286,38 @@ model OrganizationUser {
   @@index([organization_id])
   @@index([user_id])
   @@map("organization_users")
+}
+
+
+model OrganizationActivity {
+  activity_id     String              @id @default(uuid())
+  organization_id String
+  logged_by_user_id String
+  activity_type   OrgActivityType
+  details         String?
+  created_at      DateTime            @default(now())
+
+  organization    Organization        @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  logged_by       User                @relation("ActivityLoggedBy", fields: [logged_by_user_id], references: [user_id])
+
+  @@index([organization_id])
+  @@index([logged_by_user_id])
+  @@map("organization_activities")
+}
+
+
+model ContactJob {
+  contact_job_id String              @id @default(uuid())
+  contact_id     String
+  job_id         String
+
+  contact        OrganizationContact @relation(fields: [contact_id], references: [organization_contact_id], onDelete: Cascade)
+  job            Job                 @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+
+  @@unique([contact_id, job_id])
+  @@index([contact_id])
+  @@index([job_id])
+  @@map("contact_jobs")
 }
 
 // ============================================
@@ -363,6 +464,27 @@ model Job {
   interview_Round2  Boolean?   @default(false)
   interview_rounds Int? @default(1)
 
+  // New fields
+  open_date             DateTime?
+  contract_duration     Int?           // in days or weeks (integer)
+  address               String?        // full street address
+  city                  String?        // split from location
+  state                 String?        // split from location
+  manager_last_contacted DateTime?
+  job_branch            JobBranch?        
+  job_category          JobCategory?   
+  custom_job_id         String?        // Custom Job ID
+  po_number             String?        // PO #
+  po_amount             Decimal?       @db.Decimal(14, 2)  // PO Amount
+  withhold_emails       Boolean?       @default(false)
+  invoice_with_hours    Boolean?       @default(false)
+  time_capture          TimeCaptureType @default(TIMESHEET)
+  pay_period            PayPeriodType   @default(WEEKLY)
+  week_duration         WeekDurationType @default(MON_SUN)
+  rate_type             RateType        @default(HOURLY)
+  paycom_position       String?
+
+
 
 
 
@@ -377,6 +499,9 @@ model Job {
   job_rates     JobRate[]
   applications  Application[]
   company_office  CompanyOffice? @relation(fields: [company_office_id], references: [company_office_id])
+
+  contact_previews ContactPreview[]
+  contact_jobs ContactJob[]
 
 
   @@index([created_by_user_id])
@@ -478,6 +603,24 @@ model JobRate {
   hours             Int
   ot_pay_rate       Decimal? @db.Decimal(10, 2)
   ot_bill_rate      Decimal? @db.Decimal(10, 2)
+
+  // New fields
+  min_bill_rate         Decimal?  @db.Decimal(10, 2)
+  max_bill_rate         Decimal?  @db.Decimal(10, 2)
+  target_bill_rate      Decimal?  @db.Decimal(10, 2)
+  min_pay_rate          Decimal?  @db.Decimal(10, 2)
+  max_pay_rate          Decimal?  @db.Decimal(10, 2)
+  target_pay_rate       Decimal?  @db.Decimal(10, 2)
+  burden                Decimal?  @db.Decimal(5, 2)   // 15.00
+  discounts             Decimal?  @db.Decimal(5, 2)   // 0.00
+  gross_margin_hourly   Decimal?  @db.Decimal(10, 2)  // Hourly/Daily GM
+  estimated_hours       Int?                           // 155672
+  estimated_gp          Decimal?  @db.Decimal(14, 2)  // 832,456.02
+  dt_markup_percentage  Decimal?  @db.Decimal(5, 2)   // DT Mark-up %
+  dt_bill_rate          Decimal?  @db.Decimal(10, 2)  // Doubletime Bill
+  dt_pay_rate           Decimal?  @db.Decimal(10, 2)  // Doubletime Pay
+  expenses              String?                        // None / value
+
 
 
   // Relations
@@ -968,6 +1111,12 @@ enum RoleName {
 enum OrganizationStatus {
   ACTIVE
   INACTIVE
+  CREDIT_HOLD
+  DELETE
+  DO_NOT_SERVICE
+  FORMER_CLIENT
+  ON_HOLD
+  PROSPECT
 }
 
 enum AddressType {
@@ -978,6 +1127,7 @@ enum AddressType {
 enum ContactType {
   PRIMARY
   EMERGENCY
+  BILLING
 }
 
 enum Privacy {
@@ -996,6 +1146,17 @@ enum JobStatus {
 enum JobType {
   TEMPORARY
   PERMANENT
+  CONSULTANT
+  CONTRACT
+  HOURLY_FULL_TIME
+  INTERN
+  PART_TIME
+  REGULAR_FULL_TIME
+  SALARY
+  TEMP_TO_HIRE
+  TEMP_TO_PERM
+  EOR
+  DIRECT_HIRE
 }
 
 enum OwnerRole {
@@ -1067,6 +1228,8 @@ enum InvoiceStatus {
   VOID
 }
 
+
+
 enum WorkType {
   REGULAR
   OVERTIME
@@ -1080,4 +1243,100 @@ enum WorkType {
 enum InterviewType { 
   ONLINE
   OFFLINE
+}
+
+
+// NEW
+
+enum TimeCaptureType {
+  TIMESHEET
+  MANUAL
+  CLOCK_IN_OUT
+}
+
+enum PayPeriodType {
+  WEEKLY
+  BI_WEEKLY
+  SEMI_MONTHLY
+  MONTHLY
+}
+
+enum WeekDurationType {
+  MON_SUN
+  SUN_SAT
+  SAT_FRI
+}
+
+enum RateType {
+  HOURLY
+  SALARY
+  DAILY
+}
+
+
+enum JobBranch {
+  SMS_HOSPITALITY
+  SMS_MCL_JASCO_GOC
+  SMS_ADMIN
+  SMS_STAFFING_SOLUTIONS
+  SPECIAL_MULTI_ADMIN
+  SPECIAL_MULTI_INC
+}
+
+enum JobCategory {
+  ACCOUNTING
+  ADMIN
+  BILINGUAL_CSR
+  CLERICAL
+  CLIENT_RELATIONS
+  CONSTRUCTION
+  ENGINEERING
+  EXECUTIVE
+  FIELD_TECHNICIAN
+  FOOD_SERVICE
+  FORKLIFT
+  GENERAL_LABOR
+  HOTEL_FOOD_BEVERAGE
+  HUMAN_RESOURCES
+  INDUSTRIAL
+  INTERNSHIP
+  LANGUAGE
+  MACHINE_OPERATOR
+  MANAGEMENT
+  MARKETING
+  PRODUCTION
+  QUALITY_CONTROL
+  SALES
+  SEMICONDUCTOR
+  SOFTWARE_OS
+  SPECIFIC
+  SUPERVISORY
+  TECHNICAL
+  TRANSPORTATION
+  WAREHOUSE
+  WELDING
+}
+
+enum OrgBranchDivision {
+  SMS_HOSPITALITY
+  SMS_MCL_JASCO_GOC
+  SMS_ADMIN
+  SMS_STAFFING_SOLUTIONS
+  SPECIAL_MULTI_ADMIN
+  SPECIAL_MULTI_INC
+}
+
+
+
+enum OrgActivityType {
+  CALL_COMPLETED
+  CALL_SCHEDULED
+}
+
+
+
+enum ContactPreviewType {
+  CALL_COMPLETED
+  CALL_SCHEDULED
+  CALL_RESCHEDULED
 }

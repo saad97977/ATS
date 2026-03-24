@@ -7,6 +7,29 @@ exports.getJobsByOrganization = exports.getFeaturedJobs = exports.searchPublicJo
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const response_1 = require("../../utils/response");
 const client_1 = require("@prisma/client");
+const JOB_TYPE_VALUES = [
+    'TEMPORARY',
+    'PERMANENT',
+    'CONSULTANT',
+    'CONTRACT',
+    'HOURLY_FULL_TIME',
+    'INTERN',
+    'PART_TIME',
+    'REGULAR_FULL_TIME',
+    'SALARY',
+    'TEMP_TO_HIRE',
+    'TEMP_TO_PERM',
+    'EOR',
+    'DIRECT_HIRE',
+];
+const normalizeJobType = (value) => {
+    if (!value || typeof value !== 'string')
+        return null;
+    const normalized = value.toUpperCase();
+    if (!JOB_TYPE_VALUES.includes(normalized))
+        return null;
+    return normalized;
+};
 /**
  * Public Job Board Controller
  *
@@ -26,7 +49,7 @@ const client_1 = require("@prisma/client");
  * Query params:
  * - search: Search in job title, location, organization name
  * - location: Filter by location
- * - job_type: Filter by TEMPORARY or PERMANENT
+ * - job_type: Filter by JobType enum values
  * - organization_name: Filter by organization name
  * - page: Page number (default: 1)
  * - limit: Items per page (default: 10, max: 50)
@@ -45,8 +68,15 @@ const getPublicJobs = async (req, res) => {
             },
         };
         // Apply filters
-        if (job_type && ['TEMPORARY', 'PERMANENT'].includes(job_type.toUpperCase())) {
-            whereClause.job_type = job_type.toUpperCase();
+        if (job_type) {
+            const normalizedJobType = normalizeJobType(job_type);
+            if (!normalizedJobType) {
+                return (0, response_1.sendError)(res, 'Invalid job_type filter value', 400, [{
+                        field: 'job_type',
+                        message: `Allowed values: ${JOB_TYPE_VALUES.join(', ')}`,
+                    }]);
+            }
+            whereClause.job_type = normalizedJobType;
         }
         if (location) {
             whereClause.location = {
@@ -355,8 +385,15 @@ const searchPublicJobs = async (req, res) => {
             };
         }
         // Job type filter
-        if (job_type && ['TEMPORARY', 'PERMANENT'].includes(job_type.toUpperCase())) {
-            whereClause.job_type = job_type.toUpperCase();
+        if (job_type) {
+            const normalizedJobType = normalizeJobType(job_type);
+            if (!normalizedJobType) {
+                return (0, response_1.sendError)(res, 'Invalid job_type filter value', 400, [{
+                        field: 'job_type',
+                        message: `Allowed values: ${JOB_TYPE_VALUES.join(', ')}`,
+                    }]);
+            }
+            whereClause.job_type = normalizedJobType;
         }
         // Organization filter
         if (organization_id) {

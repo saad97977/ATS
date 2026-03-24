@@ -34,12 +34,45 @@ const jobRateSchema = z.object({
   hours: z.number().int().min(0, 'Hours must be a positive integer'),
   ot_pay_rate: z.number().optional(),
   ot_bill_rate: z.number().optional(),
+
+  // ── NEW ──
+  min_bill_rate: z.number().optional(),
+  max_bill_rate: z.number().optional(),
+  target_bill_rate: z.number().optional(),
+  min_pay_rate: z.number().optional(),
+  max_pay_rate: z.number().optional(),
+  target_pay_rate: z.number().optional(),
+  burden: z.number().optional(),
+  discounts: z.number().optional(),
+  gross_margin_hourly: z.number().optional(),
+  estimated_hours: z.number().int().optional(),
+  estimated_gp: z.number().optional(),
+  dt_markup_percentage: z.number().optional(),
+  dt_bill_rate: z.number().optional(),
+  dt_pay_rate: z.number().optional(),
+  expenses: z.string().optional(),
 });
 
 const jobOwnerSchema = z.object({
   user_id: z.string().uuid('Valid user ID is required'),
   role_type: z.enum(['SALES', 'RECRUITER']),
 });
+
+const JOB_TYPE_VALUES = [
+  'TEMPORARY',
+  'PERMANENT',
+  'CONSULTANT',
+  'CONTRACT',
+  'HOURLY_FULL_TIME',
+  'INTERN',
+  'PART_TIME',
+  'REGULAR_FULL_TIME',
+  'SALARY',
+  'TEMP_TO_HIRE',
+  'TEMP_TO_PERM',
+  'EOR',
+  'DIRECT_HIRE',
+] as const;
 
 const createJobCompleteSchema = z.object({
   // Core Job fields
@@ -48,7 +81,7 @@ const createJobCompleteSchema = z.object({
   company_office_id: z.string().uuid('Valid company office ID is required').optional(),
   job_title: z.string().min(1, 'Job title is required'),
   status: z.enum(['DRAFT', 'OPEN', 'CLOSED']).optional().default('DRAFT'),
-  job_type: z.enum(['TEMPORARY', 'PERMANENT']),
+  job_type: z.enum(JOB_TYPE_VALUES),
   location: z.string().min(1, 'Location is required'),
   days_active: z.number().int().optional(),
   days_inactive: z.number().int().optional(),
@@ -64,6 +97,43 @@ const createJobCompleteSchema = z.object({
   interview_Round1: z.boolean().optional().default(true),
   interview_Round2: z.boolean().optional().default(false),
   interview_rounds: z.number().int().min(0).optional().default(1),
+
+  // ── NEW ──
+  open_date: z.string().datetime().optional(),
+  contract_duration: z.number().int().min(1).optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  manager_last_contacted: z.string().datetime().optional(),
+  job_branch: z.enum([
+    'SMS_HOSPITALITY',
+    'SMS_MCL_JASCO_GOC',
+    'SMS_ADMIN',
+    'SMS_STAFFING_SOLUTIONS',
+    'SPECIAL_MULTI_ADMIN',
+    'SPECIAL_MULTI_INC',
+  ]).optional(),
+  job_category: z.enum([
+    'ACCOUNTING', 'ADMIN', 'BILINGUAL_CSR', 'CLERICAL',
+    'CLIENT_RELATIONS', 'CONSTRUCTION', 'ENGINEERING', 'EXECUTIVE',
+    'FIELD_TECHNICIAN', 'FOOD_SERVICE', 'FORKLIFT', 'GENERAL_LABOR',
+    'HOTEL_FOOD_BEVERAGE', 'HUMAN_RESOURCES', 'INDUSTRIAL', 'INTERNSHIP',
+    'LANGUAGE', 'MACHINE_OPERATOR', 'MANAGEMENT', 'MARKETING',
+    'PRODUCTION', 'QUALITY_CONTROL', 'SALES', 'SEMICONDUCTOR',
+    'SOFTWARE_OS', 'SPECIFIC', 'SUPERVISORY', 'TECHNICAL',
+    'TRANSPORTATION', 'WAREHOUSE', 'WELDING',
+  ]).optional(),
+  custom_job_id: z.string().optional(),
+  po_number: z.string().optional(),
+  po_amount: z.number().optional(),
+  withhold_emails: z.boolean().optional().default(false),
+  invoice_with_hours: z.boolean().optional().default(false),
+  time_capture: z.enum(['TIMESHEET', 'MANUAL', 'CLOCK_IN_OUT']).optional().default('TIMESHEET'),
+  pay_period: z.enum(['WEEKLY', 'BI_WEEKLY', 'SEMI_MONTHLY', 'MONTHLY']).optional().default('WEEKLY'),
+  week_duration: z.enum(['MON_SUN', 'SUN_SAT', 'SAT_FRI']).optional().default('MON_SUN'),
+  rate_type: z.enum(['HOURLY', 'SALARY', 'DAILY']).optional().default('HOURLY'),
+  paycom_position: z.string().optional(),
+
   
   // Related entities
   job_detail: jobDetailSchema.optional(),
@@ -113,6 +183,27 @@ const createJobComplete = async (req: Request, res: Response) => {
       job_notes,
       job_rates,
       job_owners,
+
+      // ── NEW ──
+      open_date,
+      contract_duration,
+      address,
+      city,
+      state,
+      manager_last_contacted,
+      job_branch,
+      job_category,
+      custom_job_id,
+      po_number,
+      po_amount,
+      withhold_emails,
+      invoice_with_hours,
+      time_capture,
+      pay_period,
+      week_duration,
+      rate_type,
+      paycom_position,
+
     } = validation.data;
 
     // Check if organization exists
@@ -247,6 +338,26 @@ const createJobComplete = async (req: Request, res: Response) => {
           interview_Round1,
           interview_Round2,
           interview_rounds,
+          // ── NEW ──
+          open_date: open_date ? new Date(open_date) : undefined,
+          contract_duration,
+          address,
+          city,
+          state,
+          manager_last_contacted: manager_last_contacted ? new Date(manager_last_contacted) : undefined,
+          job_branch,
+          job_category,
+          custom_job_id,
+          po_number,
+          po_amount,
+          withhold_emails,
+          invoice_with_hours,
+          time_capture,
+          pay_period,
+          week_duration,
+          rate_type,
+          paycom_position,
+
         },
       });
 
@@ -278,17 +389,34 @@ const createJobComplete = async (req: Request, res: Response) => {
       let createdJobRates: typeof job_rates = [];
       if (job_rates && job_rates.length > 0) {
         await tx.jobRate.createMany({
-          data: job_rates.map(rate => ({
-            job_id: newJob.job_id,
-            pay_rate: rate.pay_rate,
-            bill_rate: rate.bill_rate,
-            markup_percentage: rate.markup_percentage,
-            overtime_rule: rate.overtime_rule,
-            hours: rate.hours,
-            ot_pay_rate: rate.ot_pay_rate,
-            ot_bill_rate: rate.ot_bill_rate,
-          })),
-        });
+            data: job_rates.map(rate => ({
+              job_id: newJob.job_id,
+              pay_rate: rate.pay_rate,
+              bill_rate: rate.bill_rate,
+              markup_percentage: rate.markup_percentage,
+              overtime_rule: rate.overtime_rule,
+              hours: rate.hours,
+              ot_pay_rate: rate.ot_pay_rate,
+              ot_bill_rate: rate.ot_bill_rate,
+
+              // ── NEW ──
+              min_bill_rate: rate.min_bill_rate,
+              max_bill_rate: rate.max_bill_rate,
+              target_bill_rate: rate.target_bill_rate,
+              min_pay_rate: rate.min_pay_rate,
+              max_pay_rate: rate.max_pay_rate,
+              target_pay_rate: rate.target_pay_rate,
+              burden: rate.burden,
+              discounts: rate.discounts,
+              gross_margin_hourly: rate.gross_margin_hourly,
+              estimated_hours: rate.estimated_hours,
+              estimated_gp: rate.estimated_gp,
+              dt_markup_percentage: rate.dt_markup_percentage,
+              dt_bill_rate: rate.dt_bill_rate,
+              dt_pay_rate: rate.dt_pay_rate,
+              expenses: rate.expenses,
+            })),
+          });
         createdJobRates = job_rates; // For response tracking
       }
 

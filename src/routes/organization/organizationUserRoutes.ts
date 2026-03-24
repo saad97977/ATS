@@ -8,6 +8,8 @@ const router = Router();
  * Base path: /api/organization-users
  */
 
+router.get('/filter', organizationUserController.getOrganizationUsers);
+
 // Statistics endpoint (place before :id to avoid conflicts)
 router.get('/stats', organizationUserController.getOrganizationUserStats);
 

@@ -7,6 +7,7 @@ const router = (0, express_1.Router)();
  * Organization User Routes
  * Base path: /api/organization-users
  */
+router.get('/filter', organizationUserController_1.organizationUserController.getOrganizationUsers);
 // Statistics endpoint (place before :id to avoid conflicts)
 router.get('/stats', organizationUserController_1.organizationUserController.getOrganizationUserStats);
 // Get upcoming/filtered results (place before :id)

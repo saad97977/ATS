@@ -18,7 +18,7 @@ import { Request, Response } from 'express';
  * Query params:
  * - search: Search in job title, location, organization name
  * - location: Filter by location
- * - job_type: Filter by TEMPORARY or PERMANENT
+ * - job_type: Filter by JobType enum values
  * - organization_name: Filter by organization name
  * - page: Page number (default: 1)
  * - limit: Items per page (default: 10, max: 50)

@@ -58,6 +58,9 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
         created_at: Date;
         created_by_user_id: string;
         organization_id: string;
+        city: string | null;
+        state: string | null;
+        address: string | null;
         manager_id: string | null;
         job_title: string;
         job_type: import(".prisma/client").$Enums.JobType;
@@ -68,6 +71,7 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
         start_date: Date | null;
         end_date: Date | null;
         job_id: string;
+        pay_period: import(".prisma/client").$Enums.PayPeriodType;
         company_office_id: string | null;
         max_positions: number | null;
         open_positions: number | null;
@@ -75,6 +79,20 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
         interview_Round1: boolean | null;
         interview_Round2: boolean | null;
         interview_rounds: number | null;
+        open_date: Date | null;
+        contract_duration: number | null;
+        manager_last_contacted: Date | null;
+        job_branch: import(".prisma/client").$Enums.JobBranch | null;
+        job_category: import(".prisma/client").$Enums.JobCategory | null;
+        custom_job_id: string | null;
+        po_number: string | null;
+        po_amount: import("@prisma/client/runtime/library").Decimal | null;
+        withhold_emails: boolean | null;
+        invoice_with_hours: boolean | null;
+        time_capture: import(".prisma/client").$Enums.TimeCaptureType;
+        week_duration: import(".prisma/client").$Enums.WeekDurationType;
+        rate_type: import(".prisma/client").$Enums.RateType;
+        paycom_position: string | null;
     };
     documents: {
         created_at: Date;

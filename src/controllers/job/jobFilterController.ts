@@ -3,6 +3,22 @@ import prisma from '../../prisma.config';
 import { sendSuccess, sendError } from '../../utils/response';
 import { Prisma } from '@prisma/client';
 
+const JOB_TYPE_VALUES = [
+  'TEMPORARY',
+  'PERMANENT',
+  'CONSULTANT',
+  'CONTRACT',
+  'HOURLY_FULL_TIME',
+  'INTERN',
+  'PART_TIME',
+  'REGULAR_FULL_TIME',
+  'SALARY',
+  'TEMP_TO_HIRE',
+  'TEMP_TO_PERM',
+  'EOR',
+  'DIRECT_HIRE',
+] as const;
+
 /**
  * Dynamic Job Filter Controller
  * GET /api/jobs/filter
@@ -20,7 +36,7 @@ import { Prisma } from '@prisma/client';
  * 
  * Enum Filters:
  * - status: string | string[] - Filter by status (DRAFT, OPEN, CLOSED)
- * - job_type: string | string[] - Filter by job type (TEMPORARY, PERMANENT)
+ * - job_type: string | string[] - Filter by JobType enum values
  * - approved: boolean - Filter by approval status
  * 
  * Relationship Filters:
@@ -169,6 +185,13 @@ const ensureArray = (value: string | string[] | undefined): string[] | undefined
   return Array.isArray(value) ? value : [value];
 };
 
+const normalizeJobTypes = (value: string | string[] | undefined): string[] => {
+  const values = ensureArray(value) ?? [];
+  return values
+    .map((v) => v.toUpperCase())
+    .filter((v, i, arr) => JOB_TYPE_VALUES.includes(v as typeof JOB_TYPE_VALUES[number]) && arr.indexOf(v) === i);
+};
+
 /**
  * Main filter function
  */
@@ -224,10 +247,14 @@ export const filterJobs = async (req: Request, res: Response) => {
     
     // Job type filter (single or multiple)
     if (params.job_type) {
-      const types = ensureArray(params.job_type)?.map(t => t.toUpperCase());
-      if (types && types.length > 0) {
-        where.job_type = types.length === 1 ? types[0] as any : { in: types as any[] };
+      const types = normalizeJobTypes(params.job_type);
+      if (types.length === 0) {
+        return sendError(res, 'Invalid job_type filter value', 400, [{
+          field: 'job_type',
+          message: `Allowed values: ${JOB_TYPE_VALUES.join(', ')}`,
+        }]);
       }
+      where.job_type = types.length === 1 ? types[0] as any : { in: types as any[] };
     }
     
     // Approved filter

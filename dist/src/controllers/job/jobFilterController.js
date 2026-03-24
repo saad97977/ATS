@@ -6,6 +6,21 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.filterJobs = void 0;
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const response_1 = require("../../utils/response");
+const JOB_TYPE_VALUES = [
+    'TEMPORARY',
+    'PERMANENT',
+    'CONSULTANT',
+    'CONTRACT',
+    'HOURLY_FULL_TIME',
+    'INTERN',
+    'PART_TIME',
+    'REGULAR_FULL_TIME',
+    'SALARY',
+    'TEMP_TO_HIRE',
+    'TEMP_TO_PERM',
+    'EOR',
+    'DIRECT_HIRE',
+];
 /**
  * Helper function to parse boolean from string
  */
@@ -38,6 +53,12 @@ const ensureArray = (value) => {
     if (value === undefined)
         return undefined;
     return Array.isArray(value) ? value : [value];
+};
+const normalizeJobTypes = (value) => {
+    const values = ensureArray(value) ?? [];
+    return values
+        .map((v) => v.toUpperCase())
+        .filter((v, i, arr) => JOB_TYPE_VALUES.includes(v) && arr.indexOf(v) === i);
 };
 /**
  * Main filter function
@@ -85,10 +106,14 @@ const filterJobs = async (req, res) => {
         }
         // Job type filter (single or multiple)
         if (params.job_type) {
-            const types = ensureArray(params.job_type)?.map(t => t.toUpperCase());
-            if (types && types.length > 0) {
-                where.job_type = types.length === 1 ? types[0] : { in: types };
+            const types = normalizeJobTypes(params.job_type);
+            if (types.length === 0) {
+                return (0, response_1.sendError)(res, 'Invalid job_type filter value', 400, [{
+                        field: 'job_type',
+                        message: `Allowed values: ${JOB_TYPE_VALUES.join(', ')}`,
+                    }]);
             }
+            where.job_type = types.length === 1 ? types[0] : { in: types };
         }
         // Approved filter
         if (params.approved !== undefined) {

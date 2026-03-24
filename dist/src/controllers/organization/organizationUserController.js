@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.organizationUserController = void 0;
+exports.organizationUserController = exports.getOrganizationUsers = void 0;
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const crudFactory_1 = require("../../factories/crudFactory");
 const schemas_1 = require("../../validators/schemas");
@@ -444,6 +444,96 @@ const getOrganizationUserStats = async (req, res) => {
         return (0, response_1.sendError)(res, 'Failed to fetch organization user statistics', 500);
     }
 };
+// ─────────────────────────────────────────────────────────────
+// GET ALL ORGANIZATION USERS
+// GET /organization-users?organization_id=&page=&limit=&search=&all=true
+// ─────────────────────────────────────────────────────────────
+const getOrganizationUsers = async (req, res) => {
+    try {
+        const getAll = req.query.all === 'true';
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = getAll
+            ? undefined
+            : Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+        const skip = getAll ? undefined : (page - 1) * limit;
+        const organization_id = req.query.organization_id;
+        const search = req.query.search?.trim();
+        const where = {};
+        if (organization_id) {
+            where.organization_id = organization_id;
+        }
+        if (search) {
+            where.user = {
+                OR: [
+                    { name: { contains: search, mode: 'insensitive' } },
+                    { email: { contains: search, mode: 'insensitive' } },
+                ],
+            };
+        }
+        const [organizationUsers, total] = await Promise.all([
+            prisma_config_1.default.organizationUser.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: { organization_id: 'asc' },
+                include: {
+                    user: {
+                        select: {
+                            user_id: true,
+                            name: true,
+                            email: true,
+                            status: true,
+                            is_admin: true,
+                            user_role: {
+                                include: { role: true },
+                            },
+                        },
+                    },
+                    organization: {
+                        select: {
+                            organization_id: true,
+                            name: true,
+                            status: true,
+                        },
+                    },
+                },
+            }),
+            prisma_config_1.default.organizationUser.count({ where }),
+        ]);
+        const transformed = organizationUsers.map(ou => ({
+            organization_user_id: ou.organization_user_id,
+            organization_id: ou.organization_id,
+            organization_name: ou.organization.name,
+            organization_status: ou.organization.status,
+            user_id: ou.user.user_id,
+            name: ou.user.name,
+            email: ou.user.email,
+            status: ou.user.status,
+            is_admin: ou.user.is_admin,
+            role_name: ou.user.user_role?.role?.role_name || null,
+            division: ou.division,
+            department: ou.department,
+            title: ou.title,
+            work_phone: ou.work_phone,
+        }));
+        res.json({
+            data: transformed,
+            paging: getAll
+                ? null
+                : {
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit),
+                },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+exports.getOrganizationUsers = getOrganizationUsers;
 // Export controller with custom methods
 exports.organizationUserController = {
     ...baseCrudMethods,
@@ -454,5 +544,7 @@ exports.organizationUserController = {
     getUsersByDepartment, // Custom query by department
     getUsersByDivision, // Custom query by division
     getOrganizationUserStats, // Get statistics
+    getOrganizationUsers: // Get statistics
+    exports.getOrganizationUsers, // Get all with search and pagination
 };
 //# sourceMappingURL=organizationUserController.js.map

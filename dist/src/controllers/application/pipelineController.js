@@ -108,6 +108,9 @@ const canOnboard = (interviews, totalRounds) => {
     }
     return true;
 };
+const shouldWithholdJobEmails = (job) => {
+    return job?.withhold_emails === true;
+};
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED INCLUDE FRAGMENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -353,7 +356,7 @@ const createInterviewForPipeline = async (req, res) => {
                     include: {
                         job: {
                             select: {
-                                job_id: true, job_title: true, location: true,
+                                job_id: true, job_title: true, location: true, withhold_emails: true,
                                 organization: {
                                     select: {
                                         organization_id: true, name: true, website: true,
@@ -367,25 +370,33 @@ const createInterviewForPipeline = async (req, res) => {
                 },
             },
         });
-        (0, emailService_1.sendInterviewInvitationEmail)({
-            applicantEmail: result.application.applicant.contact.email,
-            applicantName: result.application.applicant.full_name,
-            jobTitle: result.application.job.job_title,
-            organizationName: result.application.job.organization.name,
-            organizationWebsite: result.application.job.organization.website || undefined,
-            interviewDate: result.interview_date,
-            location: result.application.job.location,
-            contactEmail: result.application.job.organization.contacts[0]?.email || undefined,
-            contactPhone: result.application.job.organization.contacts[0]?.phone || undefined,
-            round: roundToSchedule,
-            totalRounds,
-            interviewType,
-        }).then((r) => {
-            if (r.success)
-                console.log(`✅ Round ${roundToSchedule} invitation email sent`, { interviewId: result.interview_id });
-            else
-                console.error('❌ Failed to send invitation email', { error: r.error });
-        }).catch((e) => console.error('❌ Email error', e.message));
+        if (!shouldWithholdJobEmails(result.application.job)) {
+            (0, emailService_1.sendInterviewInvitationEmail)({
+                applicantEmail: result.application.applicant.contact.email,
+                applicantName: result.application.applicant.full_name,
+                jobTitle: result.application.job.job_title,
+                organizationName: result.application.job.organization.name,
+                organizationWebsite: result.application.job.organization.website || undefined,
+                interviewDate: result.interview_date,
+                location: result.application.job.location,
+                contactEmail: result.application.job.organization.contacts[0]?.email || undefined,
+                contactPhone: result.application.job.organization.contacts[0]?.phone || undefined,
+                round: roundToSchedule,
+                totalRounds,
+                interviewType,
+            }).then((r) => {
+                if (r.success)
+                    console.log(`✅ Round ${roundToSchedule} invitation email sent`, { interviewId: result.interview_id });
+                else
+                    console.error('❌ Failed to send invitation email', { error: r.error });
+            }).catch((e) => console.error('❌ Email error', e.message));
+        }
+        else {
+            console.log('ℹ️ Skipping interview invitation email because job.withhold_emails is enabled', {
+                interviewId: result.interview_id,
+                jobId: result.application.job.job_id,
+            });
+        }
         const userId = req.user?.user_id;
         if (userId) {
             await (0, activityService_1.updateUserActivity)(userId, {
@@ -441,14 +452,14 @@ const updateInterviewDate = async (req, res) => {
             include: {
                 application: {
                     include: {
-                        job: { select: { job_id: true, job_title: true, location: true, organization: { select: { name: true } } } },
+                        job: { select: { job_id: true, job_title: true, location: true, withhold_emails: true, organization: { select: { name: true } } } },
                         applicant: { select: { full_name: true, status: true, contact: { select: { email: true } } } },
                     },
                 },
             },
         });
         const aEmail = updated.application.applicant.contact?.email;
-        if (aEmail) {
+        if (aEmail && !shouldWithholdJobEmails(updated.application.job)) {
             (0, emailService_1.sendInterviewRescheduleEmail)({
                 applicantEmail: aEmail,
                 applicantName: updated.application.applicant.full_name,
@@ -460,6 +471,12 @@ const updateInterviewDate = async (req, res) => {
             }).then((r) => { if (!r.success)
                 console.error('❌ Reschedule email failed:', r.error); })
                 .catch((e) => console.error('❌ Reschedule email error:', e.message));
+        }
+        else if (aEmail) {
+            console.log('ℹ️ Skipping reschedule email because job.withhold_emails is enabled', {
+                interviewId,
+                jobId: updated.application.job.job_id,
+            });
         }
         const userId = req.user?.user_id;
         if (userId) {
@@ -613,14 +630,14 @@ const rejectInterview = async (req, res) => {
             include: {
                 application: {
                     include: {
-                        job: { select: { job_title: true, organization: { select: { name: true } } } },
+                        job: { select: { job_id: true, job_title: true, withhold_emails: true, organization: { select: { name: true } } } },
                         applicant: { select: { full_name: true, status: true, contact: { select: { email: true } } } },
                     },
                 },
             },
         });
         const aEmail = result.application.applicant.contact?.email;
-        if (aEmail) {
+        if (aEmail && !shouldWithholdJobEmails(result.application.job)) {
             (0, emailService_1.sendInterviewRejectionEmail)({
                 applicantEmail: aEmail,
                 applicantName: result.application.applicant.full_name,
@@ -629,6 +646,12 @@ const rejectInterview = async (req, res) => {
             }).then((r) => { if (!r.success)
                 console.error('❌ Rejection email failed:', r.error); })
                 .catch((e) => console.error('❌ Rejection email error:', e.message));
+        }
+        else if (aEmail) {
+            console.log('ℹ️ Skipping rejection email because job.withhold_emails is enabled', {
+                interviewId,
+                jobId: result.application.job.job_id,
+            });
         }
         return (0, response_1.sendSuccess)(res, result);
     }
@@ -683,13 +706,14 @@ const acceptInterview = async (req, res) => {
             include: {
                 application: {
                     include: {
-                        job: { select: { job_title: true, organization: { select: { name: true } } } },
+                        job: { select: { job_id: true, job_title: true, withhold_emails: true, organization: { select: { name: true } } } },
                         applicant: { select: { full_name: true, status: true, contact: { select: { email: true } } } },
                     },
                 },
             },
         });
-        if (isLastRound) {
+        const shouldSendOfferEmail = isLastRound && !shouldWithholdJobEmails(result.application.job);
+        if (shouldSendOfferEmail) {
             const aEmail = result.application.applicant.contact?.email;
             if (aEmail) {
                 (0, emailService_1.sendOfferLetterEmail)({
@@ -702,8 +726,16 @@ const acceptInterview = async (req, res) => {
                     .catch((e) => console.error('❌ Offer email error:', e.message));
             }
         }
+        else if (isLastRound) {
+            console.log('ℹ️ Skipping offer letter email because job.withhold_emails is enabled', {
+                interviewId,
+                jobId: result.application.job.job_id,
+            });
+        }
         const message = isLastRound
-            ? `Round ${currentRound} accepted. Offer letter sent to candidate.`
+            ? (shouldSendOfferEmail
+                ? `Round ${currentRound} accepted. Offer letter sent to candidate.`
+                : `Round ${currentRound} accepted. Offer letter email suppressed for this job.`)
             : `Round ${currentRound} accepted. Please schedule Round ${currentRound + 1} next.`;
         return (0, response_1.sendSuccess)(res, {
             ...result,
@@ -1132,7 +1164,7 @@ const onboardCandidate = async (req, res) => {
             include: {
                 application: {
                     include: {
-                        job: { select: { job_title: true, organization: { select: { name: true } } } },
+                        job: { select: { job_id: true, job_title: true, withhold_emails: true, organization: { select: { name: true } } } },
                         applicant: {
                             select: {
                                 full_name: true, status: true,
@@ -1177,7 +1209,8 @@ const onboardCandidate = async (req, res) => {
         //              3 separate staggered .then() chains. True fire-and-forget —
         //              response is sent before any email resolves.
         const emailPromises = [];
-        if (aEmail) {
+        const shouldWithholdEmails = shouldWithholdJobEmails(result.application.job);
+        if (!shouldWithholdEmails && aEmail) {
             emailPromises.push((0, emailService_1.sendOnboardingWelcomeEmail)({
                 applicantEmail: aEmail,
                 applicantName: aName,
@@ -1205,7 +1238,7 @@ const onboardCandidate = async (req, res) => {
             uploadedDocuments: docSummary,
             attachments: allAttachments,
         };
-        if (result.credit_user?.email) {
+        if (!shouldWithholdEmails && result.credit_user?.email) {
             emailPromises.push((0, emailService_1.sendAssignmentNotificationEmail)({
                 ...notificationBase,
                 recipientEmail: result.credit_user.email,
@@ -1213,7 +1246,7 @@ const onboardCandidate = async (req, res) => {
                 role: 'Credit User',
             }));
         }
-        if (result.representative_user?.email) {
+        if (!shouldWithholdEmails && result.representative_user?.email) {
             emailPromises.push((0, emailService_1.sendAssignmentNotificationEmail)({
                 ...notificationBase,
                 recipientEmail: result.representative_user.email,
@@ -1222,6 +1255,12 @@ const onboardCandidate = async (req, res) => {
             }));
         }
         Promise.all(emailPromises).catch(e => console.error('❌ One or more onboarding emails failed:', e.message));
+        if (shouldWithholdEmails) {
+            console.log('ℹ️ Skipping onboarding and assignment emails because job.withhold_emails is enabled', {
+                jobId: result.application.job.job_id,
+                pipelineStageId,
+            });
+        }
         // ── 11. Respond ────────────────────────────────────────────────────────────
         return (0, response_1.sendSuccess)(res, {
             ...result,

@@ -117,13 +117,28 @@ exports.updateCompanyOfficeSchema = exports.createCompanyOfficeSchema.partial();
 // ============================================
 // JOB SCHEMAS
 // ============================================
+const JOB_TYPE_VALUES = [
+    'TEMPORARY',
+    'PERMANENT',
+    'CONSULTANT',
+    'CONTRACT',
+    'HOURLY_FULL_TIME',
+    'INTERN',
+    'PART_TIME',
+    'REGULAR_FULL_TIME',
+    'SALARY',
+    'TEMP_TO_HIRE',
+    'TEMP_TO_PERM',
+    'EOR',
+    'DIRECT_HIRE',
+];
 exports.createJobSchema = zod_1.z.object({
     organization_id: zod_1.z.string().uuid('Invalid organization ID'),
     created_by_user_id: zod_1.z.string().uuid('Invalid user ID'),
     manager_id: zod_1.z.string().uuid('Invalid manager ID').optional(),
     job_title: zod_1.z.string().min(1, 'Job title is required'),
     status: zod_1.z.enum(['DRAFT', 'OPEN', 'CLOSED']).default('DRAFT'),
-    job_type: zod_1.z.enum(['TEMPORARY', 'PERMANENT']),
+    job_type: zod_1.z.enum(JOB_TYPE_VALUES),
     location: zod_1.z.string().min(1, 'Job location is required'),
     days_active: zod_1.z.number().int().positive().optional(),
     days_inactive: zod_1.z.number().int().positive().optional(),

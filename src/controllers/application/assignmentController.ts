@@ -521,9 +521,32 @@ const getAssignmentDetails = async (req: Request, res: Response) => {
     const applicationId = assignment.application_id;
     const allDocs       = assignment.application.applicant.documents ?? [];
 
-    // Prefer application-scoped docs; fall back to all applicant docs
-    const appScopedDocs = allDocs.filter((d: any) => d.application_id === applicationId);
-    const docsToUse     = appScopedDocs.length > 0 ? appScopedDocs : allDocs;
+    const isOnboardingDoc = (doc: any): boolean => {
+      const raw = doc?.file_url;
+      if (!raw) return false;
+
+      let fileInfo: any = {};
+      try {
+        fileInfo = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      } catch {
+        fileInfo = {};
+      }
+
+      const containerName =
+        typeof fileInfo?.containerName === 'string' ? fileInfo.containerName : null;
+
+      let urlContainer: string | null = null;
+      if (typeof fileInfo?.url === 'string') {
+        urlContainer = parseContainerFromUrl(fileInfo.url);
+      }
+
+      return containerName === CONTAINER_ONBOARDING || urlContainer === CONTAINER_ONBOARDING;
+    };
+
+    // Return only onboarding docs for this assignment's application.
+    const docsToUse = allDocs.filter(
+      (d: any) => d.application_id === applicationId && isOnboardingDoc(d)
+    );
 
     const documents = docsToUse.map((doc: any) => {
       const documentId = doc.applicant_document_id; // correct PK field per schema

@@ -3,6 +3,7 @@ import prisma from '../../prisma.config';
 import { createCrudController } from '../../factories/crudFactory';
 import { createOrganizationUserSchema, updateOrganizationUserSchema } from '../../validators/schemas';
 import { sendSuccess, sendError } from '../../utils/response';
+import { get } from 'http';
 
 /**
  * OrganizationUser Controller - Custom CRUD for OrganizationUser management
@@ -484,6 +485,107 @@ const getOrganizationUserStats = async (req: Request, res: Response) => {
   }
 };
 
+
+// ─────────────────────────────────────────────────────────────
+// GET ALL ORGANIZATION USERS
+// GET /organization-users?organization_id=&page=&limit=&search=&all=true
+// ─────────────────────────────────────────────────────────────
+
+export const getOrganizationUsers = async (req: Request, res: Response) => {
+  try {
+    const getAll = req.query.all === 'true';
+
+    const page  = Math.max(1, parseInt(req.query.page  as string) || 1);
+    const limit = getAll
+      ? undefined
+      : Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = getAll ? undefined : (page - 1) * limit!;
+
+    const organization_id = req.query.organization_id as string | undefined;
+    const search          = (req.query.search as string)?.trim();
+
+    const where: any = {};
+
+    if (organization_id) {
+      where.organization_id = organization_id;
+    }
+
+    if (search) {
+      where.user = {
+        OR: [
+          { name:  { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
+        ],
+      };
+    }
+
+    const [organizationUsers, total] = await Promise.all([
+      prisma.organizationUser.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { organization_id: 'asc' },
+        include: {
+          user: {
+            select: {
+              user_id:   true,
+              name:      true,
+              email:     true,
+              status:    true,
+              is_admin:  true,
+              user_role: {
+                include: { role: true },
+              },
+            },
+          },
+          organization: {
+            select: {
+              organization_id: true,
+              name:            true,
+              status:          true,
+            },
+          },
+        },
+      }),
+      prisma.organizationUser.count({ where }),
+    ]);
+
+    const transformed = organizationUsers.map(ou => ({
+      organization_user_id: ou.organization_user_id,
+      organization_id:      ou.organization_id,
+      organization_name:    ou.organization.name,
+      organization_status:  ou.organization.status,
+      user_id:              ou.user.user_id,
+      name:                 ou.user.name,
+      email:                ou.user.email,
+      status:               ou.user.status,
+      is_admin:             ou.user.is_admin,
+      role_name:            ou.user.user_role?.role?.role_name || null,
+      division:             ou.division,
+      department:           ou.department,
+      title:                ou.title,
+      work_phone:           ou.work_phone,
+    }));
+
+    res.json({
+      data: transformed,
+      paging: getAll
+        ? null
+        : {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit!),
+          },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+
+
 // Export controller with custom methods
 export const organizationUserController = {
   ...baseCrudMethods,
@@ -494,4 +596,5 @@ export const organizationUserController = {
   getUsersByDepartment, // Custom query by department
   getUsersByDivision, // Custom query by division
   getOrganizationUserStats, // Get statistics
+  getOrganizationUsers, // Get all with search and pagination
 };
