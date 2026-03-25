@@ -211,28 +211,25 @@ model OrganizationContact {
   organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
 
   representative    User?            @relation("ContactRepresentative", fields: [representative_id], references: [user_id])
-  previews          ContactPreview[]
-  associated_jobs   ContactJob[]
-
 
   @@index([organization_id])
   @@map("organization_contacts")
 }
 
 model ContactPreview {
-  preview_id  String              @id @default(uuid())
-  contact_id  String
-  user_id     String
-  type        ContactPreviewType
-  notes       String?
-  date        DateTime            @default(now())
-  job_id      String?
+  preview_id          String              @id @default(uuid())
+  organization_user_id String?
+  user_id             String
+  type                ContactPreviewType
+  notes               String?
+  date                DateTime            @default(now())
+  job_id              String?
 
-  contact     OrganizationContact @relation(fields: [contact_id], references: [organization_contact_id], onDelete: Cascade)
-  user        User                @relation("PreviewLoggedBy", fields: [user_id], references: [user_id])
-  job         Job?                @relation(fields: [job_id], references: [job_id])
+  organization_user   OrganizationUser?   @relation(fields: [organization_user_id], references: [organization_user_id], onDelete: Cascade)
+  user                User                @relation("PreviewLoggedBy", fields: [user_id], references: [user_id])
+  job                 Job?                @relation(fields: [job_id], references: [job_id])
 
-  @@index([contact_id])
+  @@index([organization_user_id])
   @@index([job_id])
   @@map("contact_previews")
 }
@@ -282,6 +279,8 @@ model OrganizationUser {
   // Relations
   organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
   user         User         @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  contact_previews ContactPreview[]
+  contact_jobs     ContactJob[]
 
   @@index([organization_id])
   @@index([user_id])
@@ -307,15 +306,15 @@ model OrganizationActivity {
 
 
 model ContactJob {
-  contact_job_id String              @id @default(uuid())
-  contact_id     String
-  job_id         String
+  contact_job_id      String              @id @default(uuid())
+  organization_user_id String?
+  job_id              String
 
-  contact        OrganizationContact @relation(fields: [contact_id], references: [organization_contact_id], onDelete: Cascade)
-  job            Job                 @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+  organization_user   OrganizationUser?   @relation(fields: [organization_user_id], references: [organization_user_id], onDelete: Cascade)
+  job                 Job                 @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
 
-  @@unique([contact_id, job_id])
-  @@index([contact_id])
+  @@unique([organization_user_id, job_id])
+  @@index([organization_user_id])
   @@index([job_id])
   @@map("contact_jobs")
 }

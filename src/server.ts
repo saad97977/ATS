@@ -14,6 +14,7 @@ import organizationAddressRoutes from './routes/organization/organizationAddress
 import organizationContactRoutes from './routes/organization/organizationContactRoutes';
 import organizationLicenseRoutes from './routes/organization/organizationLicenseRoutes';
 import companyOfficeRoutes from './routes/organization/companyOfficeRoutes';
+import { contactActivityDropdownRouter, contactPreviewRouter, organizationActivityRouter, contactJobRouter } from './routes/organization/contactActivityRoutes';
 import organizationAccountingRoutes from './routes/organization/organizationAccountingRoutes';
 import organizationUserRoutes from './routes/organization/organizationUserRoutes';
 import organizationDocumentTitleRoutes from './routes/organization/organizationDocumentTitleRoutes';
@@ -153,6 +154,13 @@ app.use('/api/organization-documents', organizationDocumentRoutes);
 app.use('/api/organization-document-signatures', organizationDocumentSignatureRoutes);
 app.use('/api/company-offices', companyOfficeRoutes);
 app.use('/api/organization-contracts', organizationContractorRoutes);
+
+
+// Contact Activity routes of Organization
+app.use('/api/contact-activity/dropdown', contactActivityDropdownRouter);
+app.use('/api/contact-previews', contactPreviewRouter);
+app.use('/api/organization-activities', organizationActivityRouter);
+app.use('/api/contact-jobs', contactJobRouter);
 
 
 

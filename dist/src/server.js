@@ -19,6 +19,7 @@ const organizationAddressRoutes_1 = __importDefault(require("./routes/organizati
 const organizationContactRoutes_1 = __importDefault(require("./routes/organization/organizationContactRoutes"));
 const organizationLicenseRoutes_1 = __importDefault(require("./routes/organization/organizationLicenseRoutes"));
 const companyOfficeRoutes_1 = __importDefault(require("./routes/organization/companyOfficeRoutes"));
+const contactActivityRoutes_1 = require("./routes/organization/contactActivityRoutes");
 const organizationAccountingRoutes_1 = __importDefault(require("./routes/organization/organizationAccountingRoutes"));
 const organizationUserRoutes_1 = __importDefault(require("./routes/organization/organizationUserRoutes"));
 const organizationDocumentTitleRoutes_1 = __importDefault(require("./routes/organization/organizationDocumentTitleRoutes"));
@@ -132,6 +133,11 @@ app.use('/api/organization-documents', organizationDocumentRoutes_1.default);
 app.use('/api/organization-document-signatures', organizationDocumentSignatureRoutes_1.default);
 app.use('/api/company-offices', companyOfficeRoutes_1.default);
 app.use('/api/organization-contracts', organizationContractRoutes_1.default);
+// Contact Activity routes of Organization
+app.use('/api/contact-activity/dropdown', contactActivityRoutes_1.contactActivityDropdownRouter);
+app.use('/api/contact-previews', contactActivityRoutes_1.contactPreviewRouter);
+app.use('/api/organization-activities', contactActivityRoutes_1.organizationActivityRouter);
+app.use('/api/contact-jobs', contactActivityRoutes_1.contactJobRouter);
 // Applicant Profile Routes
 app.use('/api/applicantsprofiles', applicantProfileRoutes_1.default);
 // Applicant routes
