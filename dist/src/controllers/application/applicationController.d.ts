@@ -11,6 +11,7 @@ export declare const applicationController: {
     getOverallStats: (req: Request, res: Response) => Promise<void>;
     searchApplications: (req: Request, res: Response) => Promise<void>;
     getApplicationsDropdownData: (req: Request, res: Response) => Promise<void>;
+    getApplicationDetail: (req: Request, res: Response) => Promise<void>;
     delete: (req: Request, res: Response) => Promise<void>;
 };
 //# sourceMappingURL=applicationController.d.ts.map

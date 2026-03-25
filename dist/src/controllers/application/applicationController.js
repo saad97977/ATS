@@ -842,6 +842,101 @@ const getOverallStats = async (req, res) => {
         return (0, response_1.sendError)(res, 'Failed to fetch overall statistics', 500);
     }
 };
+/**
+ * Get application detail with job info, notes, and applicant info
+ * GET /api/applications/:id/detail
+ * Returns: job_title, job_details, job_notes, applicant name, applicant work_history, applicant demographic
+ */
+const getApplicationDetail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id) {
+            return (0, response_1.sendError)(res, 'Application ID is required', 400);
+        }
+        const application = await prisma_config_1.default.application.findUnique({
+            where: { application_id: id },
+            include: {
+                job: {
+                    select: {
+                        job_id: true,
+                        job_title: true,
+                        job_category: true,
+                        job_detail: {
+                            select: {
+                                job_detail_id: true,
+                                description: true,
+                                skills: true,
+                            },
+                        },
+                        job_notes: {
+                            select: {
+                                job_note_id: true,
+                                note: true,
+                                created_at: true,
+                            },
+                            orderBy: { created_at: 'desc' },
+                        },
+                    },
+                },
+                applicant: {
+                    select: {
+                        applicant_id: true,
+                        full_name: true,
+                        status: true,
+                        work_history: {
+                            where: {
+                                application_id: id, // Only work history for THIS application
+                            },
+                            select: {
+                                applicant_work_history_id: true,
+                                title: true,
+                                description: true,
+                                created_at: true,
+                            },
+                            orderBy: { created_at: 'desc' },
+                        },
+                        demographic: {
+                            select: {
+                                applicant_demo_id: true,
+                                birth_date: true,
+                                gender: true,
+                                race: true,
+                                disability: true,
+                                work_authorization: true,
+                                authorization_expiry: true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        if (!application) {
+            return (0, response_1.sendError)(res, 'Application not found', 404);
+        }
+        // Format response with all requested details
+        return (0, response_1.sendSuccess)(res, {
+            application_id: application.application_id,
+            job: {
+                job_id: application.job.job_id,
+                job_title: application.job.job_title,
+                job_category: application.job.job_category,
+                job_detail: application.job.job_detail,
+                job_notes: application.job.job_notes,
+            },
+            applicant: {
+                applicant_id: application.applicant.applicant_id,
+                full_name: application.applicant.full_name,
+                status: application.applicant.status,
+                work_history: application.applicant.work_history,
+                demographic: application.applicant.demographic,
+            },
+        });
+    }
+    catch (err) {
+        console.error('Error fetching application detail:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch application detail', 500);
+    }
+};
 // Export controller with custom methods
 exports.applicationController = {
     ...baseCrudMethods,
@@ -856,5 +951,6 @@ exports.applicationController = {
     getOverallStats, // NEW: Get overall statistics for all applications
     searchApplications, // NEW: Search applications by job title, applicant name, or organization
     getApplicationsDropdownData, // NEW: Get dropdown data for filtering
+    getApplicationDetail, // NEW: Get application detail with job and applicant info
 };
 //# sourceMappingURL=applicationController.js.map

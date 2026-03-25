@@ -61,6 +61,13 @@ router.get('/applicant/:applicantId', applicationController_1.applicationControl
  */
 router.get('/status/:status', applicationController_1.applicationController.getApplicationsByStatus);
 /**
+ * GET /api/applications/:id/detail
+ * Get application with job details and applicant info
+ * Returns: job_title, job_details, job_notes, applicant name, applicant work_history, applicant demographic
+ * Must be before /:id to avoid route conflict
+ */
+router.get('/:id/detail', applicationController_1.applicationController.getApplicationDetail);
+/**
  * GET /api/applications/:id
  * Get single application by ID with full details
  * (job, applicant, interviews, pipeline stages, assignment, evaluations)
