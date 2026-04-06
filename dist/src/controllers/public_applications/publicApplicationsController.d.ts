@@ -1,18 +1,4 @@
 import { Request, Response } from 'express';
-/**
- * Submit a job application with application-specific snapshots
- * POST /api/public/jobs/:jobId/apply
- *
- * OPTIMIZATIONS vs original:
- * - Pre-fetch job + applicant in parallel before transaction opens
- * - Duplicate application check done pre-transaction (no wasted tx time)
- * - Social profile upserts replaced with a single Promise.all inside tx
- * - Demographics upsert collapsed to one conditional call
- * - Cover letter + work history inserts batched via Promise.all
- * - Transaction timeout raised to 20s with maxWait 8s
- * - Final application fetch runs with only needed includes
- * - Resume upload fully outside transaction (unchanged from your version)
- */
 export declare const submitApplication: (req: Request, res: Response) => Promise<void>;
 /**
  * Upload resume for an existing application
@@ -122,9 +108,15 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
             email: string;
             phone: string;
             city: string | null;
+            state: string | null;
+            zip: string | null;
+            country: string | null;
+            work_phone: string | null;
             address: string | null;
             applicant_id: string;
             applicant_contact_id: string;
+            email2: string | null;
+            home_phone: string | null;
         } | null;
         demographic: {
             applicant_id: string;
@@ -147,10 +139,28 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
     } & {
         status: import(".prisma/client").$Enums.ApplicantStatus;
         created_at: Date;
+        office_name: string | null;
         full_name: string;
         last_active_at: Date | null;
         applicant_id: string;
+        source: string | null;
+        first_name: string | null;
+        last_name: string | null;
+        notes: string | null;
+        add_to_hotlist: boolean | null;
+        headline: string | null;
         comp_code_last: string | null;
+        home_office: string | null;
+        geo_code: string | null;
+        school_district: string | null;
+        is_us_citizen: boolean | null;
+        employment_type_pref: import(".prisma/client").$Enums.EmploymentTypePref | null;
+        first_impression: import(".prisma/client").$Enums.ImpressionGrade | null;
+        text_consent: string | null;
+        communication_preference: string | null;
+        is_optout: boolean | null;
+        is_private: boolean | null;
+        office_division: string | null;
     };
     work_history: {
         created_at: Date;
@@ -159,6 +169,9 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
         applicant_id: string;
         application_id: string | null;
         applicant_work_history_id: string;
+        company: string | null;
+        from_date: Date | null;
+        to_date: Date | null;
     }[];
 } & {
     status: import(".prisma/client").$Enums.ApplicationStatus;

@@ -633,39 +633,104 @@ model JobRate {
 // TALENT & APPLICANTS
 // ============================================
 
+// ============================================
+// APPLICANT — extended profile fields
+// ============================================
+
 model Applicant {
-  applicant_id   String          @id @default(uuid())
-  full_name      String
-  status         ApplicantStatus @default(APPLIED)
-  comp_code_last String?
-  last_active_at DateTime?
-  created_at     DateTime        @default(now())
+  applicant_id    String          @id @default(uuid())
+  first_name      String?         // ← NEW (split from full_name)
+  last_name       String?         // ← NEW
+  full_name       String          // keep for backward compat
+  headline        String?         // ← NEW
+  status          ApplicantStatus @default(APPLIED)
+  comp_code_last  String?
+  last_active_at  DateTime?
+  created_at      DateTime        @default(now())
+
+  // NEW profile-level fields
+  home_office          String?    // e.g. "SMS Staffing Solutions-United States"
+  geo_code             String?
+  school_district      String?
+  source               String?    // applicant-level source (independent of application)
+  is_us_citizen        Boolean?
+  employment_type_pref EmploymentTypePref?  // ← NEW enum (see below)
+  first_impression     ImpressionGrade?     // ← NEW enum
+  add_to_hotlist       Boolean?   @default(false)
+  notes                String?    // free text notes
+
+  text_consent           String?   // "No Response" | "Yes" | "No"
+  communication_preference String? // "Email, Text"
+  is_optout              Boolean?  @default(false)
+  is_private             Boolean?  @default(false)
+  office_name            String?   // "MCL JASCO GOC"
+  office_division        String?   // "SMS Staffing Solutions"
+
 
   // Relations
-  contact         ApplicantContact?
-  demographic     ApplicantDemographic?
-  documents       ApplicantDocument[]
-  social_profiles ApplicantSocialProfiles[]
-  references      ApplicantReferences[]
-  work_history    ApplicantWorkHistory[]
-  applications    Application[]
+  contact              ApplicantContact?
+  demographic          ApplicantDemographic?
+  documents            ApplicantDocument[]
+  social_profiles      ApplicantSocialProfiles[]
+  references           ApplicantReferences[]
+  work_history         ApplicantWorkHistory[]
+  education            ApplicantEducation[]         // ← NEW
+  classification       ApplicantClassification?     // ← NEW
+  applicant_tags       ApplicantTag[]               // ← NEW (rated tags)
+  applications         Application[]
 
   @@map("applicants")
 }
+
+
+
+// ============================================
+// APPLICANT — extended contact info
+// ============================================
 
 model ApplicantContact {
   applicant_contact_id String  @id @default(uuid())
   applicant_id         String  @unique
   email                String
-  phone                String
+  email2               String?   // ← NEW: secondary email
+  phone                String    // mobile (primary)
+  work_phone           String?   // ← NEW
+  home_phone           String?   // ← NEW
   address              String?
   city                 String?
+  state                String?   // ← NEW
+  zip                  String?   // ← NEW
+  country              String?   // ← NEW
 
-  // Relations
   applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
 
   @@map("applicant_contacts")
 }
+
+
+
+// ============================================
+// NEW: Education history
+// ============================================
+
+model ApplicantEducation {
+  education_id  String    @id @default(uuid())
+  applicant_id  String
+  school        String
+  degree        String?
+  field         String?
+  from_date     DateTime?
+  to_date       DateTime?
+
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@index([applicant_id])
+  @@map("applicant_education")
+}
+
+
+
+
 
 model ApplicantDemographic {
   applicant_demo_id    String    @id @default(uuid())
@@ -737,24 +802,72 @@ model ApplicantReferences {
 }
 
 // ============================================
-// UPDATED: Application-Specific Work History
+// UPDATED: Work history — add company + dates
 // ============================================
+
 model ApplicantWorkHistory {
   applicant_work_history_id String   @id @default(uuid())
   applicant_id              String
-  application_id            String?  // ← NEW: Links work history to specific application
+  application_id            String?
+  company                   String?  // ← NEW
   title                     String
   description               String?
-  created_at                DateTime @default(now())  // ← NEW: Track when added
+  from_date                 DateTime? // ← NEW
+  to_date                   DateTime? // ← NEW
+  created_at                DateTime @default(now())
 
-  // Relations
   applicant   Applicant    @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
   application Application? @relation(fields: [application_id], references: [application_id], onDelete: SetNull)
 
   @@index([applicant_id])
-  @@index([application_id])  // ← NEW: Index for querying by application
+  @@index([application_id])
   @@map("applicant_work_history")
 }
+
+
+
+// ============================================
+// NEW: Classifications (tags, skills, certs, etc.)
+// ============================================
+
+model ApplicantClassification {
+  classification_id    String   @id @default(uuid())
+  applicant_id         String   @unique
+  talent_status        TalentStatus?  // free-form or use TalentStatus enum
+  position_categories  String[] // e.g. ["Accounting", "Admin"]
+  skill_sets           String[]
+  applicant_tags       String[] // Employment Preference, Language, etc.
+  tag_details          String[] // e.g. ["1st shift", "2nd shift"]
+  industry_experience  String[]
+  identifications      String[] // Driver License, Passport, etc.
+  certifications       String[] // CPR Certified, Forklift, etc.
+
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@map("applicant_classifications")
+}
+
+
+
+// ============================================
+// NEW: Rated tags (tag title + stars 1–5)
+// ============================================
+
+model ApplicantTag {
+  tag_id       String @id @default(uuid())
+  applicant_id String
+  tag_title    String
+  stars        Int    // 1–5
+
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@unique([applicant_id, tag_title])
+  @@index([applicant_id])
+  @@map("applicant_tags")
+}
+
+
+
 
 // ============================================
 // UPDATED: APPLICATION PIPELINE
@@ -857,6 +970,17 @@ model Assignment {
   workers_comp_codes Json?     // [{ code, description, pct }] — full multi-code array
   company_codes      Json?     // [{ code, description, allocation_pct }]
 
+  // Rate snapshot at hire time (frozen from JobRate)
+  hire_pay_rate     Decimal?  @db.Decimal(10, 2)
+  hire_bill_rate    Decimal?  @db.Decimal(10, 2)
+  hire_ot_pay_rate  Decimal?  @db.Decimal(10, 2)
+  hire_ot_bill_rate Decimal?  @db.Decimal(10, 2)
+  hire_markup       Decimal?  @db.Decimal(5, 2)
+  hire_burden       Decimal?  @db.Decimal(5, 2)
+
+  hired_notes   String?
+  falloff       Boolean?  @default(false)
+  extended      Boolean?  @default(false)
 
   // Existing relation
   application  Application  @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
@@ -1338,4 +1462,39 @@ enum ContactPreviewType {
   CALL_COMPLETED
   CALL_SCHEDULED
   CALL_RESCHEDULED
+}
+
+// ============================================
+// NEW ENUMS
+// ============================================
+
+enum EmploymentTypePref {
+  W2
+  CONTRACTOR_1099 @map("1099")
+  C2C
+}
+
+enum ImpressionGrade {
+  A
+  B
+  C
+  D
+  F
+}
+
+// Optional: strongly-typed talent status
+enum TalentStatus {
+  ACTIVE_HOURLY
+  ACTIVE_SALARY
+  APPLICANT
+  CONSULTANT
+  CONTRACT
+  DO_NOT_ASSIGN
+  INACTIVE
+  INCOMPLETE_APPLICANT
+  ONBOARDING_COMPLETE_HOSPITALITY
+  ONLINE_APPLICANT
+  PART_TIME
+  REJECTED
+  RESUME_PARSED
 }

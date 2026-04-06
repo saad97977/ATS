@@ -123,14 +123,22 @@ router.get('/jobs/:jobId/check-application', checkExistingApplication);
 
 // Submit job application with resume upload
 // POST /api/public/jobs/:jobId/apply
-// Content-Type: multipart/form-data
-// Body: { full_name, email, phone, resume: File, ... }
 router.post(
   '/jobs/:jobId/apply',
-  upload.single('resume'), // 'resume' is the field name in form-data
+  upload.single('resume'),
   handleMulterError,
   submitApplication
 );
+
+// Upsert applicant profile only (no job/application created)
+// POST /api/public/applicants/profile
+router.post(
+  '/applicants/profile',
+  upload.single('resume'),
+  handleMulterError,
+  submitApplication
+);
+
 
 // Upload resume for an existing application
 // POST /api/public/applications/:applicationId/upload-resume

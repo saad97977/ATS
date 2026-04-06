@@ -97,10 +97,10 @@ router.get('/organizations/:organizationId/jobs', publicJobBoardController_1.get
 router.get('/jobs/:jobId/check-application', publicApplicationsController_1.checkExistingApplication);
 // Submit job application with resume upload
 // POST /api/public/jobs/:jobId/apply
-// Content-Type: multipart/form-data
-// Body: { full_name, email, phone, resume: File, ... }
-router.post('/jobs/:jobId/apply', upload.single('resume'), // 'resume' is the field name in form-data
-handleMulterError, publicApplicationsController_1.submitApplication);
+router.post('/jobs/:jobId/apply', upload.single('resume'), handleMulterError, publicApplicationsController_1.submitApplication);
+// Upsert applicant profile only (no job/application created)
+// POST /api/public/applicants/profile
+router.post('/applicants/profile', upload.single('resume'), handleMulterError, publicApplicationsController_1.submitApplication);
 // Upload resume for an existing application
 // POST /api/public/applications/:applicationId/upload-resume
 // Content-Type: multipart/form-data

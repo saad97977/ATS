@@ -1,1 +1,1 @@
-{"version":3,"file":"applicantController.d.ts","sourceRoot":"","sources":["../../../../src/controllers/applicant/applicantController.ts"],"names":[],"mappings":"AAKA,eAAO,MAAM,mBAAmB,sDAQ9B,CAAC"}
+{"version":3,"file":"applicantController.d.ts","sourceRoot":"","sources":["../../../../src/controllers/applicant/applicantController.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,OAAO,EAAE,QAAQ,EAAE,MAAM,SAAS,CAAC;AAgN5C,eAAO,MAAM,mBAAmB;kBAhLU,OAAO,OAAO,QAAQ;;;;;CAmL/D,CAAC"}

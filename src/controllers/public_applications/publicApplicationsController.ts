@@ -4,53 +4,6 @@ import { sendSuccess, sendError } from '../../utils/response';
 import { z } from 'zod';
 import { BlobServiceClient } from '@azure/storage-blob';
 
-/**
- * Public Application Controller - Application-Specific Snapshots
- * 
- * ARCHITECTURE OVERVIEW:
- * ======================
- * This controller implements an application-snapshot pattern where each job application
- * maintains its own immutable snapshot of the applicant's data at the time of submission.
- * 
- * WHY APPLICATION SNAPSHOTS?
- * - Recruiters need to evaluate candidates based on what was submitted
- * - Applicants should be able to update their profile without affecting pending applications
- * - Maintains data integrity and audit trail
- * - Matches behavior of major job platforms (Indeed, LinkedIn)
- * 
- * DATA ORGANIZATION:
- * ==================
- * 
- * 1. APPLICANT MASTER PROFILE (applicants table)
- *    - Current/latest contact information
- *    - Current/latest social profiles
- *    - For convenience and profile management
- * 
- * 2. APPLICATION SNAPSHOTS (application-specific)
- *    - Resume: Unique file per application (stored in Azure)
- *    - Cover Letter: Specific to this job application
- *    - Work History: Snapshot of experience at time of application
- *    - All linked via application_id
- * 
- * EXAMPLE SCENARIO:
- * =================
- * Day 1: Alice applies to Company A
- *   - Uploads resume_v1.pdf
- *   - Submits cover letter for Company A
- *   - Lists 3 work experiences
- * 
- * Day 5: Alice applies to Company B
- *   - Uploads resume_v2.pdf (improved version)
- *   - Submits different cover letter for Company B
- *   - Lists 4 work experiences (added new job)
- * 
- * RESULT:
- * - Company A sees: resume_v1.pdf, Company A cover letter, 3 experiences
- * - Company B sees: resume_v2.pdf, Company B cover letter, 4 experiences
- * - Both applications are independent and immutable
- */
-
-// Initialize Azure Blob Service Client
 if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
   throw new Error('AZURE_STORAGE_CONNECTION_STRING is not defined in environment variables');
 }
@@ -58,32 +11,14 @@ if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
 const blobServiceClient = BlobServiceClient.fromConnectionString(
   process.env.AZURE_STORAGE_CONNECTION_STRING
 );
-
 const containerName = process.env.AZURE_CONTAINER_NAME || 'applicant-documents';
 
-/**
- * Get container client (creates container if it doesn't exist)
- */
 const getContainerClient = async () => {
   const containerClient = blobServiceClient.getContainerClient(containerName);
-  
-  await containerClient.createIfNotExists({
-    access: 'blob', // Public read access for blobs
-  });
-  
+  await containerClient.createIfNotExists({ access: 'blob' });
   return containerClient;
 };
 
-/**
- * Generate unique blob name with application context
- * Pattern: {applicantId}/applications/{applicationId}/{timestamp}-{random}-{filename}
- * 
- * This ensures:
- * - Each application has its own folder
- * - No file overwrites
- * - Clear audit trail
- * - Easy to implement retention policies
- */
 const generateBlobName = (applicantId: string, applicationId: string, originalName: string): string => {
   const timestamp = Date.now();
   const randomStr = Math.random().toString(36).substring(2, 8);
@@ -91,534 +26,250 @@ const generateBlobName = (applicantId: string, applicationId: string, originalNa
   return `${applicantId}/applications/${applicationId}/${timestamp}-${randomStr}-${sanitizedName}`;
 };
 
+// ── Validation Schema ────────────────────────────────────────────────────────
+const submitApplicationSchema = z.object({
+  // job_id is now OPTIONAL — omit to do a profile-only upsert
+  job_id: z.string().uuid('Valid job ID is required').optional(),
 
-
-// // Validation schema for new job application
-// const createApplicationSchema = z.object({
-//   job_id: z.string().uuid('Valid job ID is required'),
-//   full_name: z.string().min(2, 'Full name must be at least 2 characters'),
-//   email: z.string().email('Valid email is required'),
-//   phone: z.string().min(10, 'Valid phone number is required'),
-//   address: z.string().optional(),
-//   city: z.string().optional(),
-//   birth_date: z.string().datetime().optional(),
-//   gender: z.string().optional(),
-//   race: z.string().optional(),
-//   disability: z.string().optional(),
-//   work_authorization: z.string().optional(),
-//   authorization_expiry: z.string().datetime().optional(),
-//   source: z.string().optional().default('WEB_APPLICANT'),
-//   cover_letter: z.string().optional(),
-//   linkedin_url: z.string().url().optional(),
-//   portfolio_url: z.string().url().optional(),
-//   work_history: z.preprocess(
-//   (val) => {
-//     if (typeof val === 'string') {
-//       try {
-//         return JSON.parse(val);
-//       } catch {
-//         return val;
-//       }
-//     }
-//     return val;
-//   },
-//   z.array(
-//     z.object({
-//       title: z.string(),
-//       description: z.string().optional(),
-//     })
-//   ).optional()),
-
-// });
-
-// /**
-//  * Submit a job application with application-specific snapshots
-//  * POST /api/public/jobs/:jobId/apply
-//  * 
-//  * FLOW:
-//  * 1. Create/update applicant master profile
-//  * 2. Update master social profiles
-//  * 3. Update master demographics (if provided)
-//  * 4. Create application record
-//  * 5. Upload application-specific resume to Azure
-//  * 6. Store application-specific cover letter
-//  * 7. Store application-specific work history snapshot
-//  * 8. Return complete application with all snapshots
-//  */
-// export const submitApplication = async (req: Request, res: Response) => {
-//   try {
-//     const { jobId } = req.params;
-//     const file = (req as any).file; // Resume file from multer
-
-//     // Validate request body
-//     const validation = createApplicationSchema.safeParse({
-//       ...req.body,
-//       job_id: jobId,
-//     });
-
-//     if (!validation.success) {
-//       const errors = validation.error.issues.map((err: any) => ({
-//         field: err.path.join('.'),
-//         message: err.message,
-//       }));
-//       return sendError(res, 'Validation failed', 400, errors);
-//     }
-
-//     const data = validation.data;
-
-//     // Check if job exists and is accepting applications
-//     const job = await prisma.job.findFirst({
-//       where: {
-//         job_id: jobId,
-//         status: 'OPEN',
-//         organization: {
-//           status: 'ACTIVE',
-//         },
-//       },
-//       include: {
-//         organization: {
-//           select: {
-//             name: true,
-//           },
-//         },
-//       },
-//     });
-
-//     if (!job) {
-//       return sendError(
-//         res,
-//         'Job not found or not currently accepting applications',
-//         404
-//       );
-//     }
-
-//     // Check if positions are still available
-//     if (job.open_positions !== null && job.open_positions <= 0) {
-//       return sendError(
-//         res,
-//         'No open positions available for this job',
-//         400
-//       );
-//     }
-
-//     // Check if applicant already exists by email
-//     let applicant = await prisma.applicant.findFirst({
-//       where: {
-//         contact: {
-//           email: data.email,
-//         },
-//       },
-//       include: {
-//         contact: true,
-//         demographic: true,
-//         social_profiles: true,
-//       },
-//     });
-
-//     // Check if applicant already applied to this job
-//     if (applicant) {
-//       const existingApplication = await prisma.application.findFirst({
-//         where: {
-//           job_id: jobId,
-//           applicant_id: applicant.applicant_id,
-//         },
-//       });
-
-//       if (existingApplication) {
-//         return sendError(
-//           res,
-//           'You have already applied to this job',
-//           409,
-//           [{
-//             field: 'duplicate_application',
-//             message: `Application already exists with ID: ${existingApplication.application_id}`,
-//           }]
-//         );
-//       }
-//     }
-
-//     // ============================================
-//     // STEP 1-6: Create application inside transaction (no file upload)
-//     // ============================================
-//     const result = await prisma.$transaction(
-//       async (tx) => {
-//         // CREATE OR UPDATE APPLICANT MASTER PROFILE
-//         if (!applicant) {
-//           // NEW APPLICANT: Create with demographics if provided
-//           applicant = await tx.applicant.create({
-//             data: {
-//               full_name: data.full_name,
-//               status: 'APPLIED',
-//               contact: {
-//                 create: {
-//                   email: data.email,
-//                   phone: data.phone,
-//                   address: data.address,
-//                   city: data.city,
-//                 },
-//               },
-//               demographic: data.birth_date || data.gender || data.race || data.disability || data.work_authorization ? {
-//                 create: {
-//                   birth_date: data.birth_date ? new Date(data.birth_date) : null,
-//                   gender: data.gender,
-//                   race: data.race,
-//                   disability: data.disability,
-//                   work_authorization: data.work_authorization,
-//                   authorization_expiry: data.authorization_expiry
-//                     ? new Date(data.authorization_expiry)
-//                     : null,
-//                 },
-//               } : undefined,
-//             },
-//             include: {
-//               contact: true,
-//               demographic: true,
-//               social_profiles: true,
-//             },
-//           });
-//         } else {
-//           // EXISTING APPLICANT: Update master profile
-//           applicant = await tx.applicant.update({
-//             where: { applicant_id: applicant.applicant_id },
-//             data: {
-//               last_active_at: new Date(),
-//               full_name: data.full_name,
-//               contact: {
-//                 update: {
-//                   phone: data.phone,
-//                   address: data.address,
-//                   city: data.city,
-//                 },
-//               },
-//             },
-//             include: {
-//               contact: true,
-//               demographic: true,
-//               social_profiles: true,
-//             },
-//           });
-
-//           // UPDATE OR CREATE DEMOGRAPHICS (Master Profile)
-//           // Check if any demographic field is provided in current submission
-//           const hasDemographicData = data.birth_date || data.gender || data.race || 
-//                                       data.disability || data.work_authorization;
-
-//           if (hasDemographicData) {
-//             if (applicant.demographic) {
-//               // UPDATE existing demographics
-//               await tx.applicantDemographic.update({
-//                 where: { applicant_demo_id: applicant.demographic.applicant_demo_id },
-//                 data: {
-//                   // Update only fields that are provided (not empty)
-//                   ...(data.birth_date && { birth_date: new Date(data.birth_date) }),
-//                   ...(data.gender && { gender: data.gender }),
-//                   ...(data.race && { race: data.race }),
-//                   ...(data.disability && { disability: data.disability }),
-//                   ...(data.work_authorization && { work_authorization: data.work_authorization }),
-//                   ...(data.authorization_expiry && { 
-//                     authorization_expiry: new Date(data.authorization_expiry) 
-//                   }),
-//                 },
-//               });
-//             } else {
-//               // CREATE demographics if they don't exist
-//               await tx.applicantDemographic.create({
-//                 data: {
-//                   applicant_id: applicant.applicant_id,
-//                   birth_date: data.birth_date ? new Date(data.birth_date) : null,
-//                   gender: data.gender,
-//                   race: data.race,
-//                   disability: data.disability,
-//                   work_authorization: data.work_authorization,
-//                   authorization_expiry: data.authorization_expiry
-//                     ? new Date(data.authorization_expiry)
-//                     : null,
-//                 },
-//               });
-//             }
-//           }
-//         }
-
-//         // UPDATE MASTER SOCIAL PROFILES
-//         if (data.linkedin_url) {
-//           const existingLinkedIn = applicant!.social_profiles.find(
-//             (profile) => profile.profile_title === 'LinkedIn'
-//           );
-
-//           if (!existingLinkedIn) {
-//             await tx.applicantSocialProfiles.create({
-//               data: {
-//                 applicant_id: applicant!.applicant_id,
-//                 profile_title: 'LinkedIn',
-//                 profile_link: data.linkedin_url,
-//               },
-//             });
-//           } else if (existingLinkedIn.profile_link !== data.linkedin_url) {
-//             await tx.applicantSocialProfiles.update({
-//               where: { applicant_social_profiles_id: existingLinkedIn.applicant_social_profiles_id },
-//               data: { profile_link: data.linkedin_url },
-//             });
-//           }
-//         }
-
-//         if (data.portfolio_url) {
-//           const existingPortfolio = applicant!.social_profiles.find(
-//             (profile) => profile.profile_title === 'Portfolio'
-//           );
-
-//           if (!existingPortfolio) {
-//             await tx.applicantSocialProfiles.create({
-//               data: {
-//                 applicant_id: applicant!.applicant_id,
-//                 profile_title: 'Portfolio',
-//                 profile_link: data.portfolio_url,
-//               },
-//             });
-//           } else if (existingPortfolio.profile_link !== data.portfolio_url) {
-//             await tx.applicantSocialProfiles.update({
-//               where: { applicant_social_profiles_id: existingPortfolio.applicant_social_profiles_id },
-//               data: { profile_link: data.portfolio_url },
-//             });
-//           }
-//         }
-
-//         // CREATE APPLICATION
-//         const application = await tx.application.create({
-//           data: {
-//             job_id: jobId,
-//             applicant_id: applicant!.applicant_id,
-//             source: data.source || 'WEB_APPLICANT',
-//             status: 'APPLIED',
-//           },
-//         });
-
-//         // STORE COVER LETTER (text, no file upload)
-//         if (data.cover_letter) {
-//           await tx.applicantDocument.create({
-//             data: {
-//               applicant_id: applicant!.applicant_id,
-//               application_id: application.application_id,
-//               document_type: 'COVER_LETTER',
-//               file_url: JSON.stringify({
-//                 content: data.cover_letter,
-//                 type: 'text',
-//                 createdAt: new Date().toISOString(),
-//                 applicationId: application.application_id,
-//               }),
-//             },
-//           });
-//         }
-
-//         // STORE WORK HISTORY
-//         if (data.work_history && data.work_history.length > 0) {
-//           await tx.applicantWorkHistory.createMany({
-//             data: data.work_history.map((work) => ({
-//               applicant_id: applicant!.applicant_id,
-//               application_id: application.application_id,
-//               title: work.title,
-//               description: work.description,
-//             })),
-//           });
-//         }
-
-//         // Decrement open_positions
-//         if (job.open_positions !== null && job.open_positions > 0) {
-//           await tx.job.update({
-//             where: { job_id: jobId },
-//             data: {
-//               open_positions: {
-//                 decrement: 1,
-//               },
-//             },
-//           });
-//         }
-
-//         return { application, applicantId: applicant!.applicant_id };
-//       },
-//       {
-//         maxWait: 5000,
-//         timeout: 10000,
-//       }
-//     );
-
-//     // ============================================
-//     // STEP 7: UPLOAD RESUME OUTSIDE TRANSACTION
-//     // ============================================
-//     let resumeMetadata = null;
-//     if (file) {
-//       try {
-//         const containerClient = await getContainerClient();
-//         const blobName = generateBlobName(
-//           result.applicantId,
-//           result.application.application_id,
-//           file.originalname
-//         );
-//         const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-
-//         await blockBlobClient.upload(file.buffer, file.buffer.length, {
-//           blobHTTPHeaders: {
-//             blobContentType: file.mimetype,
-//           },
-//         });
-
-//         const fileUrl = blockBlobClient.url;
-
-//         resumeMetadata = {
-//           originalFileName: file.originalname,
-//           mimeType: file.mimetype,
-//           blobName: blobName,
-//           size: file.size,
-//           url: fileUrl,
-//           uploadedAt: new Date().toISOString(),
-//           applicationId: result.application.application_id,
-//         };
-
-//         // Link resume to application AFTER upload succeeds
-//         await prisma.applicantDocument.create({
-//           data: {
-//             applicant_id: result.applicantId,
-//             application_id: result.application.application_id,
-//             document_type: 'RESUME',
-//             file_url: JSON.stringify(resumeMetadata),
-//           },
-//         });
-//       } catch (uploadErr) {
-//         console.error('Error uploading resume to Azure:', uploadErr);
-//         // Log but don't fail - application was already created successfully
-//         console.warn('Resume upload failed but application was created');
-//       }
-//     }
-
-//     // ============================================
-//     // STEP 8: FETCH COMPLETE APPLICATION
-//     // ============================================
-//     const completeApplication = await prisma.application.findUnique({
-//       where: { application_id: result.application.application_id },
-//       include: {
-//         job: {
-//           select: {
-//             job_id: true,
-//             job_title: true,
-//             organization: {
-//               select: {
-//                 name: true,
-//               },
-//             },
-//           },
-//         },
-//         applicant: {
-//           select: {
-//             applicant_id: true,
-//             full_name: true,
-//             contact: {
-//               select: {
-//                 email: true,
-//                 phone: true,
-//               },
-//             },
-//           },
-//         },
-//         documents: {
-//           where: {
-//             application_id: result.application.application_id,
-//           },
-//         },
-//         work_history: {
-//           where: {
-//             application_id: result.application.application_id,
-//           },
-//         },
-//       },
-//     });
-
-//     return sendSuccess(res, {
-//       application: completeApplication,
-//       resume_uploaded: !!resumeMetadata,
-//       ...(file && {
-//         resume: {
-//           filename: file.originalname,
-//           size: file.size,
-//           mimeType: file.mimetype,
-//         },
-//       }),
-//       message: `Application submitted successfully for ${job.job_title} at ${job.organization.name}`,
-//     }, 201);
-
-//   } catch (err: any) {
-//     console.error('Error submitting application:', err);
-
-//     if (err.message === 'Failed to upload resume') {
-//       return sendError(res, 'Failed to upload resume to storage', 500);
-//     }
-
-//     if (err.code === 'P2002') {
-//       return sendError(res, 'Duplicate application detected', 409);
-//     }
-
-//     if (err.code === 'P2003') {
-//       return sendError(res, 'Invalid job or applicant reference', 404);
-//     }
-
-//     return sendError(res, 'Failed to submit application', 500);
-//   }
-// };
-
-
-
-// Validation schema for new job application
-const createApplicationSchema = z.object({
-  job_id: z.string().uuid('Valid job ID is required'),
+  first_name: z.string().optional(),
+  last_name: z.string().optional(),
   full_name: z.string().min(2, 'Full name must be at least 2 characters'),
+
   email: z.string().email('Valid email is required'),
   phone: z.string().min(10, 'Valid phone number is required'),
+
+  email2: z.string().email().optional(),
+  work_phone: z.string().optional(),
+  home_phone: z.string().optional(),
   address: z.string().optional(),
   city: z.string().optional(),
+  state: z.string().optional(),
+  zip: z.string().optional(),
+  country: z.string().optional(),
+
   birth_date: z.string().datetime().optional(),
   gender: z.string().optional(),
   race: z.string().optional(),
   disability: z.string().optional(),
   work_authorization: z.string().optional(),
   authorization_expiry: z.string().datetime().optional(),
+
+  headline: z.string().optional(),
   source: z.string().optional().default('WEB_APPLICANT'),
+  is_us_citizen: z.boolean().optional(),
+  employment_type_pref: z.enum(['W2', '1099', 'C2C']).optional(),
+  notes: z.string().optional(),
+
+  // ── NEW: Avionte-mapped fields ──────────────────────────────────────────────
+  text_consent: z.enum(['No Response', 'Yes', 'No']).optional(),
+  communication_preference: z.string().optional(),  // "Email, Text"
+  is_optout: z.boolean().optional(),
+  is_private: z.boolean().optional(),
+  office_name: z.string().optional(),
+  office_division: z.string().optional(),
+
+  // Application-only fields (ignored when job_id is absent)
   cover_letter: z.string().optional(),
   linkedin_url: z.string().url().optional(),
   portfolio_url: z.string().url().optional(),
   comp_code_last: z.string().optional(),
+
   work_history: z.preprocess(
     (val) => {
-      if (typeof val === 'string') {
-        try { return JSON.parse(val); } catch { return val; }
-      }
+      if (typeof val === 'string') { try { return JSON.parse(val); } catch { return val; } }
       return val;
     },
     z.array(z.object({
       title: z.string(),
+      company: z.string().optional(),
       description: z.string().optional(),
+      from_date: z.string().datetime().optional(),
+      to_date: z.string().datetime().optional(),
+    })).optional()
+  ),
+
+  education: z.preprocess(
+    (val) => {
+      if (typeof val === 'string') { try { return JSON.parse(val); } catch { return val; } }
+      return val;
+    },
+    z.array(z.object({
+      school: z.string(),
+      degree: z.string().optional(),
+      field: z.string().optional(),
+      from_date: z.string().datetime().optional(),
+      to_date: z.string().datetime().optional(),
     })).optional()
   ),
 });
 
-/**
- * Submit a job application with application-specific snapshots
- * POST /api/public/jobs/:jobId/apply
- *
- * OPTIMIZATIONS vs original:
- * - Pre-fetch job + applicant in parallel before transaction opens
- * - Duplicate application check done pre-transaction (no wasted tx time)
- * - Social profile upserts replaced with a single Promise.all inside tx
- * - Demographics upsert collapsed to one conditional call
- * - Cover letter + work history inserts batched via Promise.all
- * - Transaction timeout raised to 20s with maxWait 8s
- * - Final application fetch runs with only needed includes
- * - Resume upload fully outside transaction (unchanged from your version)
- */
+type SubmitData = z.infer<typeof submitApplicationSchema>;
+
+// ── Shared: upsert applicant inside a transaction ────────────────────────────
+// Returns the applicant record. Works the same whether or not a job_id is present.
+async function upsertApplicant(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  data: SubmitData,
+  existingApplicant: Awaited<ReturnType<typeof findExistingApplicant>>,
+) {
+  const hasDemographics = !!(
+    data.birth_date || data.gender || data.race ||
+    data.disability || data.work_authorization
+  );
+
+  if (!existingApplicant) {
+    // ── NEW APPLICANT ──────────────────────────────────────────────────────
+    return tx.applicant.create({
+      data: {
+        full_name: data.full_name,
+        first_name: data.first_name,
+        last_name: data.last_name,
+        headline: data.headline,
+        source: data.source,
+        is_us_citizen: data.is_us_citizen,
+        employment_type_pref: data.employment_type_pref as any,
+        notes: data.notes,
+        status: 'APPLIED',
+        comp_code_last: data.comp_code_last,
+
+        // ── NEW fields ──────────────────────────────────────────────────────
+        text_consent: data.text_consent ?? 'No Response',
+        communication_preference: data.communication_preference,
+        is_optout: data.is_optout ?? false,
+        is_private: data.is_private ?? false,
+        office_name: data.office_name,
+        office_division: data.office_division,
+
+        contact: {
+          create: {
+            email: data.email,
+            email2: data.email2,
+            phone: data.phone,
+            work_phone: data.work_phone,
+            home_phone: data.home_phone,
+            address: data.address,
+            city: data.city,
+            state: data.state,
+            zip: data.zip,
+            country: data.country,
+          },
+        },
+
+        ...(hasDemographics && {
+          demographic: {
+            create: {
+              birth_date: data.birth_date ? new Date(data.birth_date) : null,
+              gender: data.gender,
+              race: data.race,
+              disability: data.disability,
+              work_authorization: data.work_authorization,
+              authorization_expiry: data.authorization_expiry
+                ? new Date(data.authorization_expiry)
+                : null,
+            },
+          },
+        }),
+      },
+      include: { contact: true, demographic: true, social_profiles: true },
+    });
+  }
+
+  // ── EXISTING APPLICANT ───────────────────────────────────────────────────
+  const demographicOp = hasDemographics
+    ? existingApplicant.demographic
+      ? tx.applicantDemographic.update({
+          where: { applicant_demo_id: existingApplicant.demographic.applicant_demo_id },
+          data: {
+            ...(data.birth_date && { birth_date: new Date(data.birth_date) }),
+            ...(data.gender && { gender: data.gender }),
+            ...(data.race && { race: data.race }),
+            ...(data.disability && { disability: data.disability }),
+            ...(data.work_authorization && { work_authorization: data.work_authorization }),
+            ...(data.authorization_expiry && {
+              authorization_expiry: new Date(data.authorization_expiry),
+            }),
+          },
+        })
+      : tx.applicantDemographic.create({
+          data: {
+            applicant_id: existingApplicant.applicant_id,
+            birth_date: data.birth_date ? new Date(data.birth_date) : null,
+            gender: data.gender,
+            race: data.race,
+            disability: data.disability,
+            work_authorization: data.work_authorization,
+            authorization_expiry: data.authorization_expiry
+              ? new Date(data.authorization_expiry)
+              : null,
+          },
+        })
+    : Promise.resolve(null);
+
+  const [updatedApplicant] = await Promise.all([
+    tx.applicant.update({
+      where: { applicant_id: existingApplicant.applicant_id },
+      data: {
+        last_active_at: new Date(),
+        full_name: data.full_name,
+        ...(data.first_name && { first_name: data.first_name }),
+        ...(data.last_name && { last_name: data.last_name }),
+        ...(data.headline !== undefined && { headline: data.headline }),
+        ...(data.is_us_citizen !== undefined && { is_us_citizen: data.is_us_citizen }),
+        ...(data.employment_type_pref && { employment_type_pref: data.employment_type_pref as any }),
+        ...(data.notes !== undefined && { notes: data.notes }),
+        comp_code_last: data.comp_code_last,
+
+        // ── NEW fields — only update if explicitly provided ─────────────────
+        ...(data.text_consent !== undefined && { text_consent: data.text_consent }),
+        ...(data.communication_preference !== undefined && { communication_preference: data.communication_preference }),
+        ...(data.is_optout !== undefined && { is_optout: data.is_optout }),
+        ...(data.is_private !== undefined && { is_private: data.is_private }),
+        ...(data.office_name !== undefined && { office_name: data.office_name }),
+        ...(data.office_division !== undefined && { office_division: data.office_division }),
+
+        contact: {
+          update: {
+            phone: data.phone,
+            address: data.address,
+            city: data.city,
+            ...(data.email2 !== undefined && { email2: data.email2 }),
+            ...(data.work_phone !== undefined && { work_phone: data.work_phone }),
+            ...(data.home_phone !== undefined && { home_phone: data.home_phone }),
+            ...(data.state !== undefined && { state: data.state }),
+            ...(data.zip !== undefined && { zip: data.zip }),
+            ...(data.country !== undefined && { country: data.country }),
+          },
+        },
+      },
+      include: { contact: true, demographic: true, social_profiles: true },
+    }),
+    demographicOp,
+  ]);
+
+  updatedApplicant.social_profiles = existingApplicant.social_profiles;
+  return updatedApplicant;
+}
+
+// ── Shared: find existing applicant by email ─────────────────────────────────
+async function findExistingApplicant(email: string) {
+  return prisma.applicant.findFirst({
+    where: { contact: { email } },
+    include: { contact: true, demographic: true, social_profiles: true },
+  });
+}
+
+// ── Controller ───────────────────────────────────────────────────────────────
 export const submitApplication = async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
+    // jobId may be undefined when the route is used for profile-only submissions
+    const jobId: string | undefined = req.params.jobId || undefined;
     const file = (req as any).file;
 
-    // ── Validate ──────────────────────────────────────────────────────────────
-    const validation = createApplicationSchema.safeParse({ ...req.body, job_id: jobId });
+    // ── Validate ─────────────────────────────────────────────────────────────
+    const validation = submitApplicationSchema.safeParse({
+      ...req.body,
+      ...(jobId && { job_id: jobId }),
+    });
     if (!validation.success) {
       const errors = validation.error.issues.map((err: any) => ({
         field: err.path.join('.'),
@@ -628,11 +279,53 @@ export const submitApplication = async (req: Request, res: Response) => {
     }
     const data = validation.data;
 
-    // ── Pre-fetch job + existing applicant IN PARALLEL (outside transaction) ──
+    // ── Profile-only path (no job_id) ─────────────────────────────────────────
+    if (!data.job_id) {
+      const existingApplicant = await findExistingApplicant(data.email);
+
+      const applicant = await prisma.$transaction(
+        async (tx) => upsertApplicant(tx, data, existingApplicant),
+        { maxWait: 8000, timeout: 20000 },
+      );
+
+      // Education upsert (applicant-level, no application scope needed)
+      if (data.education && data.education.length > 0) {
+        await prisma.applicantEducation.createMany({
+          data: data.education.map((edu) => ({
+            applicant_id: applicant.applicant_id,
+            school: edu.school,
+            degree: edu.degree,
+            field: edu.field,
+            from_date: edu.from_date ? new Date(edu.from_date) : null,
+            to_date: edu.to_date ? new Date(edu.to_date) : null,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      return sendSuccess(
+        res,
+        {
+          applicant: {
+            applicant_id: applicant.applicant_id,
+            full_name: applicant.full_name,
+            first_name: applicant.first_name,
+            last_name: applicant.last_name,
+            contact: { email: applicant.contact?.email, phone: applicant.contact?.phone },
+          },
+          message: existingApplicant
+            ? 'Applicant profile updated successfully'
+            : 'Applicant profile created successfully',
+        },
+        existingApplicant ? 200 : 201,
+      );
+    }
+
+    // ── Full application path (job_id present) ────────────────────────────────
     const [job, existingApplicant] = await Promise.all([
       prisma.job.findFirst({
         where: {
-          job_id: jobId,
+          job_id: data.job_id,
           status: 'OPEN',
           organization: { status: 'ACTIVE' },
         },
@@ -640,28 +333,20 @@ export const submitApplication = async (req: Request, res: Response) => {
           organization: { select: { name: true } },
         },
       }),
-      prisma.applicant.findFirst({
-        where: { contact: { email: data.email } },
-        include: {
-          contact: true,
-          demographic: true,
-          social_profiles: true,
-        },
-      }),
+      findExistingApplicant(data.email),
     ]);
 
     if (!job) {
       return sendError(res, 'Job not found or not currently accepting applications', 404);
     }
-
     if (job.open_positions !== null && job.open_positions <= 0) {
       return sendError(res, 'No open positions available for this job', 400);
     }
 
-    // ── Duplicate application check BEFORE opening transaction ────────────────
+    // ── Duplicate check BEFORE transaction ───────────────────────────────────
     if (existingApplicant) {
       const duplicate = await prisma.application.findFirst({
-        where: { job_id: jobId, applicant_id: existingApplicant.applicant_id },
+        where: { job_id: data.job_id, applicant_id: existingApplicant.applicant_id },
         select: { application_id: true },
       });
       if (duplicate) {
@@ -672,114 +357,18 @@ export const submitApplication = async (req: Request, res: Response) => {
       }
     }
 
-    // ── Transaction: pure DB writes only ─────────────────────────────────────
+    // ── Transaction ───────────────────────────────────────────────────────────
     const result = await prisma.$transaction(async (tx) => {
-      let applicant: typeof existingApplicant;
+      const applicant = await upsertApplicant(tx, data, existingApplicant);
 
-      if (!existingApplicant) {
-        // ── NEW APPLICANT ────────────────────────────────────────────────────
-        const hasDemographics = !!(data.birth_date || data.gender || data.race ||
-          data.disability || data.work_authorization);
-
-        applicant = await tx.applicant.create({
-          data: {
-            full_name: data.full_name,
-            status: 'APPLIED',
-            comp_code_last: data.comp_code_last,
-            contact: {
-              create: {
-                email: data.email,
-                phone: data.phone,
-                address: data.address,
-                city: data.city,
-              },
-            },
-            ...(hasDemographics && {
-              demographic: {
-                create: {
-                  birth_date: data.birth_date ? new Date(data.birth_date) : null,
-                  gender: data.gender,
-                  race: data.race,
-                  disability: data.disability,
-                  work_authorization: data.work_authorization,
-                  authorization_expiry: data.authorization_expiry
-                    ? new Date(data.authorization_expiry)
-                    : null,
-                },
-              },
-            }),
-          },
-          include: { contact: true, demographic: true, social_profiles: true },
-        });
-
-      } else {
-        // ── EXISTING APPLICANT: update profile + demographics in parallel ────
-        const hasDemographics = !!(data.birth_date || data.gender || data.race ||
-          data.disability || data.work_authorization);
-
-        const demographicOp = hasDemographics
-          ? existingApplicant.demographic
-            ? tx.applicantDemographic.update({
-                where: { applicant_demo_id: existingApplicant.demographic.applicant_demo_id },
-                data: {
-                  ...(data.birth_date && { birth_date: new Date(data.birth_date) }),
-                  ...(data.gender && { gender: data.gender }),
-                  ...(data.race && { race: data.race }),
-                  ...(data.disability && { disability: data.disability }),
-                  ...(data.work_authorization && { work_authorization: data.work_authorization }),
-                  ...(data.authorization_expiry && {
-                    authorization_expiry: new Date(data.authorization_expiry),
-                  }),
-                },
-              })
-            : tx.applicantDemographic.create({
-                data: {
-                  applicant_id: existingApplicant.applicant_id,
-                  birth_date: data.birth_date ? new Date(data.birth_date) : null,
-                  gender: data.gender,
-                  race: data.race,
-                  disability: data.disability,
-                  work_authorization: data.work_authorization,
-                  authorization_expiry: data.authorization_expiry
-                    ? new Date(data.authorization_expiry)
-                    : null,
-                },
-              })
-          : Promise.resolve(null);
-
-        const [updatedApplicant] = await Promise.all([
-          tx.applicant.update({
-            where: { applicant_id: existingApplicant.applicant_id },
-            data: {
-              last_active_at: new Date(),
-              full_name: data.full_name,
-              comp_code_last: data.comp_code_last,
-              contact: {
-                update: { phone: data.phone, address: data.address, city: data.city },
-              },
-            },
-            include: { contact: true, demographic: true, social_profiles: true },
-          }),
-          demographicOp,
-        ]);
-
-        applicant = updatedApplicant;
-        // Carry forward social_profiles for upsert logic below
-        applicant!.social_profiles = existingApplicant.social_profiles;
-      }
-
-      // ── Social profile upserts — run in parallel ──────────────────────────
+      // Social profile upserts
       const socialOps: Promise<any>[] = [];
 
       if (data.linkedin_url) {
-        const existing = applicant!.social_profiles.find(p => p.profile_title === 'LinkedIn');
+        const existing = applicant.social_profiles.find(p => p.profile_title === 'LinkedIn');
         if (!existing) {
           socialOps.push(tx.applicantSocialProfiles.create({
-            data: {
-              applicant_id: applicant!.applicant_id,
-              profile_title: 'LinkedIn',
-              profile_link: data.linkedin_url,
-            },
+            data: { applicant_id: applicant.applicant_id, profile_title: 'LinkedIn', profile_link: data.linkedin_url },
           }));
         } else if (existing.profile_link !== data.linkedin_url) {
           socialOps.push(tx.applicantSocialProfiles.update({
@@ -790,14 +379,10 @@ export const submitApplication = async (req: Request, res: Response) => {
       }
 
       if (data.portfolio_url) {
-        const existing = applicant!.social_profiles.find(p => p.profile_title === 'Portfolio');
+        const existing = applicant.social_profiles.find(p => p.profile_title === 'Portfolio');
         if (!existing) {
           socialOps.push(tx.applicantSocialProfiles.create({
-            data: {
-              applicant_id: applicant!.applicant_id,
-              profile_title: 'Portfolio',
-              profile_link: data.portfolio_url,
-            },
+            data: { applicant_id: applicant.applicant_id, profile_title: 'Portfolio', profile_link: data.portfolio_url },
           }));
         } else if (existing.profile_link !== data.portfolio_url) {
           socialOps.push(tx.applicantSocialProfiles.update({
@@ -807,33 +392,29 @@ export const submitApplication = async (req: Request, res: Response) => {
         }
       }
 
-      // ── Create application record ─────────────────────────────────────────
+      // Create application + social upserts + decrement positions
       const [application] = await Promise.all([
         tx.application.create({
           data: {
-            job_id: jobId,
-            applicant_id: applicant!.applicant_id,
+            job_id: data.job_id!,
+            applicant_id: applicant.applicant_id,
             source: data.source || 'WEB_APPLICANT',
             status: 'APPLIED',
           },
         }),
         ...socialOps,
-        // Decrement open_positions in parallel with application create
         ...(job.open_positions !== null && job.open_positions > 0
-          ? [tx.job.update({
-              where: { job_id: jobId },
-              data: { open_positions: { decrement: 1 } },
-            })]
+          ? [tx.job.update({ where: { job_id: data.job_id! }, data: { open_positions: { decrement: 1 } } })]
           : []),
       ]);
 
-      // ── Cover letter + work history inserts in parallel ───────────────────
-      const documentOps: Promise<any>[] = [];
+      // Application-scoped snapshot ops
+      const snapshotOps: Promise<any>[] = [];
 
       if (data.cover_letter) {
-        documentOps.push(tx.applicantDocument.create({
+        snapshotOps.push(tx.applicantDocument.create({
           data: {
-            applicant_id: applicant!.applicant_id,
+            applicant_id: applicant.applicant_id,
             application_id: application.application_id,
             document_type: 'COVER_LETTER',
             file_url: JSON.stringify({
@@ -847,36 +428,44 @@ export const submitApplication = async (req: Request, res: Response) => {
       }
 
       if (data.work_history && data.work_history.length > 0) {
-        documentOps.push(tx.applicantWorkHistory.createMany({
+        snapshotOps.push(tx.applicantWorkHistory.createMany({
           data: data.work_history.map((work) => ({
-            applicant_id: applicant!.applicant_id,
+            applicant_id: applicant.applicant_id,
             application_id: application.application_id,
             title: work.title,
+            company: work.company,
             description: work.description,
+            from_date: work.from_date ? new Date(work.from_date) : null,
+            to_date: work.to_date ? new Date(work.to_date) : null,
           })),
         }));
       }
 
-      if (documentOps.length > 0) {
-        await Promise.all(documentOps);
+      if (data.education && data.education.length > 0) {
+        snapshotOps.push(tx.applicantEducation.createMany({
+          data: data.education.map((edu) => ({
+            applicant_id: applicant.applicant_id,
+            school: edu.school,
+            degree: edu.degree,
+            field: edu.field,
+            from_date: edu.from_date ? new Date(edu.from_date) : null,
+            to_date: edu.to_date ? new Date(edu.to_date) : null,
+          })),
+          skipDuplicates: true,
+        }));
       }
 
-      return { application, applicantId: applicant!.applicant_id };
-    }, {
-      maxWait: 8000,   // max wait to acquire DB connection
-      timeout: 20000,  // 20s — enough headroom for complex writes
-    });
+      if (snapshotOps.length > 0) await Promise.all(snapshotOps);
 
-    // ── Resume upload — fully outside transaction ─────────────────────────────
+      return { application, applicantId: applicant.applicant_id };
+    }, { maxWait: 8000, timeout: 20000 });
+
+    // ── Resume upload (outside transaction) ───────────────────────────────────
     let resumeMetadata = null;
     if (file) {
       try {
         const containerClient = await getContainerClient();
-        const blobName = generateBlobName(
-          result.applicantId,
-          result.application.application_id,
-          file.originalname
-        );
+        const blobName = generateBlobName(result.applicantId, result.application.application_id, file.originalname);
         const blockBlobClient = containerClient.getBlockBlobClient(blobName);
 
         await blockBlobClient.upload(file.buffer, file.buffer.length, {
@@ -906,7 +495,7 @@ export const submitApplication = async (req: Request, res: Response) => {
       }
     }
 
-    // ── Fetch complete application ────────────────────────────────────────────
+    // ── Fetch complete application ─────────────────────────────────────────────
     const completeApplication = await prisma.application.findUnique({
       where: { application_id: result.application.application_id },
       include: {
@@ -921,15 +510,13 @@ export const submitApplication = async (req: Request, res: Response) => {
           select: {
             applicant_id: true,
             full_name: true,
-            contact: { select: { email: true, phone: true } },
+            first_name: true,
+            last_name: true,
+            contact: { select: { email: true, email2: true, phone: true } },
           },
         },
-        documents: {
-          where: { application_id: result.application.application_id },
-        },
-        work_history: {
-          where: { application_id: result.application.application_id },
-        },
+        documents: { where: { application_id: result.application.application_id } },
+        work_history: { where: { application_id: result.application.application_id } },
       },
     });
 
@@ -937,11 +524,7 @@ export const submitApplication = async (req: Request, res: Response) => {
       application: completeApplication,
       resume_uploaded: !!resumeMetadata,
       ...(file && {
-        resume: {
-          filename: file.originalname,
-          size: file.size,
-          mimeType: file.mimetype,
-        },
+        resume: { filename: file.originalname, size: file.size, mimeType: file.mimetype },
       }),
       message: `Application submitted successfully for ${job.job_title} at ${job.organization.name}`,
     }, 201);
@@ -1481,8 +1064,6 @@ export const getApplicantLatestResume = async (applicantId: string) => {
 };
 
 
-
-
 /**
  * Check if applicant has already applied to a job
  * GET /api/public/jobs/:jobId/check-application?email=xxx
@@ -1838,6 +1419,3 @@ export const getApplicantApplications = async (req: Request, res: Response) => {
     return sendError(res, 'Failed to fetch applications', 500);
   }
 };
-
-
-
