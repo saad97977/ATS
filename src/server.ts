@@ -42,6 +42,9 @@ import pipelineRoutes from './routes/application/pipelineRoutes';
 import initializeCronJobs from '../src/services/cronJobService'
 import timesheetRoutes from './routes/timesheets/timesheetRoutes';
 import payrollRoutes from './routes/timesheets/payrollRoutes';
+import dropdownRoutes from './routes/dropdown/dropdownRoutes';
+import dashboardRoutes from './routes/dashboard/dashboardRoutes';
+import userProfileRoutes from './routes/user/userProfileRoutes';
 
 
 dotenv.config();
@@ -133,6 +136,7 @@ app.get('/health', (req, res) => {
 app.use('/api/users', userRoutes);
 app.use('/api/user-activity', userActivityRoutes);
 app.use('/api/user-tasks', taskRoutes);
+app.use('/api/user-profile', userProfileRoutes);
 
 
 // Job routes
@@ -182,12 +186,17 @@ app.use('/api/applicant-documents', applicantDocumentsRoutes);
 app.use('/api/timesheets', timesheetRoutes);
 app.use('/api/payroll', payrollRoutes);
 
+// Unified Dropdown routes (search-as-you-type for all entities)
+app.use('/api/dropdowns', dropdownRoutes);
+
 // Application routes
 app.use('/api/applications', applicationRoutes);
 app.use('/api/interviews', interviewRoutes);
 app.use('/api/assignments', assignmentRoutes);
 app.use('/api/pipeline', pipelineRoutes);
 
+// Dashboard routes
+app.use('/api/dashboard', dashboardRoutes);
 
 // Public Application and Job Board Routes
 app.use('/api/public', publicRoutes);

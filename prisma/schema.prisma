@@ -45,7 +45,9 @@ model User {
   created_organizations Organization[]        @relation("OrganizationCreatedBy")
   document_signatures  DocumentSignature[]
   reviewed_timesheets  Timesheet[] @relation("TimesheetReviewer")
-  
+  dashboard_preference DashboardPreference?
+  profile     UserProfile?
+
 
   represented_organizations Organization[] @relation("OrganizationRepresentative")
   logged_activities OrganizationActivity[] @relation("ActivityLoggedBy")
@@ -55,6 +57,83 @@ model User {
   @@index([email])
   @@map("users")
 }
+
+
+// ============================================
+// NEW: USER PROFILE (extended identity & settings)
+// ============================================
+
+model UserProfile {
+  profile_id          String    @id @default(uuid())
+  user_id             String    @unique
+
+  // Personal info
+  first_name          String?
+  last_name           String?
+  middle_name         String?
+  display_name        String?   // preferred display name (overrides name)
+  avatar_url          String?   // Azure Blob URL
+  avatar_blob_name    String?   // internal blob reference
+
+  // Contact
+  work_phone          String?
+  mobile_phone        String?
+  work_email          String?   // secondary work email if different from login
+  personal_email      String?
+
+  // Org placement
+  title               String?   // "Senior Recruiter", "Account Manager"
+  department          String?
+  branch              String?
+  division            String?
+  office_location     String?
+
+  // Employment details
+  employee_id         String?   @unique   // internal HR/payroll ID
+  hire_date           DateTime?
+  employment_status   EmploymentStatus  @default(FULL_TIME)
+  manager_user_id     String?   // self-referencing to another user
+
+  // Regional/locale
+  timezone            String?   // e.g. "America/Los_Angeles"
+  language            String?   @default("en")
+
+  // Social / bio
+  linkedin_url        String?
+  bio                 String?
+
+  // Notification preferences (stored as flags)
+  notify_email        Boolean   @default(true)
+  notify_sms          Boolean   @default(false)
+  notify_in_app       Boolean   @default(true)
+
+  // Signature
+  signature_image_url String?
+  signature_blob_name String?
+
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  user                User      @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+
+
+
+model DashboardPreference {
+  preference_id String   @id @default(uuid())
+  user_id       String   @unique                  // one layout per user
+  layout        Json                              // Array<{ key, position, size }>
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@map("dashboard_preferences")
+}
+
 
 model Role {
   role_id   String   @id @default(uuid())
@@ -1498,3 +1577,15 @@ enum TalentStatus {
   REJECTED
   RESUME_PARSED
 }
+
+// ── Add to enums section ──
+
+enum EmploymentStatus {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERN
+  ON_LEAVE
+  TERMINATED
+}
+

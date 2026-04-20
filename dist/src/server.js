@@ -46,6 +46,9 @@ const pipelineRoutes_1 = __importDefault(require("./routes/application/pipelineR
 const cronJobService_1 = __importDefault(require("../src/services/cronJobService"));
 const timesheetRoutes_1 = __importDefault(require("./routes/timesheets/timesheetRoutes"));
 const payrollRoutes_1 = __importDefault(require("./routes/timesheets/payrollRoutes"));
+const dropdownRoutes_1 = __importDefault(require("./routes/dropdown/dropdownRoutes"));
+const dashboardRoutes_1 = __importDefault(require("./routes/dashboard/dashboardRoutes"));
+const userProfileRoutes_1 = __importDefault(require("./routes/user/userProfileRoutes"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -115,6 +118,7 @@ app.get('/health', (req, res) => {
 app.use('/api/users', userRoutes_1.default);
 app.use('/api/user-activity', userActivityRoutes_1.default);
 app.use('/api/user-tasks', taskRoutes_1.default);
+app.use('/api/user-profile', userProfileRoutes_1.default);
 // Job routes
 app.use('/api/jobs', jobRoutes_1.default);
 app.use('/api/job-details', jobDetailRoutes_1.default);
@@ -151,11 +155,15 @@ app.use('/api/applicant-documents', applicantDocumentsRoutes_1.default);
 // Timesheets and Payroll routes
 app.use('/api/timesheets', timesheetRoutes_1.default);
 app.use('/api/payroll', payrollRoutes_1.default);
+// Unified Dropdown routes (search-as-you-type for all entities)
+app.use('/api/dropdowns', dropdownRoutes_1.default);
 // Application routes
 app.use('/api/applications', applicationRoutes_1.default);
 app.use('/api/interviews', interviewRoutes_1.default);
 app.use('/api/assignments', assignmentRoutes_1.default);
 app.use('/api/pipeline', pipelineRoutes_1.default);
+// Dashboard routes
+app.use('/api/dashboard', dashboardRoutes_1.default);
 // Public Application and Job Board Routes
 app.use('/api/public', publicRoutes_1.default);
 // For Complete Data:

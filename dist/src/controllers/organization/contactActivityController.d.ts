@@ -1,11 +1,4 @@
 import { Request, Response } from 'express';
-/**
- * Dropdown helpers — register these under:
- *   GET /api/contact-activity/dropdown/organization-users
- *   GET /api/contact-activity/dropdown/users
- *   GET /api/contact-activity/dropdown/organizations
- *   GET /api/contact-activity/dropdown/jobs
- */
 export declare const contactActivityDropdownController: {
     getOrganizationUsers: (req: Request, res: Response) => Promise<void>;
     getUsers: (req: Request, res: Response) => Promise<void>;

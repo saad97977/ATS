@@ -47,53 +47,66 @@ const bulkContactJobSchema = z.object({
 });
 
 // ============================================================
+// HELPERS
+// ============================================================
+
+/** Clamps `take` to [1, 200]. Defaults to 50. */
+const parseTake = (raw: unknown, def = 50): number =>
+  Math.min(200, Math.max(1, parseInt(String(raw ?? def)) || def));
+
+// ============================================================
 // DROPDOWN ENDPOINTS
-// These are lightweight, unpaginated lists used to populate
-// select / autocomplete fields in the frontend.
+// Lightweight, search-as-you-type, server-side filtered lists.
+// All endpoints accept:
+//   ?search=<string>  – case-insensitive partial match
+//   ?take=<number>    – max results, capped at 200 (default 50)
+//
 // Route prefix: GET /api/contact-activity/dropdown/...
 // ============================================================
 
 /**
  * GET /api/contact-activity/dropdown/organization-users
  *
- * Returns all organization users (i.e. users affiliated with at least one
- * organization).  Each record includes the user's name, email, and their
- * primary organization name so the "Contact" autocomplete can display a
- * rich label (name + email + org).
+ * Returns organization users for the "Contact" autocomplete.
+ * Searches across user name + email.
  *
- * Optional query params:
- *   organization_id – filter to a specific organization
+ * Query params:
+ *   search          – partial name/email filter (server-side)
+ *   take            – result cap (default 50, max 200)
+ *   organization_id – optional org filter
  */
 const getOrganizationUsersDropdown = async (req: Request, res: Response) => {
   try {
-    const { organization_id } = req.query;
+    const { organization_id, search } = req.query;
+    const take = parseTake(req.query.take);
 
     const where: any = {};
     if (organization_id) where.organization_id = organization_id as string;
 
+    if (search) {
+      const q = (search as string).trim();
+      where.OR = [
+        { user: { name:  { contains: q, mode: 'insensitive' } } },
+        { user: { email: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
+
     const orgUsers = await prisma.organizationUser.findMany({
       where,
+      take,
       select: {
         organization_user_id: true,
         organization_id:      true,
         user: {
-          select: {
-            user_id: true,
-            name:    true,
-            email:   true,
-          },
+          select: { user_id: true, name: true, email: true },
         },
         organization: {
-          select: {
-            organization_id: true,
-            name:            true,
-          },
+          select: { organization_id: true, name: true },
         },
       },
       orderBy: { user: { name: 'asc' } },
     });
 
-    // Flatten so the frontend doesn't need deep nesting
     const data = orgUsers.map((ou) => ({
       organization_user_id: ou.organization_user_id,
       user_id:              ou.user.user_id,
@@ -113,16 +126,27 @@ const getOrganizationUsersDropdown = async (req: Request, res: Response) => {
 /**
  * GET /api/contact-activity/dropdown/users
  *
- * Returns ALL platform users (no pagination) for the "Logged By" dropdown.
+ * Returns ALL platform users for the "Logged By" dropdown.
+ * Also supports ?search and ?take for scale.
  */
 const getAllUsersDropdown = async (req: Request, res: Response) => {
   try {
+    const { search } = req.query;
+    const take = parseTake(req.query.take, 100); // users list can be larger by default
+
+    const where: any = {};
+    if (search) {
+      const q = (search as string).trim();
+      where.OR = [
+        { name:  { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
     const users = await prisma.user.findMany({
-      select: {
-        user_id: true,
-        name:    true,
-        email:   true,
-      },
+      where,
+      take,
+      select: { user_id: true, name: true, email: true },
       orderBy: { name: 'asc' },
     });
 
@@ -136,16 +160,23 @@ const getAllUsersDropdown = async (req: Request, res: Response) => {
 /**
  * GET /api/contact-activity/dropdown/organizations
  *
- * Returns ALL organizations for the "Organization" dropdown.
+ * Returns organizations for the "Organization" dropdown.
+ * Supports ?search (name) and ?take.
  */
 const getAllOrganizationsDropdown = async (req: Request, res: Response) => {
   try {
+    const { search } = req.query;
+    const take = parseTake(req.query.take);
+
+    const where: any = {};
+    if (search) {
+      where.name = { contains: (search as string).trim(), mode: 'insensitive' };
+    }
+
     const organizations = await prisma.organization.findMany({
-      select: {
-        organization_id: true,
-        name:            true,
-        status:          true,
-      },
+      where,
+      take,
+      select: { organization_id: true, name: true, status: true },
       orderBy: { name: 'asc' },
     });
 
@@ -159,22 +190,23 @@ const getAllOrganizationsDropdown = async (req: Request, res: Response) => {
 /**
  * GET /api/contact-activity/dropdown/jobs
  *
- * Returns ALL jobs (no pagination) for the "Associated Job" dropdown.
- * Includes job_title, job_type, status, and organization name so the
- * frontend can render a rich option label.
- *
- * Optional query params:
- *   status – filter by job status (e.g. OPEN)
+ * Returns jobs for the "Associated Job" dropdown.
+ * Supports ?search (job_title), ?status filter, and ?take.
  */
 const getAllJobsDropdown = async (req: Request, res: Response) => {
   try {
-    const { status } = req.query;
+    const { status, search } = req.query;
+    const take = parseTake(req.query.take);
 
     const where: any = {};
     if (status) where.status = status as string;
+    if (search) {
+      where.job_title = { contains: (search as string).trim(), mode: 'insensitive' };
+    }
 
     const jobs = await prisma.job.findMany({
       where,
+      take,
       select: {
         job_id:    true,
         job_title: true,
@@ -182,23 +214,19 @@ const getAllJobsDropdown = async (req: Request, res: Response) => {
         status:    true,
         location:  true,
         organization: {
-          select: {
-            organization_id: true,
-            name:            true,
-          },
+          select: { organization_id: true, name: true },
         },
       },
       orderBy: { job_title: 'asc' },
     });
 
-    // Flatten organization name for easy access
     const data = jobs.map((j) => ({
-      job_id:           j.job_id,
-      job_title:        j.job_title,
-      job_type:         j.job_type,
-      status:           j.status,
-      location:         j.location,
-      organization_id:  j.organization?.organization_id,
+      job_id:            j.job_id,
+      job_title:         j.job_title,
+      job_type:          j.job_type,
+      status:            j.status,
+      location:          j.location,
+      organization_id:   j.organization?.organization_id,
       organization_name: j.organization?.name,
     }));
 
@@ -215,7 +243,7 @@ const getAllJobsDropdown = async (req: Request, res: Response) => {
 
 /**
  * GET /api/contact-previews
- * Paginated list with optional filters: contact_id, user_id, type, job_id
+ * Paginated list with optional filters + server-side breakdown counts.
  */
 const getAllContactPreviews = async (req: Request, res: Response) => {
   try {
@@ -231,7 +259,8 @@ const getAllContactPreviews = async (req: Request, res: Response) => {
     if (type)                 where.type                 = type                 as string;
     if (job_id)               where.job_id               = job_id               as string;
 
-    const [rows, total] = await Promise.all([
+    // Run paginated rows + total count + per-type breakdown in parallel
+    const [rows, total, breakdownRaw] = await Promise.all([
       prisma.contactPreview.findMany({
         skip,
         take: limit,
@@ -241,27 +270,32 @@ const getAllContactPreviews = async (req: Request, res: Response) => {
           organization_user: {
             select: {
               organization_user_id: true,
-              user: {
-                select: { user_id: true, name: true, email: true },
-              },
-              organization: {
-                select: { organization_id: true, name: true },
-              },
+              user: { select: { user_id: true, name: true, email: true } },
+              organization: { select: { organization_id: true, name: true } },
             },
           },
-          user: {
-            select: { user_id: true, name: true, email: true },
-          },
-          job: {
-            select: { job_id: true, job_title: true, status: true },
-          },
+          user: { select: { user_id: true, name: true, email: true } },
+          job:  { select: { job_id: true, job_title: true, status: true } },
         },
       }),
       prisma.contactPreview.count({ where }),
+      // Breakdown uses the SAME where filters (excluding type so we get all counts)
+      prisma.contactPreview.groupBy({
+        by:     ['type'],
+        where:  { ...where, type: undefined }, // all types regardless of current filter
+        _count: { type: true },
+      }),
     ]);
+
+    // Shape breakdown into { CALL_COMPLETED: 42, CALL_SCHEDULED: 17, ... }
+    const breakdown = breakdownRaw.reduce((acc: Record<string, number>, b) => {
+      acc[b.type] = b._count.type;
+      return acc;
+    }, {});
 
     return sendSuccess(res, {
       data: rows,
+      breakdown,
       paging: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -284,12 +318,8 @@ const getContactPreviewById = async (req: Request, res: Response) => {
         organization_user: {
           select: {
             organization_user_id: true,
-            user: {
-              select: { user_id: true, name: true, email: true },
-            },
-            organization: {
-              select: { organization_id: true, name: true },
-            },
+            user: { select: { user_id: true, name: true, email: true } },
+            organization: { select: { organization_id: true, name: true } },
           },
         },
         user: { select: { user_id: true, name: true, email: true } },
@@ -317,11 +347,9 @@ const getPreviewsByOrganizationUser = async (req: Request, res: Response) => {
 
     const orgUser = await prisma.organizationUser.findUnique({
       where:  { organization_user_id: organizationUserId },
-      select: { 
-        organization_user_id: true, 
-        user: {
-          select: { name: true, email: true },
-        },
+      select: {
+        organization_user_id: true,
+        user: { select: { name: true, email: true } },
       },
     });
     if (!orgUser) return sendError(res, 'Organization user not found', 404);
@@ -329,9 +357,9 @@ const getPreviewsByOrganizationUser = async (req: Request, res: Response) => {
     const [rows, total] = await Promise.all([
       prisma.contactPreview.findMany({
         skip,
-        take:     limit,
-        where:    { organization_user_id: organizationUserId },
-        orderBy:  { date: 'desc' },
+        take:    limit,
+        where:   { organization_user_id: organizationUserId },
+        orderBy: { date: 'desc' },
         include: {
           user: { select: { user_id: true, name: true, email: true } },
           job:  { select: { job_id: true, job_title: true } },
@@ -364,16 +392,15 @@ const createContactPreview = async (req: Request, res: Response) => {
 
     const { organization_user_id, user_id, type, notes, date, job_id } = validation.data;
 
-    const orgUser = await prisma.organizationUser.findUnique({ where: { organization_user_id } });
+    const [orgUser, user, job] = await Promise.all([
+      prisma.organizationUser.findUnique({ where: { organization_user_id } }),
+      prisma.user.findUnique({ where: { user_id } }),
+      job_id ? prisma.job.findUnique({ where: { job_id } }) : Promise.resolve(true),
+    ]);
+
     if (!orgUser) return sendError(res, 'Organization user not found', 404);
-
-    const user = await prisma.user.findUnique({ where: { user_id } });
-    if (!user) return sendError(res, 'User not found', 404);
-
-    if (job_id) {
-      const job = await prisma.job.findUnique({ where: { job_id } });
-      if (!job) return sendError(res, 'Job not found', 404);
-    }
+    if (!user)    return sendError(res, 'User not found', 404);
+    if (!job)     return sendError(res, 'Job not found', 404);
 
     const preview = await prisma.contactPreview.create({
       data: {
@@ -388,13 +415,11 @@ const createContactPreview = async (req: Request, res: Response) => {
         organization_user: {
           select: {
             organization_user_id: true,
-            user: {
-              select: { user_id: true, name: true, email: true },
-            },
+            user: { select: { user_id: true, name: true, email: true } },
           },
         },
-        user:    { select: { user_id: true, name: true, email: true } },
-        job:     { select: { job_id: true, job_title: true } },
+        user: { select: { user_id: true, name: true, email: true } },
+        job:  { select: { job_id: true, job_title: true } },
       },
     });
 
@@ -425,10 +450,10 @@ const updateContactPreview = async (req: Request, res: Response) => {
     const { organization_user_id, type, notes, date, job_id } = validation.data;
     const data: any = {};
     if (organization_user_id !== undefined) data.organization_user_id = organization_user_id;
-    if (type               !== undefined) data.type                   = type;
-    if (notes              !== undefined) data.notes                  = notes;
-    if (date               !== undefined) data.date                   = new Date(date);
-    if (job_id             !== undefined) data.job_id                 = job_id;
+    if (type                 !== undefined) data.type                 = type;
+    if (notes                !== undefined) data.notes                = notes;
+    if (date                 !== undefined) data.date                 = new Date(date);
+    if (job_id               !== undefined) data.job_id               = job_id;
 
     const updated = await prisma.contactPreview.update({
       where: { preview_id: id },
@@ -437,13 +462,11 @@ const updateContactPreview = async (req: Request, res: Response) => {
         organization_user: {
           select: {
             organization_user_id: true,
-            user: {
-              select: { user_id: true, name: true, email: true },
-            },
+            user: { select: { user_id: true, name: true, email: true } },
           },
         },
-        user:    { select: { user_id: true, name: true, email: true } },
-        job:     { select: { job_id: true, job_title: true } },
+        user: { select: { user_id: true, name: true, email: true } },
+        job:  { select: { job_id: true, job_title: true } },
       },
     });
 
@@ -481,6 +504,7 @@ const deleteContactPreview = async (req: Request, res: Response) => {
 
 /**
  * GET /api/organization-activities
+ * Now returns a server-side `breakdown` object alongside pagination.
  */
 const getAllOrganizationActivities = async (req: Request, res: Response) => {
   try {
@@ -495,7 +519,7 @@ const getAllOrganizationActivities = async (req: Request, res: Response) => {
     if (logged_by_user_id) where.logged_by_user_id = logged_by_user_id as string;
     if (activity_type)     where.activity_type     = activity_type     as string;
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, breakdownRaw] = await Promise.all([
       prisma.organizationActivity.findMany({
         skip,
         take:    limit,
@@ -507,10 +531,22 @@ const getAllOrganizationActivities = async (req: Request, res: Response) => {
         },
       }),
       prisma.organizationActivity.count({ where }),
+      // Breakdown ignores activity_type filter so all type counts are always shown
+      prisma.organizationActivity.groupBy({
+        by:     ['activity_type'],
+        where:  { ...where, activity_type: undefined },
+        _count: { activity_type: true },
+      }),
     ]);
 
+    const breakdown = breakdownRaw.reduce((acc: Record<string, number>, b) => {
+      acc[b.activity_type] = b._count.activity_type;
+      return acc;
+    }, {});
+
     return sendSuccess(res, {
-      data:   rows,
+      data: rows,
+      breakdown,
       paging: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -563,7 +599,7 @@ const getActivitiesByOrganization = async (req: Request, res: Response) => {
     const where: any = { organization_id: orgId };
     if (activity_type) where.activity_type = activity_type as string;
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, breakdownRaw] = await Promise.all([
       prisma.organizationActivity.findMany({
         skip,
         take:    limit,
@@ -572,19 +608,23 @@ const getActivitiesByOrganization = async (req: Request, res: Response) => {
         include: { logged_by: { select: { user_id: true, name: true, email: true } } },
       }),
       prisma.organizationActivity.count({ where }),
+      prisma.organizationActivity.groupBy({
+        by:    ['activity_type'],
+        where: { organization_id: orgId },
+        _count: { activity_type: true },
+      }),
     ]);
 
-    const breakdown = await prisma.organizationActivity.groupBy({
-      by:    ['activity_type'],
-      where: { organization_id: orgId },
-      _count: { activity_type: true },
-    });
+    const breakdown = breakdownRaw.reduce((acc: Record<string, number>, b) => {
+      acc[b.activity_type] = b._count.activity_type;
+      return acc;
+    }, {});
 
     return sendSuccess(res, {
       organization: org,
       data:         rows,
-      breakdown:    breakdown.map((b) => ({ type: b.activity_type, count: b._count.activity_type })),
-      paging:       { total, page, limit, totalPages: Math.ceil(total / limit) },
+      breakdown,
+      paging: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
     console.error('Error fetching activities by organization:', err);
@@ -605,10 +645,11 @@ const createOrganizationActivity = async (req: Request, res: Response) => {
 
     const { organization_id, logged_by_user_id, activity_type, details } = validation.data;
 
-    const org  = await prisma.organization.findUnique({ where: { organization_id } });
+    const [org, user] = await Promise.all([
+      prisma.organization.findUnique({ where: { organization_id } }),
+      prisma.user.findUnique({ where: { user_id: logged_by_user_id } }),
+    ]);
     if (!org)  return sendError(res, 'Organization not found', 404);
-
-    const user = await prisma.user.findUnique({ where: { user_id: logged_by_user_id } });
     if (!user) return sendError(res, 'User not found', 404);
 
     const activity = await prisma.organizationActivity.create({
@@ -619,10 +660,11 @@ const createOrganizationActivity = async (req: Request, res: Response) => {
       },
     });
 
-    await prisma.organization.update({
+    // Update last_contacted_at in parallel — don't await, non-critical
+    prisma.organization.update({
       where: { organization_id },
       data:  { last_contacted_at: activity.created_at },
-    });
+    }).catch((e) => console.error('Failed to update last_contacted_at:', e));
 
     return sendSuccess(res, activity, 201);
   } catch (err) {
@@ -696,6 +738,7 @@ const deleteOrganizationActivity = async (req: Request, res: Response) => {
 
 /**
  * GET /api/contact-jobs
+ * Paginated with breakdown of unique contacts + unique jobs.
  */
 const getAllContactJobs = async (req: Request, res: Response) => {
   try {
@@ -708,7 +751,8 @@ const getAllContactJobs = async (req: Request, res: Response) => {
     if (organization_user_id) where.organization_user_id = organization_user_id as string;
     if (job_id)               where.job_id               = job_id               as string;
 
-    const [rows, total] = await Promise.all([
+    // Unique contact count + unique job count via aggregation
+    const [rows, total, uniqueContacts, uniqueJobs] = await Promise.all([
       prisma.contactJob.findMany({
         skip,
         take:    limit,
@@ -718,31 +762,29 @@ const getAllContactJobs = async (req: Request, res: Response) => {
           organization_user: {
             select: {
               organization_user_id: true,
-              user: {
-                select: { user_id: true, name: true, email: true },
-              },
-              organization: {
-                select: { organization_id: true, name: true },
-              },
+              user: { select: { user_id: true, name: true, email: true } },
+              organization: { select: { organization_id: true, name: true } },
             },
           },
           job: {
             select: {
-              job_id:    true,
-              job_title: true,
-              status:    true,
-              job_type:  true,
-              location:  true,
+              job_id: true, job_title: true, status: true, job_type: true, location: true,
               organization: { select: { organization_id: true, name: true } },
             },
           },
         },
       }),
       prisma.contactJob.count({ where }),
+      prisma.contactJob.groupBy({ by: ['organization_user_id'], where, _count: { organization_user_id: true } }),
+      prisma.contactJob.groupBy({ by: ['job_id'], where, _count: { job_id: true } }),
     ]);
 
     return sendSuccess(res, {
-      data:   rows,
+      data: rows,
+      breakdown: {
+        uniqueContacts: uniqueContacts.length,
+        uniqueJobs:     uniqueJobs.length,
+      },
       paging: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -762,9 +804,7 @@ const getJobsByOrganizationUser = async (req: Request, res: Response) => {
       where:  { organization_user_id: organizationUserId },
       select: {
         organization_user_id: true,
-        user: {
-          select: { user_id: true, name: true, email: true },
-        },
+        user: { select: { user_id: true, name: true, email: true } },
         organization: { select: { name: true } },
       },
     });
@@ -775,12 +815,8 @@ const getJobsByOrganizationUser = async (req: Request, res: Response) => {
       include: {
         job: {
           select: {
-            job_id:    true,
-            job_title: true,
-            status:    true,
-            job_type:  true,
-            location:  true,
-            created_at: true,
+            job_id: true, job_title: true, status: true, job_type: true,
+            location: true, created_at: true,
             organization: { select: { name: true } },
           },
         },
@@ -817,12 +853,8 @@ const getOrganizationUsersByJob = async (req: Request, res: Response) => {
         organization_user: {
           select: {
             organization_user_id: true,
-            user: {
-              select: { user_id: true, name: true, email: true },
-            },
-            organization: {
-              select: { organization_id: true, name: true },
-            },
+            user: { select: { user_id: true, name: true, email: true } },
+            organization: { select: { organization_id: true, name: true } },
           },
         },
       },
@@ -871,12 +903,10 @@ const createContactJob = async (req: Request, res: Response) => {
         organization_user: {
           select: {
             organization_user_id: true,
-            user: {
-              select: { user_id: true, name: true, email: true },
-            },
+            user: { select: { user_id: true, name: true, email: true } },
           },
         },
-        job:     { select: { job_id: true, job_title: true } },
+        job: { select: { job_id: true, job_title: true } },
       },
     });
 
@@ -901,15 +931,12 @@ const bulkCreateContactJobs = async (req: Request, res: Response) => {
 
     const { organization_user_id, job_ids } = validation.data;
 
-    const orgUser = await prisma.organizationUser.findUnique({
-      where: { organization_user_id },
-    });
-    if (!orgUser) return sendError(res, 'Organization user not found', 404);
+    const [orgUser, jobs] = await Promise.all([
+      prisma.organizationUser.findUnique({ where: { organization_user_id } }),
+      prisma.job.findMany({ where: { job_id: { in: job_ids } }, select: { job_id: true } }),
+    ]);
 
-    const jobs = await prisma.job.findMany({
-      where:  { job_id: { in: job_ids } },
-      select: { job_id: true },
-    });
+    if (!orgUser) return sendError(res, 'Organization user not found', 404);
     if (jobs.length !== job_ids.length) return sendError(res, 'One or more job IDs not found', 404);
 
     const existingLinks = await prisma.contactJob.findMany({
@@ -986,13 +1013,6 @@ const deleteContactJobByComposite = async (req: Request, res: Response) => {
 // EXPORTS
 // ============================================================
 
-/**
- * Dropdown helpers — register these under:
- *   GET /api/contact-activity/dropdown/organization-users
- *   GET /api/contact-activity/dropdown/users
- *   GET /api/contact-activity/dropdown/organizations
- *   GET /api/contact-activity/dropdown/jobs
- */
 export const contactActivityDropdownController = {
   getOrganizationUsers: getOrganizationUsersDropdown,
   getUsers:             getAllUsersDropdown,
@@ -1001,21 +1021,21 @@ export const contactActivityDropdownController = {
 };
 
 export const contactPreviewController = {
-  getAll:                    getAllContactPreviews,
-  getById:                   getContactPreviewById,
-  getByOrganizationUser:     getPreviewsByOrganizationUser,
-  create:                    createContactPreview,
-  update:                    updateContactPreview,
-  delete:                    deleteContactPreview,
+  getAll:               getAllContactPreviews,
+  getById:              getContactPreviewById,
+  getByOrganizationUser: getPreviewsByOrganizationUser,
+  create:               createContactPreview,
+  update:               updateContactPreview,
+  delete:               deleteContactPreview,
 };
 
 export const organizationActivityController = {
-  getAll:          getAllOrganizationActivities,
-  getById:         getOrganizationActivityById,
+  getAll:            getAllOrganizationActivities,
+  getById:           getOrganizationActivityById,
   getByOrganization: getActivitiesByOrganization,
-  create:          createOrganizationActivity,
-  update:          updateOrganizationActivity,
-  delete:          deleteOrganizationActivity,
+  create:            createOrganizationActivity,
+  update:            updateOrganizationActivity,
+  delete:            deleteOrganizationActivity,
 };
 
 export const contactJobController = {
