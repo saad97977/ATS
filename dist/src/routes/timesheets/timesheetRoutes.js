@@ -88,6 +88,8 @@ router.post('/:id/submit', timesheetController_1.submitTimesheet);
 // SUBMITTED / UNDER_REVIEW  →  APPROVED  (auto-creates Invoice + Payroll + PDF)
 // Body: { reviewed_by_user_id, tax_rate?, net_terms_days? }
 router.post('/:id/approve', timesheetController_1.approveTimesheet);
+router.post('/jobs/:jobId/approve-all', timesheetController_1.bulkApproveTimesheetsByJob);
+router.get('/jobs/:jobId/grouped', timesheetController_1.getTimesheetsByJobGrouped);
 // SUBMITTED / UNDER_REVIEW  →  REJECTED
 // Body: { reviewed_by_user_id, rejection_reason }
 router.post('/:id/reject', timesheetController_1.rejectTimesheet);

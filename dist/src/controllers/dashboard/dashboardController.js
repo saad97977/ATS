@@ -1,4 +1,7 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDashboardPreference = getDashboardPreference;
 exports.saveDashboardPreference = saveDashboardPreference;
@@ -20,10 +23,14 @@ exports.widgetApplicationFunnel = widgetApplicationFunnel;
 exports.widgetClientInvoices = widgetClientInvoices;
 exports.widgetClientTimesheets = widgetClientTimesheets;
 exports.widgetClientPlacements = widgetClientPlacements;
+exports.widgetJobRequests = widgetJobRequests;
+exports.widgetExpiringDocuments = widgetExpiringDocuments;
+exports.sendExpiryReminderEmails = sendExpiryReminderEmails;
 exports.widgetClientMyTasks = widgetClientMyTasks;
+const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const client_1 = require("@prisma/client");
 const response_1 = require("../../utils/response");
-const prisma = new client_1.PrismaClient();
+const emailService_1 = require("../../services/emailService");
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +82,7 @@ function startOfMonth() {
 async function getDashboardPreference(req, res) {
     try {
         const userId = getUserId(req);
-        const pref = await prisma.dashboardPreference.findUnique({
+        const pref = await prisma_config_1.default.dashboardPreference.findUnique({
             where: { user_id: userId },
         });
         return (0, response_1.sendSuccess)(res, pref ?? { layout: [] });
@@ -96,14 +103,14 @@ async function saveDashboardPreference(req, res) {
             return (0, response_1.sendError)(res, "layout must be an array", 400);
         }
         // If user was deleted after token issuance, avoid a Prisma FK 500.
-        const userExists = await prisma.user.findUnique({
+        const userExists = await prisma_config_1.default.user.findUnique({
             where: { user_id: userId },
             select: { user_id: true },
         });
         if (!userExists) {
             return (0, response_1.sendError)(res, "User not found", 404);
         }
-        const pref = await prisma.dashboardPreference.upsert({
+        const pref = await prisma_config_1.default.dashboardPreference.upsert({
             where: { user_id: userId },
             create: { user_id: userId, layout },
             update: { layout },
@@ -129,16 +136,16 @@ async function widgetUserStats(req, res) {
         const userId = getUserId(req);
         const since = resolveDateRange(req.query.dateRange);
         const [total, active, inactive, byRole, recentUsers, newThisMonth] = await Promise.all([
-            prisma.user.count(),
-            prisma.user.count({ where: { status: "ACTIVE" } }),
-            prisma.user.count({ where: { status: "INACTIVE" } }),
+            prisma_config_1.default.user.count(),
+            prisma_config_1.default.user.count({ where: { status: "ACTIVE" } }),
+            prisma_config_1.default.user.count({ where: { status: "INACTIVE" } }),
             // Users grouped by role
-            prisma.userRole.groupBy({
+            prisma_config_1.default.userRole.groupBy({
                 by: ["role_id"],
                 _count: { user_id: true },
             }),
             // Recently created users
-            prisma.user.findMany({
+            prisma_config_1.default.user.findMany({
                 take: req.query.limit ? Number(req.query.limit) : 10,
                 orderBy: { created_at: "desc" },
                 where: since ? { created_at: { gte: since } } : undefined,
@@ -152,7 +159,7 @@ async function widgetUserStats(req, res) {
                 },
             }),
             // New users this month
-            prisma.user.count({ where: { created_at: { gte: startOfMonth() } } }),
+            prisma_config_1.default.user.count({ where: { created_at: { gte: startOfMonth() } } }),
         ]);
         return (0, response_1.sendSuccess)(res, {
             total,
@@ -177,13 +184,13 @@ async function widgetOrgStats(req, res) {
         const since = resolveDateRange(req.query.dateRange);
         const statusFilter = filterEnum(parseStatuses(req.query.statuses), client_1.OrganizationStatus);
         const [total, byStatus, topOrgs, recentOrgs] = await Promise.all([
-            prisma.organization.count(),
-            prisma.organization.groupBy({
+            prisma_config_1.default.organization.count(),
+            prisma_config_1.default.organization.groupBy({
                 by: ["status"],
                 _count: { organization_id: true },
             }),
             // Top orgs by job count
-            prisma.organization.findMany({
+            prisma_config_1.default.organization.findMany({
                 take: Number(req.query.limit ?? 6),
                 where: statusFilter ? { status: { in: statusFilter } } : undefined,
                 orderBy: { jobs: { _count: "desc" } },
@@ -198,7 +205,7 @@ async function widgetOrgStats(req, res) {
                 },
             }),
             // Recently created orgs
-            prisma.organization.findMany({
+            prisma_config_1.default.organization.findMany({
                 take: 5,
                 orderBy: { created_at: "desc" },
                 where: since ? { created_at: { gte: since } } : undefined,
@@ -244,15 +251,15 @@ async function widgetTimesheets(req, res) {
             ...(since ? { created_at: { gte: since } } : {}),
         };
         const [pendingReview, byStatus, recentTimesheets, hoursThisMonth] = await Promise.all([
-            prisma.timesheet.count({
+            prisma_config_1.default.timesheet.count({
                 where: { status: { in: [client_1.TimesheetStatus.SUBMITTED, client_1.TimesheetStatus.UNDER_REVIEW] } },
             }),
-            prisma.timesheet.groupBy({
+            prisma_config_1.default.timesheet.groupBy({
                 by: ["status"],
                 _count: { timesheet_id: true },
                 _sum: { total_hours: true, total_bill_amount: true },
             }),
-            prisma.timesheet.findMany({
+            prisma_config_1.default.timesheet.findMany({
                 take: limit,
                 orderBy: { week_start_date: "desc" },
                 where: whereBase,
@@ -282,7 +289,7 @@ async function widgetTimesheets(req, res) {
                 },
             }),
             // Total hours billed this month
-            prisma.timesheet.aggregate({
+            prisma_config_1.default.timesheet.aggregate({
                 _sum: { total_hours: true, total_bill_amount: true },
                 where: { week_start_date: { gte: startOfMonth() } },
             }),
@@ -321,12 +328,12 @@ async function widgetInvoiceStats(req, res) {
             ...(since ? { invoice_date: { gte: since } } : {}),
         };
         const [byStatus, recentInvoices, overdueSummary, totalRevenue] = await Promise.all([
-            prisma.invoice.groupBy({
+            prisma_config_1.default.invoice.groupBy({
                 by: ["status"],
                 _count: { invoice_id: true },
                 _sum: { total_amount: true },
             }),
-            prisma.invoice.findMany({
+            prisma_config_1.default.invoice.findMany({
                 take: limit,
                 orderBy: { invoice_date: "desc" },
                 where: whereBase,
@@ -351,13 +358,13 @@ async function widgetInvoiceStats(req, res) {
                 },
             }),
             // Overdue invoices
-            prisma.invoice.aggregate({
+            prisma_config_1.default.invoice.aggregate({
                 _count: { invoice_id: true },
                 _sum: { total_amount: true },
                 where: { status: "OVERDUE" },
             }),
             // Total paid revenue this month
-            prisma.invoice.aggregate({
+            prisma_config_1.default.invoice.aggregate({
                 _sum: { total_amount: true },
                 where: { status: "PAID", paid_at: { gte: startOfMonth() } },
             }),
@@ -391,11 +398,11 @@ async function widgetContracts(req, res) {
         const statusFilter = parseStatuses(req.query.statuses);
         const limit = Number(req.query.limit ?? 10);
         const [byStatus, recentContracts, pendingSignatures] = await Promise.all([
-            prisma.contract.groupBy({
+            prisma_config_1.default.contract.groupBy({
                 by: ["status"],
                 _count: { contract_id: true },
             }),
-            prisma.contract.findMany({
+            prisma_config_1.default.contract.findMany({
                 take: limit,
                 orderBy: { created_at: "desc" },
                 where: {
@@ -415,7 +422,7 @@ async function widgetContracts(req, res) {
                 },
             }),
             // Pending signature requests (global)
-            prisma.signatureRequest.count({ where: { status: "PENDING" } }),
+            prisma_config_1.default.signatureRequest.count({ where: { status: "PENDING" } }),
             // Contracts expiring in next 30 days (if you have end_date)
             // prisma.contract.count({ where: { end_date: { lte: new Date(Date.now() + 30*24*60*60*1000), gte: new Date() } } }),
         ]);
@@ -440,12 +447,12 @@ async function widgetMyTasksGrouped(req, res) {
         const statusFilter = parseStatuses(req.query.statuses);
         const limit = Number(req.query.limit ?? 10);
         const [byStatus, upcoming] = await Promise.all([
-            prisma.task.groupBy({
+            prisma_config_1.default.task.groupBy({
                 by: ["status"],
                 where: { assigned_to_user_id: userId },
                 _count: { task_id: true },
             }),
-            prisma.task.findMany({
+            prisma_config_1.default.task.findMany({
                 take: limit,
                 orderBy: { due_date: "asc" },
                 where: {
@@ -487,13 +494,13 @@ async function widgetJobStats(req, res) {
         const statusFilter = filterEnum(parseStatuses(req.query.statuses), client_1.JobStatus);
         const limit = Number(req.query.limit ?? 10);
         const [active, byStatus, myJobs, newThisMonth] = await Promise.all([
-            prisma.job.count({ where: { status: "OPEN" } }),
-            prisma.job.groupBy({
+            prisma_config_1.default.job.count({ where: { status: "OPEN" } }),
+            prisma_config_1.default.job.groupBy({
                 by: ["status"],
                 _count: { job_id: true },
             }),
             // Jobs owned by this user
-            prisma.job.findMany({
+            prisma_config_1.default.job.findMany({
                 take: limit,
                 orderBy: { created_at: "desc" },
                 where: {
@@ -517,7 +524,7 @@ async function widgetJobStats(req, res) {
                     _count: { select: { applications: true } },
                 },
             }),
-            prisma.job.count({ where: { created_at: { gte: startOfMonth() } } }),
+            prisma_config_1.default.job.count({ where: { created_at: { gte: startOfMonth() } } }),
         ]);
         return (0, response_1.sendSuccess)(res, {
             active,
@@ -545,11 +552,11 @@ async function widgetApplications(req, res) {
             ...(since ? { applied_at: { gte: since } } : {}),
         };
         const [byStatus, recentApplications, placedThisMonth, velocityByDay] = await Promise.all([
-            prisma.application.groupBy({
+            prisma_config_1.default.application.groupBy({
                 by: ["status"],
                 _count: { application_id: true },
             }),
-            prisma.application.findMany({
+            prisma_config_1.default.application.findMany({
                 take: limit,
                 orderBy: { applied_at: "desc" },
                 where: whereBase,
@@ -568,12 +575,12 @@ async function widgetApplications(req, res) {
                     },
                 },
             }),
-            prisma.application.count({
+            prisma_config_1.default.application.count({
                 where: { status: "HIRED", applied_at: { gte: startOfMonth() } },
             }),
             // Applications per day for the last 14 days (for trend chart)
             // Raw groupBy on date is tricky in Prisma — return raw recent list and let frontend compute
-            prisma.application.findMany({
+            prisma_config_1.default.application.findMany({
                 where: { applied_at: { gte: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000) } },
                 select: { applied_at: true },
                 orderBy: { applied_at: "asc" },
@@ -604,7 +611,7 @@ async function widgetPipeline(req, res) {
         const limit = Number(req.query.limit ?? 10);
         const [byStage, recentMovements] = await Promise.all([
             // Applications grouped by current pipeline stage
-            prisma.pipelineStage.groupBy({
+            prisma_config_1.default.pipelineStage.groupBy({
                 by: ["stage_name"],
                 _count: { pipeline_stage_id: true },
                 where: {
@@ -613,7 +620,7 @@ async function widgetPipeline(req, res) {
                 },
             }),
             // Recent pipeline movements
-            prisma.pipelineStage.findMany({
+            prisma_config_1.default.pipelineStage.findMany({
                 take: limit,
                 orderBy: { pipeline_date: "desc" },
                 where: {
@@ -661,8 +668,8 @@ async function widgetCandidates(req, res) {
         const statusFilter = filterEnum(parseStatuses(req.query.statuses), client_1.ApplicantStatus);
         const limit = Number(req.query.limit ?? 10);
         const [total, recentApplicants, topByScore, byStatus] = await Promise.all([
-            prisma.applicant.count(),
-            prisma.applicant.findMany({
+            prisma_config_1.default.applicant.count(),
+            prisma_config_1.default.applicant.findMany({
                 take: limit,
                 orderBy: { created_at: "desc" },
                 where: {
@@ -679,7 +686,7 @@ async function widgetCandidates(req, res) {
                 },
             }),
             // Top AI-scored candidates
-            prisma.applicationEvaluation.findMany({
+            prisma_config_1.default.applicationEvaluation.findMany({
                 take: limit,
                 orderBy: { ai_score: "desc" },
                 select: {
@@ -695,7 +702,7 @@ async function widgetCandidates(req, res) {
                     },
                 },
             }),
-            prisma.applicant.groupBy({
+            prisma_config_1.default.applicant.groupBy({
                 by: ["status"],
                 _count: { applicant_id: true },
             }),
@@ -723,11 +730,11 @@ async function widgetInterviews(req, res) {
         const limit = Number(req.query.limit ?? 10);
         const [openCount, upcoming, byStatus] = await Promise.all([
             // Open/pending interviews
-            prisma.interview.count({
+            prisma_config_1.default.interview.count({
                 where: { status: "PENDING", interview_date: { gte: new Date() } },
             }),
             // Upcoming interviews for this user's jobs
-            prisma.interview.findMany({
+            prisma_config_1.default.interview.findMany({
                 take: limit,
                 orderBy: { interview_date: "asc" },
                 where: {
@@ -755,7 +762,7 @@ async function widgetInterviews(req, res) {
                     },
                 },
             }),
-            prisma.interview.groupBy({
+            prisma_config_1.default.interview.groupBy({
                 by: ["status"],
                 _count: { interview_id: true },
             }),
@@ -780,7 +787,7 @@ async function widgetMyTasks(req, res) {
         const userId = getUserId(req);
         const statusFilter = parseStatuses(req.query.statuses);
         const limit = Number(req.query.limit ?? 10);
-        const tasks = await prisma.task.findMany({
+        const tasks = await prisma_config_1.default.task.findMany({
             take: limit,
             orderBy: { due_date: "asc" },
             where: {
@@ -811,7 +818,7 @@ async function widgetMyTasks(req, res) {
  * Resolve org IDs for a client user — shared across client office widgets
  */
 async function getClientOrgIds(userId) {
-    const orgUsers = await prisma.organizationUser.findMany({
+    const orgUsers = await prisma_config_1.default.organizationUser.findMany({
         where: { user_id: userId },
         select: { organization_id: true },
     });
@@ -824,7 +831,7 @@ async function widgetMyOrgs(req, res) {
     try {
         const userId = getUserId(req);
         const orgIds = await getClientOrgIds(userId);
-        const orgs = await prisma.organization.findMany({
+        const orgs = await prisma_config_1.default.organization.findMany({
             where: { organization_id: { in: orgIds } },
             select: {
                 organization_id: true,
@@ -855,13 +862,13 @@ async function widgetClientJobStats(req, res) {
         const limit = Number(req.query.limit ?? 10);
         const orgFilter = { organization_id: { in: orgIds } };
         const [active, byStatus, recentJobs] = await Promise.all([
-            prisma.job.count({ where: { ...orgFilter, status: "OPEN" } }),
-            prisma.job.groupBy({
+            prisma_config_1.default.job.count({ where: { ...orgFilter, status: "OPEN" } }),
+            prisma_config_1.default.job.groupBy({
                 by: ["status"],
                 where: orgFilter,
                 _count: { job_id: true },
             }),
-            prisma.job.findMany({
+            prisma_config_1.default.job.findMany({
                 take: limit,
                 orderBy: { created_at: "desc" },
                 where: {
@@ -910,12 +917,12 @@ async function widgetApplicationFunnel(req, res) {
             ...(since ? { applied_at: { gte: since } } : {}),
         };
         const [byStatus, recentApplications, placedCount] = await Promise.all([
-            prisma.application.groupBy({
+            prisma_config_1.default.application.groupBy({
                 by: ["status"],
                 where,
                 _count: { application_id: true },
             }),
-            prisma.application.findMany({
+            prisma_config_1.default.application.findMany({
                 take: Number(req.query.limit ?? 10),
                 orderBy: { applied_at: "desc" },
                 where,
@@ -927,7 +934,7 @@ async function widgetApplicationFunnel(req, res) {
                     job: { select: { job_title: true, job_id: true } },
                 },
             }),
-            prisma.application.count({ where: { ...where, status: "HIRED" } }),
+            prisma_config_1.default.application.count({ where: { ...where, status: "HIRED" } }),
         ]);
         return (0, response_1.sendSuccess)(res, {
             funnel: byStatus.map((a) => ({ status: a.status, count: a._count.application_id })),
@@ -955,13 +962,13 @@ async function widgetClientInvoices(req, res) {
             assignment: { application: { job: { organization_id: { in: orgIds } } } },
         };
         const [openCount, overdueCount, recentInvoices, totalOutstanding] = await Promise.all([
-            prisma.invoice.count({
+            prisma_config_1.default.invoice.count({
                 where: { ...orgJobFilter, status: { in: ["SENT", "OVERDUE"] } },
             }),
-            prisma.invoice.count({
+            prisma_config_1.default.invoice.count({
                 where: { ...orgJobFilter, status: "OVERDUE" },
             }),
-            prisma.invoice.findMany({
+            prisma_config_1.default.invoice.findMany({
                 take: limit,
                 orderBy: { invoice_date: "desc" },
                 where: {
@@ -980,7 +987,7 @@ async function widgetClientInvoices(req, res) {
                 },
             }),
             // Total outstanding (sent + overdue)
-            prisma.invoice.aggregate({
+            prisma_config_1.default.invoice.aggregate({
                 _sum: { total_amount: true },
                 where: { ...orgJobFilter, status: { in: ["SENT", "OVERDUE"] } },
             }),
@@ -1012,10 +1019,10 @@ async function widgetClientTimesheets(req, res) {
             assignment: { application: { job: { organization_id: { in: orgIds } } } },
         };
         const [pendingApproval, recentTimesheets, hoursThisMonth] = await Promise.all([
-            prisma.timesheet.count({
+            prisma_config_1.default.timesheet.count({
                 where: { ...orgJobFilter, status: { in: ["SUBMITTED", "UNDER_REVIEW"] } },
             }),
-            prisma.timesheet.findMany({
+            prisma_config_1.default.timesheet.findMany({
                 take: limit,
                 orderBy: { week_start_date: "desc" },
                 where: {
@@ -1042,7 +1049,7 @@ async function widgetClientTimesheets(req, res) {
                     },
                 },
             }),
-            prisma.timesheet.aggregate({
+            prisma_config_1.default.timesheet.aggregate({
                 _sum: { total_hours: true, total_bill_amount: true },
                 where: { ...orgJobFilter, week_start_date: { gte: startOfMonth() } },
             }),
@@ -1075,11 +1082,11 @@ async function widgetClientPlacements(req, res) {
         };
         const [activeAssignments, pendingContracts, recentAssignments] = await Promise.all([
             // Currently active placements
-            prisma.assignment.count({
+            prisma_config_1.default.assignment.count({
                 where: { ...orgJobFilter, end_date: { gte: new Date() } },
             }),
             // Pending unsigned contracts
-            prisma.contract.findMany({
+            prisma_config_1.default.contract.findMany({
                 take: 5,
                 where: {
                     organization_id: { in: orgIds },
@@ -1095,7 +1102,7 @@ async function widgetClientPlacements(req, res) {
                 },
             }),
             // Recent active assignments with worker info
-            prisma.assignment.findMany({
+            prisma_config_1.default.assignment.findMany({
                 take: limit,
                 orderBy: { start_date: "desc" },
                 where: {
@@ -1127,6 +1134,252 @@ async function widgetClientPlacements(req, res) {
     }
 }
 /**
+ * GET /api/dashboard/widget/frontOffice/jobRequests/:userId
+ * Jobs where the authenticated user is the manager — a quick glance at their managed workload.
+ * Query: statuses (comma-sep JobStatus), dateRange, limit
+ */
+async function widgetJobRequests(req, res) {
+    try {
+        const userId = getUserId(req);
+        const since = resolveDateRange(req.query.dateRange);
+        const statusFilter = filterEnum(parseStatuses(req.query.statuses), client_1.JobStatus);
+        const limit = Number(req.query.limit ?? 10);
+        const where = {
+            manager_id: userId,
+            ...(statusFilter ? { status: { in: statusFilter } } : {}),
+            ...(since ? { created_at: { gte: since } } : {}),
+        };
+        const [total, byStatus, jobs] = await Promise.all([
+            prisma_config_1.default.job.count({ where }),
+            prisma_config_1.default.job.groupBy({
+                by: ["status"],
+                where: { manager_id: userId },
+                _count: { job_id: true },
+            }),
+            prisma_config_1.default.job.findMany({
+                take: limit,
+                orderBy: { created_at: "desc" },
+                where,
+                select: {
+                    job_id: true,
+                    job_title: true,
+                    status: true,
+                    job_type: true,
+                    location: true,
+                    open_positions: true,
+                    max_positions: true,
+                    start_date: true,
+                    end_date: true,
+                    approved: true,
+                    created_at: true,
+                    organization: {
+                        select: {
+                            organization_id: true,
+                            name: true,
+                            status: true,
+                        },
+                    },
+                    company_office: {
+                        select: {
+                            company_office_id: true,
+                            office_name: true,
+                            city: true,
+                            state: true,
+                        },
+                    },
+                    _count: { select: { applications: true } },
+                },
+            }),
+        ]);
+        return (0, response_1.sendSuccess)(res, {
+            total,
+            byStatus: byStatus.map((j) => ({ status: j.status, count: j._count.job_id })),
+            jobs: jobs.map((j) => ({
+                ...j,
+                applicationCount: j._count.applications,
+                _count: undefined,
+            })),
+        });
+    }
+    catch (err) {
+        console.error(err);
+        return (0, response_1.sendError)(res, "widgetJobRequests failed", 500);
+    }
+}
+/**
+ * GET /api/dashboard/widget/frontOffice/expiringDocuments/:userId
+ * Organization documents expiring within the next 60 days OR already overdue,
+ * bucketed by urgency with color metadata for the frontend.
+ *
+ * Buckets (days remaining):
+ *   overdue   → < 0 days   → color: red    (#ef4444)
+ *   critical  → 1–15 days  → color: red    (#ef4444)
+ *   warning   → 16–30 days → color: orange (#f97316)
+ *   attention → 31–45 days → color: orange (#f97316)
+ *   watch     → 46–60 days → color: yellow (#eab308)
+ *
+ * Query: limit (default 50)
+ */
+async function widgetExpiringDocuments(req, res) {
+    try {
+        const limit = Number(req.query.limit ?? 50);
+        const now = new Date();
+        const cutoff = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
+        // Fetch docs expiring within 60 days AND already-overdue ones
+        const documents = await prisma_config_1.default.organizationDocument.findMany({
+            take: limit,
+            orderBy: { expiration_date: "asc" },
+            where: {
+                expiration_date: { lte: cutoff },
+            },
+            select: {
+                document_id: true,
+                document_name: true,
+                document_type: true,
+                privacy: true,
+                expiration_date: true,
+                expiration_reason: true,
+                upload_date: true,
+                organization: {
+                    select: { organization_id: true, name: true, status: true },
+                },
+                title: {
+                    select: { document_title_id: true, document_title: true },
+                },
+                user: {
+                    select: { user_id: true, name: true, email: true },
+                },
+            },
+        });
+        const bucketMeta = {
+            overdue: { label: "Overdue", color: "#ef4444", bgColor: "#fee2e2", daysRange: "past due" },
+            critical: { label: "Critical", color: "#ef4444", bgColor: "#fee2e2", daysRange: "1–15 days" },
+            warning: { label: "Warning", color: "#f97316", bgColor: "#ffedd5", daysRange: "16–30 days" },
+            attention: { label: "Attention", color: "#f97316", bgColor: "#ffedd5", daysRange: "31–45 days" },
+            watch: { label: "Watch", color: "#eab308", bgColor: "#fef9c3", daysRange: "46–60 days" },
+        };
+        const grouped = {
+            overdue: [], critical: [], warning: [], attention: [], watch: [],
+        };
+        for (const doc of documents) {
+            const msLeft = doc.expiration_date.getTime() - now.getTime();
+            const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+            let bucket;
+            if (daysLeft < 0)
+                bucket = "overdue";
+            else if (daysLeft <= 15)
+                bucket = "critical";
+            else if (daysLeft <= 30)
+                bucket = "warning";
+            else if (daysLeft <= 45)
+                bucket = "attention";
+            else
+                bucket = "watch";
+            const meta = bucketMeta[bucket];
+            grouped[bucket].push({
+                ...doc,
+                organization: {
+                    organization_id: doc.organization.organization_id,
+                    name: doc.organization.name,
+                    status: doc.organization.status,
+                },
+                days_left: daysLeft,
+                is_overdue: daysLeft < 0,
+                bucket,
+                color: meta.color,
+                bg_color: meta.bgColor,
+            });
+        }
+        const buildBucket = (key) => ({
+            ...bucketMeta[key],
+            count: grouped[key].length,
+            documents: grouped[key],
+        });
+        return (0, response_1.sendSuccess)(res, {
+            total: documents.length,
+            lookahead: 60,
+            summary: {
+                overdue: grouped.overdue.length,
+                critical: grouped.critical.length,
+                warning: grouped.warning.length,
+                attention: grouped.attention.length,
+                watch: grouped.watch.length,
+            },
+            buckets: {
+                overdue: buildBucket("overdue"),
+                critical: buildBucket("critical"),
+                warning: buildBucket("warning"),
+                attention: buildBucket("attention"),
+                watch: buildBucket("watch"),
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        return (0, response_1.sendError)(res, "widgetExpiringDocuments failed", 500);
+    }
+}
+/**
+ * POST /api/dashboard/widget/frontOffice/expiringDocuments/sendReminders
+ * Sends expiry reminder emails to the uploader of each document that is
+ * overdue or expiring within 60 days. Safe to call from a cron job or manually.
+ */
+async function sendExpiryReminderEmails(req, res) {
+    try {
+        const now = new Date();
+        const cutoff = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
+        const documents = await prisma_config_1.default.organizationDocument.findMany({
+            where: { expiration_date: { lte: cutoff } },
+            select: {
+                document_id: true,
+                document_name: true,
+                document_type: true,
+                expiration_date: true,
+                expiration_reason: true,
+                organization: { select: { name: true } },
+                title: { select: { document_title: true } },
+                user: { select: { name: true, email: true } },
+            },
+        });
+        const results = await Promise.all(documents.map(async (doc) => {
+            const daysLeft = Math.ceil((doc.expiration_date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+            const result = await (0, emailService_1.sendDocumentExpiryReminderEmail)({
+                recipientEmail: doc.user.email,
+                recipientName: doc.user.name,
+                documentName: doc.document_name,
+                documentType: doc.document_type,
+                documentTitle: doc.title.document_title,
+                organizationName: doc.organization.name,
+                expirationDate: doc.expiration_date,
+                expirationReason: doc.expiration_reason,
+                daysLeft,
+            });
+            return {
+                document_id: doc.document_id,
+                document_name: doc.document_name,
+                recipient: doc.user.email,
+                days_left: daysLeft,
+                is_overdue: daysLeft < 0,
+                email_sent: result.success,
+                error: result.error ?? null,
+            };
+        }));
+        const sent = results.filter((r) => r.email_sent).length;
+        const failed = results.filter((r) => !r.email_sent).length;
+        return (0, response_1.sendSuccess)(res, {
+            message: `Reminder emails sent: ${sent} succeeded, ${failed} failed`,
+            total: results.length,
+            sent,
+            failed,
+            results,
+        });
+    }
+    catch (err) {
+        console.error(err);
+        return (0, response_1.sendError)(res, "sendExpiryReminderEmails failed", 500);
+    }
+}
+/**
  * GET /api/dashboard/widget/clientOffice/myTasks/:userId
  * Query: statuses, limit
  */
@@ -1135,7 +1388,7 @@ async function widgetClientMyTasks(req, res) {
         const userId = getUserId(req);
         const statusFilter = parseStatuses(req.query.statuses);
         const limit = Number(req.query.limit ?? 10);
-        const tasks = await prisma.task.findMany({
+        const tasks = await prisma_config_1.default.task.findMany({
             take: limit,
             orderBy: { due_date: "asc" },
             where: {

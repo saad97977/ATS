@@ -66,7 +66,7 @@ const submitApplicationSchema = z.object({
   is_optout: z.boolean().optional(),
   is_private: z.boolean().optional(),
   office_name: z.string().optional(),
-  office_division: z.string().optional(),
+  office_division: z.enum(['SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN', 'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC']).optional(),
 
   // Application-only fields (ignored when job_id is absent)
   cover_letter: z.string().optional(),

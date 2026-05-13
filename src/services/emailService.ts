@@ -570,6 +570,110 @@ ${data.uploadedDocuments.length ? `Documents:\n${data.uploadedDocuments.map(d =>
 
 
 
+// ─── Document Expiry Reminder ────────────────────────────────────────────────
+
+export const sendDocumentExpiryReminderEmail = async (data: {
+  recipientEmail:    string;
+  recipientName:     string;
+  documentName:      string;
+  documentType:      string;
+  documentTitle:     string;
+  organizationName:  string;
+  expirationDate:    Date;
+  expirationReason?: string | null;
+  daysLeft:          number;        // negative = already overdue
+}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+  try {
+    const isOverdue  = data.daysLeft < 0;
+    const absDays    = Math.abs(data.daysLeft);
+
+    // Urgency label & colors
+    let urgencyLabel: string;
+    let urgencyColor: string;
+    let bannerBg:     string;
+
+    if (isOverdue) {
+      urgencyLabel = `OVERDUE by ${absDays} day${absDays !== 1 ? 's' : ''}`;
+      urgencyColor = '#991b1b';
+      bannerBg     = '#fee2e2';
+    } else if (data.daysLeft <= 15) {
+      urgencyLabel = `${data.daysLeft} day${data.daysLeft !== 1 ? 's' : ''} remaining`;
+      urgencyColor = '#991b1b';
+      bannerBg     = '#fee2e2';
+    } else if (data.daysLeft <= 45) {
+      urgencyLabel = `${data.daysLeft} days remaining`;
+      urgencyColor = '#9a3412';
+      bannerBg     = '#ffedd5';
+    } else {
+      urgencyLabel = `${data.daysLeft} days remaining`;
+      urgencyColor = '#713f12';
+      bannerBg     = '#fef9c3';
+    }
+
+    const subject = isOverdue
+      ? `[OVERDUE] Document expired: ${data.documentName}`
+      : `[Action Required] Document expiring in ${data.daysLeft} days: ${data.documentName}`;
+
+    const rawContent = `
+${isOverdue ? 'URGENT: The following document has EXPIRED and requires immediate attention.' : 'This is a reminder that the following document is expiring soon.'}
+
+Document:      ${data.documentName}
+Type:          ${data.documentType}
+Category:      ${data.documentTitle}
+Organization:  ${data.organizationName}
+Expiry Date:   ${fmtDate(data.expirationDate)}
+Status:        ${urgencyLabel}
+${data.expirationReason ? `Reason:        ${data.expirationReason}` : ''}
+
+Please take action to renew this document as soon as possible.
+    `.trim();
+
+    const htmlContent = `
+      <p>${isOverdue
+        ? '<strong style="color:#991b1b">URGENT:</strong> The following document has <strong>expired</strong> and requires immediate attention.'
+        : 'This is a reminder that the following document is expiring soon and requires renewal.'}</p>
+
+      <div style="background:${bannerBg};border-left:4px solid ${urgencyColor};padding:14px 18px;margin:20px 0;border-radius:4px">
+        <p style="margin:0;font-size:16px;font-weight:700;color:${urgencyColor}">${urgencyLabel}</p>
+      </div>
+
+      <div class="info-box">
+        <p><strong>Document:</strong> ${data.documentName}</p>
+        <p><strong>Type:</strong> ${data.documentType}</p>
+        <p><strong>Category:</strong> ${data.documentTitle}</p>
+        <p><strong>Organization:</strong> ${data.organizationName}</p>
+        <p><strong>Expiry Date:</strong> ${fmtDate(data.expirationDate)}</p>
+        ${data.expirationReason ? `<p><strong>Reason / Notes:</strong> ${data.expirationReason}</p>` : ''}
+      </div>
+
+      <p>Please log in to the portal and upload the renewed document at your earliest convenience${isOverdue ? ' — this document is already past its expiry date' : ''}.</p>
+    `;
+
+    const transporter = createTransporter();
+    const info = await transporter.sendMail({
+      from:    { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
+      to:      data.recipientEmail,
+      subject,
+      text:    generateBaseEmailText({
+        applicantName:    data.recipientName,
+        organizationName: data.organizationName,
+        content:          rawContent,
+      }),
+      html: generateBaseEmailHTML({
+        applicantName:    data.recipientName,
+        organizationName: data.organizationName,
+        subject,
+        content:          htmlContent,
+      }),
+    });
+
+    return { success: true, messageId: info.messageId };
+  } catch (error: any) {
+    console.error('Error sending document expiry reminder email:', error);
+    return { success: false, error: error.message || 'Failed to send email' };
+  }
+};
+
 export default {
   sendInterviewInvitationEmail,
   sendInterviewRescheduleEmail,
@@ -577,5 +681,6 @@ export default {
   sendOfferLetterEmail,
   sendOnboardingWelcomeEmail,
   sendAssignmentNotificationEmail,
+  sendDocumentExpiryReminderEmail,
   verifyEmailConfiguration,
 };

@@ -300,11 +300,21 @@ export const updateUserProfile = async (req: Request, res: Response) => {
       'notify_email', 'notify_sms', 'notify_in_app',
     ] as const;
 
+    const VALID_DIVISIONS = [
+      'SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN',
+      'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC',
+    ];
+
     const data: Record<string, unknown> = {};
     for (const field of ALLOWED_FIELDS) {
       if (req.body[field] !== undefined) {
         data[field] = req.body[field];
       }
+    }
+
+    // Validate division enum if provided
+    if (data.division !== undefined && data.division !== null && !VALID_DIVISIONS.includes(data.division as string)) {
+      return sendError(res, `Invalid division value. Must be one of: ${VALID_DIVISIONS.join(', ')}`, 400);
     }
 
     // Validate email fields if provided

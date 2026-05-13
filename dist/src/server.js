@@ -49,6 +49,7 @@ const payrollRoutes_1 = __importDefault(require("./routes/timesheets/payrollRout
 const dropdownRoutes_1 = __importDefault(require("./routes/dropdown/dropdownRoutes"));
 const dashboardRoutes_1 = __importDefault(require("./routes/dashboard/dashboardRoutes"));
 const userProfileRoutes_1 = __importDefault(require("./routes/user/userProfileRoutes"));
+const jobCloneRoutes_1 = __importDefault(require("./routes/job/jobCloneRoutes"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -125,6 +126,7 @@ app.use('/api/job-details', jobDetailRoutes_1.default);
 app.use('/api/job-rates', jobRateRoutes_1.default);
 app.use('/api/job-notes', jobNoteRoutes_1.default);
 app.use('/api/job-owners', jobOwnerRoutes_1.default);
+app.use('/api/job-templates', jobCloneRoutes_1.default); // Job cloning and templates
 // Organization routes
 app.use('/api/organizations', organizationRoutes_1.default);
 app.use('/api/organization-addresses', organizationAddressRoutes_1.default);

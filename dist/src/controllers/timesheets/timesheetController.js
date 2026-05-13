@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.timesheetController = exports.bulkUpsertTimeEntries = exports.getTimesheetNotifications = exports.getAssignmentsForTimesheets = exports.updateInvoiceStatus = exports.downloadInvoicePdf = exports.getInvoiceById = exports.getAllInvoices = exports.importTimesheets = exports.downloadImportTemplate = exports.toggleAssignmentTimesheets = exports.bulkSyncInvoicesToQB = exports.syncInvoiceToQB = exports.syncTimesheetToQB = exports.rejectTimesheet = exports.approveTimesheet = exports.submitTimesheet = exports.deleteTimeEntry = exports.upsertTimeEntry = exports.updateTimesheetRates = exports.createOrGetTimesheet = exports.getTimesheetById = exports.getTimesheetsByAssignment = exports.getTimesheetStats = exports.getAllTimesheets = void 0;
+exports.timesheetController = exports.getTimesheetsByJobGrouped = exports.bulkApproveTimesheetsByJob = exports.bulkUpsertTimeEntries = exports.getTimesheetNotifications = exports.getAssignmentsForTimesheets = exports.updateInvoiceStatus = exports.downloadInvoicePdf = exports.getInvoiceById = exports.getAllInvoices = exports.importTimesheets = exports.downloadImportTemplate = exports.toggleAssignmentTimesheets = exports.bulkSyncInvoicesToQB = exports.syncInvoiceToQB = exports.syncTimesheetToQB = exports.rejectTimesheet = exports.approveTimesheet = exports.submitTimesheet = exports.deleteTimeEntry = exports.upsertTimeEntry = exports.updateTimesheetRates = exports.createOrGetTimesheet = exports.getTimesheetById = exports.getTimesheetsByAssignment = exports.getTimesheetStats = exports.getAllTimesheets = void 0;
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const response_1 = require("../../utils/response");
 const library_1 = require("@prisma/client/runtime/library");
@@ -1486,6 +1486,490 @@ const bulkUpsertTimeEntries = async (req, res) => {
 };
 exports.bulkUpsertTimeEntries = bulkUpsertTimeEntries;
 // ─────────────────────────────────────────────────────────────
+// BULK APPROVE ALL TIMESHEETS FOR A SPECIFIC JOB
+// POST /api/timesheets/jobs/:jobId/approve-all
+// ─────────────────────────────────────────────────────────────
+const bulkApproveTimesheetsByJob = async (req, res) => {
+    try {
+        const { jobId } = req.params;
+        const { reviewed_by_user_id, tax_rate = 0, net_terms_days = 30 } = req.body;
+        if (!reviewed_by_user_id)
+            return (0, response_1.sendError)(res, 'reviewed_by_user_id is required', 400);
+        // Verify job exists
+        const job = await prisma_config_1.default.job.findUnique({ where: { job_id: jobId } });
+        if (!job)
+            return (0, response_1.sendError)(res, 'Job not found', 404);
+        // Verify reviewer exists
+        const reviewer = await prisma_config_1.default.user.findUnique({ where: { user_id: reviewed_by_user_id } });
+        if (!reviewer)
+            return (0, response_1.sendError)(res, 'Reviewer user not found', 404);
+        // Find all SUBMITTED or UNDER_REVIEW timesheets for assignments under this job
+        const eligibleTimesheets = await prisma_config_1.default.timesheet.findMany({
+            where: {
+                status: { in: ['SUBMITTED', 'UNDER_REVIEW'] },
+                assignment: {
+                    application: {
+                        job_id: jobId,
+                    },
+                },
+            },
+            include: {
+                time_entries: true,
+                assignment: {
+                    include: {
+                        application: {
+                            include: {
+                                job: {
+                                    include: { job_rates: { take: 1, orderBy: { job_rate_id: 'desc' } } },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        if (eligibleTimesheets.length === 0) {
+            return (0, response_1.sendSuccess)(res, {
+                message: 'No eligible timesheets found for this job (must be SUBMITTED or UNDER_REVIEW)',
+                job_id: jobId,
+                approved_count: 0,
+                failed_count: 0,
+                results: [],
+            });
+        }
+        const approved = [];
+        const failed = [];
+        const taxRateDec = new library_1.Decimal(tax_rate);
+        for (const timesheet of eligibleTimesheets) {
+            try {
+                // Compute billing with custom rate overrides if set
+                const billing = await computeBilling(timesheet.assignment_id, timesheet.total_regular_hours, timesheet.total_ot_hours, {
+                    custom_bill_rate: timesheet.custom_bill_rate,
+                    custom_ot_bill_rate: timesheet.custom_ot_bill_rate,
+                    custom_pay_rate: timesheet.custom_pay_rate,
+                    custom_ot_pay_rate: timesheet.custom_ot_pay_rate,
+                });
+                const taxAmount = billing.totalBill.mul(taxRateDec);
+                const invoiceTotal = billing.totalBill.add(taxAmount);
+                const invoiceNumber = await generateInvoiceNumber();
+                const invoiceDate = new Date();
+                const dueDate = new Date(invoiceDate);
+                dueDate.setUTCDate(dueDate.getUTCDate() + net_terms_days);
+                const payPeriod = getWeekLabel(timesheet.week_start_date);
+                const { updatedTimesheet, invoice, payroll } = await prisma_config_1.default.$transaction(async (tx) => {
+                    const updatedTimesheet = await tx.timesheet.update({
+                        where: { timesheet_id: timesheet.timesheet_id },
+                        data: {
+                            status: 'APPROVED',
+                            reviewed_by_user_id,
+                            reviewed_at: new Date(),
+                            approved_at: new Date(),
+                            rejected_at: null,
+                            rejection_reason: null,
+                            bill_rate: billing.billRate,
+                            ot_bill_rate: billing.otBillRate,
+                            pay_rate: billing.payRate,
+                            ot_pay_rate: billing.otPayRate,
+                            total_bill_amount: billing.totalBill,
+                            total_pay_amount: billing.totalPay,
+                        },
+                    });
+                    const invoice = await tx.invoice.create({
+                        data: {
+                            assignment_id: timesheet.assignment_id,
+                            timesheet_id: timesheet.timesheet_id,
+                            invoice_number: invoiceNumber,
+                            status: 'DRAFT',
+                            invoice_date: invoiceDate,
+                            due_date: dueDate,
+                            regular_hours: timesheet.total_regular_hours,
+                            ot_hours: timesheet.total_ot_hours,
+                            bill_rate: billing.billRate,
+                            ot_bill_rate: billing.otBillRate,
+                            subtotal: billing.totalBill,
+                            tax_rate: taxRateDec,
+                            tax_amount: taxAmount,
+                            total_amount: invoiceTotal,
+                        },
+                    });
+                    const payroll = await tx.payroll.create({
+                        data: {
+                            assignment_id: timesheet.assignment_id,
+                            timesheet_id: timesheet.timesheet_id,
+                            pay_period: payPeriod,
+                            regular_hours: timesheet.total_regular_hours,
+                            ot_hours: timesheet.total_ot_hours,
+                            pay_rate: billing.payRate,
+                            ot_pay_rate: billing.otPayRate,
+                            gross_pay: billing.totalPay,
+                            net_pay: billing.totalPay,
+                        },
+                    });
+                    return { updatedTimesheet, invoice, payroll };
+                });
+                // Fire-and-forget PDF generation per invoice
+                (0, invoiceService_1.generateInvoicePdf)(invoice.invoice_id)
+                    .then(async (pdfUrl) => {
+                    await prisma_config_1.default.invoice.update({
+                        where: { invoice_id: invoice.invoice_id },
+                        data: { pdf_url: pdfUrl, pdf_generated_at: new Date() },
+                    });
+                })
+                    .catch((err) => console.error(`PDF generation failed for invoice ${invoice.invoice_id}:`, err));
+                approved.push({
+                    timesheet_id: updatedTimesheet.timesheet_id,
+                    invoice_id: invoice.invoice_id,
+                    invoice_number: invoice.invoice_number,
+                    payroll_id: payroll.payroll_id,
+                    total_amount: Number(invoice.total_amount),
+                });
+            }
+            catch (err) {
+                console.error(`bulkApproveTimesheetsByJob — failed for timesheet ${timesheet.timesheet_id}:`, err);
+                failed.push({
+                    timesheet_id: timesheet.timesheet_id,
+                    reason: err.message?.includes('No billing rate') || err.message?.includes('billing rate')
+                        ? err.message
+                        : 'Approval failed — see server logs',
+                });
+            }
+        }
+        return (0, response_1.sendSuccess)(res, {
+            job_id: jobId,
+            total_eligible: eligibleTimesheets.length,
+            approved_count: approved.length,
+            failed_count: failed.length,
+            approved,
+            failed,
+        });
+    }
+    catch (err) {
+        console.error('bulkApproveTimesheetsByJob:', err);
+        return (0, response_1.sendError)(res, 'Failed to bulk approve timesheets', 500);
+    }
+};
+exports.bulkApproveTimesheetsByJob = bulkApproveTimesheetsByJob;
+// ─────────────────────────────────────────────────────────────
+// GET ALL TIMESHEETS GROUPED BY ASSIGNMENT FOR A SPECIFIC JOB
+// GET /api/timesheets/jobs/:jobId/grouped
+//
+// Paginated at the assignment level. Each page returns N
+// assignments, each with their own timesheets + aggregates.
+//
+// Query params:
+//   page           – page number (default: 1)
+//   limit          – assignments per page (default: 10, max: 50)
+//   status         – filter timesheets by status (optional)
+//   weekStart      – filter timesheets by week start >= (optional)
+//   weekEnd        – filter timesheets by week end   <= (optional)
+//   timesheetPage  – page of timesheets within each assignment (default: 1)
+//   timesheetLimit – timesheets per assignment per page (default: 5, max: 20)
+// ─────────────────────────────────────────────────────────────
+const getTimesheetsByJobGrouped = async (req, res) => {
+    try {
+        const { jobId } = req.params;
+        // ── Pagination params ──
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10));
+        const timesheetPage = Math.max(1, parseInt(req.query.timesheetPage) || 1);
+        const timesheetLimit = Math.min(20, Math.max(1, parseInt(req.query.timesheetLimit) || 5));
+        const assignmentSkip = (page - 1) * limit;
+        const timesheetSkip = (timesheetPage - 1) * timesheetLimit;
+        // ── Filters ──
+        const { status, weekStart, weekEnd } = req.query;
+        const timesheetWhere = {};
+        if (status)
+            timesheetWhere.status = Array.isArray(status) ? { in: status } : status;
+        if (weekStart)
+            timesheetWhere.week_start_date = { ...(timesheetWhere.week_start_date ?? {}), gte: getWeekStart(new Date(weekStart)) };
+        if (weekEnd)
+            timesheetWhere.week_start_date = { ...(timesheetWhere.week_start_date ?? {}), lte: getWeekStart(new Date(weekEnd)) };
+        // ── Verify job exists ──
+        const job = await prisma_config_1.default.job.findUnique({
+            where: { job_id: jobId },
+            select: {
+                job_id: true,
+                job_title: true,
+                status: true,
+                organization: { select: { organization_id: true, name: true } },
+            },
+        });
+        if (!job)
+            return (0, response_1.sendError)(res, 'Job not found', 404);
+        const assignmentWhere = {
+            application: { job_id: jobId },
+            timesheets: { some: timesheetWhere }, // only assignments with matching timesheets
+        };
+        // ── Run all top-level queries in parallel ──
+        const [totalAssignments, assignments, jobAggregates, jobStatusGroups] = await Promise.all([
+            // 1. Total assignment count for pagination meta
+            prisma_config_1.default.assignment.count({ where: assignmentWhere }),
+            // 2. Current page of assignments — lightweight, no timesheets yet
+            prisma_config_1.default.assignment.findMany({
+                where: assignmentWhere,
+                skip: assignmentSkip,
+                take: limit,
+                orderBy: { start_date: 'desc' },
+                select: {
+                    assignment_id: true,
+                    employment_type: true,
+                    start_date: true,
+                    end_date: true,
+                    timesheets_enabled: true,
+                    application: {
+                        select: {
+                            applicant: {
+                                select: {
+                                    applicant_id: true,
+                                    full_name: true,
+                                    contact: { select: { email: true, phone: true } },
+                                },
+                            },
+                            job: {
+                                select: {
+                                    job_rates: {
+                                        take: 1,
+                                        orderBy: { job_rate_id: 'desc' },
+                                        select: {
+                                            bill_rate: true,
+                                            pay_rate: true,
+                                            ot_bill_rate: true,
+                                            ot_pay_rate: true,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            }),
+            // 3. Job-level numeric aggregates (across ALL matching timesheets, not just this page)
+            prisma_config_1.default.timesheet.aggregate({
+                where: {
+                    ...timesheetWhere,
+                    assignment: { application: { job_id: jobId } },
+                },
+                _sum: {
+                    total_regular_hours: true,
+                    total_ot_hours: true,
+                    total_hours: true,
+                    total_bill_amount: true,
+                    total_pay_amount: true,
+                },
+                _count: { timesheet_id: true },
+            }),
+            // 4. Job-level status breakdown (across ALL matching timesheets)
+            prisma_config_1.default.timesheet.groupBy({
+                by: ['status'],
+                where: {
+                    ...timesheetWhere,
+                    assignment: { application: { job_id: jobId } },
+                },
+                _count: { timesheet_id: true },
+            }),
+        ]);
+        if (assignments.length === 0) {
+            return (0, response_1.sendSuccess)(res, {
+                job,
+                job_summary: {
+                    total_assignments: totalAssignments,
+                    total_timesheets: 0,
+                    regular_hours: 0,
+                    ot_hours: 0,
+                    total_hours: 0,
+                    total_billed: 0,
+                    total_pay: 0,
+                    status_breakdown: {},
+                },
+                assignments: [],
+                paging: {
+                    total: totalAssignments,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(totalAssignments / limit),
+                },
+            });
+        }
+        const assignmentIds = assignments.map((a) => a.assignment_id);
+        // ── Per-assignment queries — all fired in parallel ──
+        const [timesheetPages, // paginated timesheets per assignment
+        timesheetCounts, // total timesheet count per assignment
+        assignmentAggregates, // numeric totals per assignment
+        assignmentStatusGroups, // status breakdown per assignment
+        ] = await Promise.all([
+            // Paginated timesheets for every assignment on this page (one query, not N)
+            prisma_config_1.default.timesheet.findMany({
+                where: {
+                    ...timesheetWhere,
+                    assignment_id: { in: assignmentIds },
+                },
+                orderBy: { week_start_date: 'desc' },
+                skip: timesheetSkip,
+                take: timesheetLimit * assignmentIds.length, // upper-bound fetch
+                select: {
+                    timesheet_id: true,
+                    assignment_id: true,
+                    week_start_date: true,
+                    week_end_date: true,
+                    status: true,
+                    total_regular_hours: true,
+                    total_ot_hours: true,
+                    total_hours: true,
+                    total_bill_amount: true,
+                    total_pay_amount: true,
+                    bill_rate: true,
+                    ot_bill_rate: true,
+                    pay_rate: true,
+                    ot_pay_rate: true,
+                    submitted_at: true,
+                    approved_at: true,
+                    rejected_at: true,
+                    rejection_reason: true,
+                    notes: true,
+                    created_at: true,
+                    reviewed_by: { select: { user_id: true, name: true } },
+                    invoice: {
+                        select: {
+                            invoice_id: true,
+                            invoice_number: true,
+                            status: true,
+                            total_amount: true,
+                            due_date: true,
+                            paid_at: true,
+                            pdf_url: true,
+                        },
+                    },
+                    payroll: {
+                        select: {
+                            payroll_id: true,
+                            pay_period: true,
+                            gross_pay: true,
+                            net_pay: true,
+                            processed_at: true,
+                        },
+                    },
+                },
+            }),
+            // Total timesheet count per assignment (for inner pagination meta)
+            prisma_config_1.default.timesheet.groupBy({
+                by: ['assignment_id'],
+                where: { ...timesheetWhere, assignment_id: { in: assignmentIds } },
+                _count: { timesheet_id: true },
+            }),
+            // Numeric aggregates per assignment
+            prisma_config_1.default.timesheet.groupBy({
+                by: ['assignment_id'],
+                where: { ...timesheetWhere, assignment_id: { in: assignmentIds } },
+                _sum: {
+                    total_regular_hours: true,
+                    total_ot_hours: true,
+                    total_hours: true,
+                    total_bill_amount: true,
+                    total_pay_amount: true,
+                },
+            }),
+            // Status breakdown per assignment
+            prisma_config_1.default.timesheet.groupBy({
+                by: ['assignment_id', 'status'],
+                where: { ...timesheetWhere, assignment_id: { in: assignmentIds } },
+                _count: { timesheet_id: true },
+            }),
+        ]);
+        // ── Index per-assignment data for O(1) lookup ──
+        const timesheetsByAssignment = timesheetPages.reduce((acc, ts) => {
+            var _a;
+            (acc[_a = ts.assignment_id] ?? (acc[_a] = [])).push(ts);
+            return acc;
+        }, {});
+        const countByAssignment = timesheetCounts.reduce((acc, g) => {
+            acc[g.assignment_id] = g._count.timesheet_id;
+            return acc;
+        }, {});
+        const aggregateByAssignment = assignmentAggregates.reduce((acc, g) => {
+            acc[g.assignment_id] = g._sum;
+            return acc;
+        }, {});
+        const statusByAssignment = assignmentStatusGroups.reduce((acc, g) => {
+            var _a;
+            (acc[_a = g.assignment_id] ?? (acc[_a] = {}))[g.status] = g._count.timesheet_id;
+            return acc;
+        }, {});
+        // ── Shape final response ──
+        const grouped = assignments.map((assignment) => {
+            const agg = aggregateByAssignment[assignment.assignment_id] ?? {};
+            const statusBreakdown = statusByAssignment[assignment.assignment_id] ?? {};
+            const totalTs = countByAssignment[assignment.assignment_id] ?? 0;
+            const tsPage = timesheetsByAssignment[assignment.assignment_id] ?? [];
+            const rate = assignment.application.job.job_rates[0] ?? null;
+            return {
+                assignment_id: assignment.assignment_id,
+                employment_type: assignment.employment_type,
+                start_date: assignment.start_date,
+                end_date: assignment.end_date,
+                timesheets_enabled: assignment.timesheets_enabled ?? true,
+                applicant: {
+                    applicant_id: assignment.application.applicant.applicant_id,
+                    full_name: assignment.application.applicant.full_name,
+                    email: assignment.application.applicant.contact?.email ?? null,
+                    phone: assignment.application.applicant.contact?.phone ?? null,
+                },
+                rate: rate ? {
+                    bill_rate: rate.bill_rate,
+                    pay_rate: rate.pay_rate,
+                    ot_bill_rate: rate.ot_bill_rate,
+                    ot_pay_rate: rate.ot_pay_rate,
+                } : null,
+                summary: {
+                    timesheet_count: totalTs,
+                    status_breakdown: statusBreakdown,
+                    regular_hours: Number(agg.total_regular_hours ?? 0),
+                    ot_hours: Number(agg.total_ot_hours ?? 0),
+                    total_hours: Number(agg.total_hours ?? 0),
+                    total_billed: Number(agg.total_bill_amount ?? 0),
+                    total_pay: Number(agg.total_pay_amount ?? 0),
+                },
+                timesheets: tsPage,
+                // Inner pagination meta so the client can page timesheets per assignment
+                timesheet_paging: {
+                    total: totalTs,
+                    page: timesheetPage,
+                    limit: timesheetLimit,
+                    totalPages: Math.ceil(totalTs / timesheetLimit),
+                },
+            };
+        });
+        return (0, response_1.sendSuccess)(res, {
+            job,
+            job_summary: {
+                total_assignments: totalAssignments,
+                total_timesheets: jobAggregates._count.timesheet_id,
+                regular_hours: Number(jobAggregates._sum.total_regular_hours ?? 0),
+                ot_hours: Number(jobAggregates._sum.total_ot_hours ?? 0),
+                total_hours: Number(jobAggregates._sum.total_hours ?? 0),
+                total_billed: Number(jobAggregates._sum.total_bill_amount ?? 0),
+                total_pay: Number(jobAggregates._sum.total_pay_amount ?? 0),
+                status_breakdown: jobStatusGroups.reduce((acc, g) => {
+                    acc[g.status] = g._count.timesheet_id;
+                    return acc;
+                }, {}),
+            },
+            assignments: grouped,
+            // Outer pagination (assignment level)
+            paging: {
+                total: totalAssignments,
+                page,
+                limit,
+                totalPages: Math.ceil(totalAssignments / limit),
+            },
+        });
+    }
+    catch (err) {
+        console.error('getTimesheetsByJobGrouped:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch grouped timesheets', 500);
+    }
+};
+exports.getTimesheetsByJobGrouped = getTimesheetsByJobGrouped;
+// ─────────────────────────────────────────────────────────────
 // EXPORT
 // ─────────────────────────────────────────────────────────────
 exports.timesheetController = {
@@ -1517,5 +2001,7 @@ exports.timesheetController = {
     getAssignmentsForTimesheets: exports.getAssignmentsForTimesheets,
     getTimesheetNotifications: exports.getTimesheetNotifications,
     bulkUpsertTimeEntries: exports.bulkUpsertTimeEntries,
+    bulkApproveTimesheetsByJob: exports.bulkApproveTimesheetsByJob,
+    getTimesheetsByJobGrouped: exports.getTimesheetsByJobGrouped,
 };
 //# sourceMappingURL=timesheetController.js.map

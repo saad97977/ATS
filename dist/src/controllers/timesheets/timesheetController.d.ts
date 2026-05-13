@@ -23,6 +23,8 @@ export declare const updateInvoiceStatus: (req: Request, res: Response) => Promi
 export declare const getAssignmentsForTimesheets: (req: Request, res: Response) => Promise<void>;
 export declare const getTimesheetNotifications: (req: Request, res: Response) => Promise<void>;
 export declare const bulkUpsertTimeEntries: (req: Request, res: Response) => Promise<void>;
+export declare const bulkApproveTimesheetsByJob: (req: Request, res: Response) => Promise<void>;
+export declare const getTimesheetsByJobGrouped: (req: Request, res: Response) => Promise<void>;
 export declare const timesheetController: {
     getAllTimesheets: (req: Request, res: Response) => Promise<void>;
     getTimesheetById: (req: Request, res: Response) => Promise<void>;
@@ -48,5 +50,7 @@ export declare const timesheetController: {
     getAssignmentsForTimesheets: (req: Request, res: Response) => Promise<void>;
     getTimesheetNotifications: (req: Request, res: Response) => Promise<void>;
     bulkUpsertTimeEntries: (req: Request, res: Response) => Promise<void>;
+    bulkApproveTimesheetsByJob: (req: Request, res: Response) => Promise<void>;
+    getTimesheetsByJobGrouped: (req: Request, res: Response) => Promise<void>;
 };
 //# sourceMappingURL=timesheetController.d.ts.map

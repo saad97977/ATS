@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticateToken, authorizeRole } from '../../middleware/authMiddleware';
+import { authenticateToken } from '../../middleware/authMiddleware';
 import {
   contactActivityDropdownController,
   contactPreviewController,
@@ -22,7 +22,6 @@ const contactActivityDropdownRouter = Router();
 contactActivityDropdownRouter.get(
   '/organization-users',
   authenticateToken,
-  authorizeRole('HCM_USER'),
   contactActivityDropdownController.getOrganizationUsers
 );
 
@@ -34,7 +33,6 @@ contactActivityDropdownRouter.get(
 contactActivityDropdownRouter.get(
   '/users',
   authenticateToken,
-  authorizeRole('HCM_USER'),
   contactActivityDropdownController.getUsers
 );
 
@@ -46,7 +44,6 @@ contactActivityDropdownRouter.get(
 contactActivityDropdownRouter.get(
   '/organizations',
   authenticateToken,
-  authorizeRole('HCM_USER'),
   contactActivityDropdownController.getOrganizations
 );
 
@@ -59,7 +56,6 @@ contactActivityDropdownRouter.get(
 contactActivityDropdownRouter.get(
   '/jobs',
   authenticateToken,
-  authorizeRole('HCM_USER'),
   contactActivityDropdownController.getJobs
 );
 
@@ -75,14 +71,14 @@ const contactPreviewRouter = Router();
  * @query   organization_user_id, user_id, type, job_id, page, limit
  * @access  HCM_USER
  */
-contactPreviewRouter.get('/', authenticateToken, authorizeRole('HCM_USER'), contactPreviewController.getAll);
+contactPreviewRouter.get('/', authenticateToken, contactPreviewController.getAll);
 
 /**
  * @route   GET /api/contact-previews/:id
  * @desc    Get a single contact preview by ID
  * @access  HCM_USER
  */
-contactPreviewRouter.get('/:id', authenticateToken, authorizeRole('HCM_USER'), contactPreviewController.getById);
+contactPreviewRouter.get('/:id', authenticateToken, contactPreviewController.getById);
 
 /**
  * @route   GET /api/contact-previews/organization-user/:organizationUserId
@@ -90,7 +86,7 @@ contactPreviewRouter.get('/:id', authenticateToken, authorizeRole('HCM_USER'), c
  * @query   page, limit
  * @access  HCM_USER
  */
-contactPreviewRouter.get('/organization-user/:organizationUserId', authenticateToken, authorizeRole('HCM_USER'), contactPreviewController.getByOrganizationUser);
+contactPreviewRouter.get('/organization-user/:organizationUserId', authenticateToken, contactPreviewController.getByOrganizationUser);
 
 /**
  * @route   POST /api/contact-previews
@@ -98,7 +94,7 @@ contactPreviewRouter.get('/organization-user/:organizationUserId', authenticateT
  * @body    { contact_id, user_id, type, notes?, date?, job_id? }
  * @access  HCM_USER
  */
-contactPreviewRouter.post('/', authenticateToken, authorizeRole('HCM_USER'), contactPreviewController.create);
+contactPreviewRouter.post('/', authenticateToken, contactPreviewController.create);
 
 /**
  * @route   PATCH /api/contact-previews/:id
@@ -106,14 +102,14 @@ contactPreviewRouter.post('/', authenticateToken, authorizeRole('HCM_USER'), con
  * @body    { type?, notes?, date?, job_id? }
  * @access  HCM_USER
  */
-contactPreviewRouter.patch('/:id', authenticateToken, authorizeRole('HCM_USER'), contactPreviewController.update);
+contactPreviewRouter.patch('/:id', authenticateToken, contactPreviewController.update);
 
 /**
  * @route   DELETE /api/contact-previews/:id
  * @desc    Delete a contact preview
  * @access  HCM_USER
  */
-contactPreviewRouter.delete('/:id', authenticateToken, authorizeRole('HCM_USER'), contactPreviewController.delete);
+contactPreviewRouter.delete('/:id', authenticateToken, contactPreviewController.delete);
 
 // ============================================================
 // ORGANIZATION ACTIVITIES ROUTER
@@ -127,14 +123,14 @@ const organizationActivityRouter = Router();
  * @query   organization_id, logged_by_user_id, activity_type, page, limit
  * @access  HCM_USER
  */
-organizationActivityRouter.get('/', authenticateToken, authorizeRole('HCM_USER'), organizationActivityController.getAll);
+organizationActivityRouter.get('/', authenticateToken, organizationActivityController.getAll);
 
 /**
  * @route   GET /api/organization-activities/:id
  * @desc    Get a single organization activity by ID
  * @access  HCM_USER
  */
-organizationActivityRouter.get('/:id', authenticateToken, authorizeRole('HCM_USER'), organizationActivityController.getById);
+organizationActivityRouter.get('/:id', authenticateToken, organizationActivityController.getById);
 
 /**
  * @route   GET /api/organization-activities/organization/:orgId
@@ -142,7 +138,7 @@ organizationActivityRouter.get('/:id', authenticateToken, authorizeRole('HCM_USE
  * @query   activity_type, page, limit
  * @access  HCM_USER
  */
-organizationActivityRouter.get('/organization/:orgId', authenticateToken, authorizeRole('HCM_USER'), organizationActivityController.getByOrganization);
+organizationActivityRouter.get('/organization/:orgId', authenticateToken, organizationActivityController.getByOrganization);
 
 /**
  * @route   POST /api/organization-activities
@@ -150,7 +146,7 @@ organizationActivityRouter.get('/organization/:orgId', authenticateToken, author
  * @body    { organization_id, logged_by_user_id, activity_type, details? }
  * @access  HCM_USER
  */
-organizationActivityRouter.post('/', authenticateToken, authorizeRole('HCM_USER'), organizationActivityController.create);
+organizationActivityRouter.post('/', authenticateToken, organizationActivityController.create);
 
 /**
  * @route   PATCH /api/organization-activities/:id
@@ -158,14 +154,14 @@ organizationActivityRouter.post('/', authenticateToken, authorizeRole('HCM_USER'
  * @body    { activity_type?, details? }
  * @access  HCM_USER
  */
-organizationActivityRouter.patch('/:id', authenticateToken, authorizeRole('HCM_USER'), organizationActivityController.update);
+organizationActivityRouter.patch('/:id', authenticateToken, organizationActivityController.update);
 
 /**
  * @route   DELETE /api/organization-activities/:id
  * @desc    Delete an organization activity
  * @access  HCM_USER
  */
-organizationActivityRouter.delete('/:id', authenticateToken, authorizeRole('HCM_USER'), organizationActivityController.delete);
+organizationActivityRouter.delete('/:id', authenticateToken, organizationActivityController.delete);
 
 // ============================================================
 // CONTACT JOBS ROUTER
@@ -179,21 +175,21 @@ const contactJobRouter = Router();
  * @query   organization_user_id, job_id, page, limit
  * @access  HCM_USER
  */
-contactJobRouter.get('/', authenticateToken, authorizeRole('HCM_USER'), contactJobController.getAll);
+contactJobRouter.get('/', authenticateToken, contactJobController.getAll);
 
 /**
  * @route   GET /api/contact-jobs/organization-user/:organizationUserId
  * @desc    Get all jobs linked to an organization user
  * @access  HCM_USER
  */
-contactJobRouter.get('/organization-user/:organizationUserId', authenticateToken, authorizeRole('HCM_USER'), contactJobController.getByOrganizationUser);
+contactJobRouter.get('/organization-user/:organizationUserId', authenticateToken, contactJobController.getByOrganizationUser);
 
 /**
  * @route   GET /api/contact-jobs/job/:jobId
  * @desc    Get all organization users linked to a job
  * @access  HCM_USER
  */
-contactJobRouter.get('/job/:jobId', authenticateToken, authorizeRole('HCM_USER'), contactJobController.getByJob);
+contactJobRouter.get('/job/:jobId', authenticateToken, contactJobController.getByJob);
 
 /**
  * @route   POST /api/contact-jobs
@@ -201,7 +197,7 @@ contactJobRouter.get('/job/:jobId', authenticateToken, authorizeRole('HCM_USER')
  * @body    { organization_user_id, job_id }
  * @access  HCM_USER
  */
-contactJobRouter.post('/', authenticateToken, authorizeRole('HCM_USER'), contactJobController.create);
+contactJobRouter.post('/', authenticateToken, contactJobController.create);
 
 /**
  * @route   POST /api/contact-jobs/bulk
@@ -209,21 +205,21 @@ contactJobRouter.post('/', authenticateToken, authorizeRole('HCM_USER'), contact
  * @body    { organization_user_id, job_ids: string[] }
  * @access  HCM_USER
  */
-contactJobRouter.post('/bulk', authenticateToken, authorizeRole('HCM_USER'), contactJobController.bulkCreate);
+contactJobRouter.post('/bulk', authenticateToken, contactJobController.bulkCreate);
 
 /**
  * @route   DELETE /api/contact-jobs/organization-user/:organizationUserId/job/:jobId
  * @desc    Remove a contact-job link by composite key
  * @access  HCM_USER
  */
-contactJobRouter.delete('/organization-user/:organizationUserId/job/:jobId', authenticateToken, authorizeRole('HCM_USER'), contactJobController.deleteByComposite);
+contactJobRouter.delete('/organization-user/:organizationUserId/job/:jobId', authenticateToken, contactJobController.deleteByComposite);
 
 /**
  * @route   DELETE /api/contact-jobs/:id
  * @desc    Remove a contact-job link by contact_job_id
  * @access  HCM_USER
  */
-contactJobRouter.delete('/:id', authenticateToken, authorizeRole('HCM_USER'), contactJobController.delete);
+contactJobRouter.delete('/:id', authenticateToken, contactJobController.delete);
 
 // ============================================================
 // EXPORTS

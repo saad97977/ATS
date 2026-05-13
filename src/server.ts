@@ -45,6 +45,7 @@ import payrollRoutes from './routes/timesheets/payrollRoutes';
 import dropdownRoutes from './routes/dropdown/dropdownRoutes';
 import dashboardRoutes from './routes/dashboard/dashboardRoutes';
 import userProfileRoutes from './routes/user/userProfileRoutes';
+import jobCloneRoutes from './routes/job/jobCloneRoutes';
 
 
 dotenv.config();
@@ -145,6 +146,7 @@ app.use('/api/job-details', jobDetailRoutes);
 app.use('/api/job-rates', jobRateRoutes);
 app.use('/api/job-notes', jobNoteRoutes);
 app.use('/api/job-owners', jobOwnerRoutes);
+app.use('/api/job-templates', jobCloneRoutes); // Job cloning and templates
 
 // Organization routes
 app.use('/api/organizations', organizationRoutes);

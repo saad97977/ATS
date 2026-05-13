@@ -53,6 +53,7 @@ model User {
   logged_activities OrganizationActivity[] @relation("ActivityLoggedBy")
   contact_previews ContactPreview[] @relation("PreviewLoggedBy")
   contact_representative OrganizationContact[] @relation("ContactRepresentative")
+  created_templates JobTemplate[] @relation("TemplateCreatedBy")
 
   @@index([email])
   @@map("users")
@@ -85,7 +86,7 @@ model UserProfile {
   title               String?   // "Senior Recruiter", "Account Manager"
   department          String?
   branch              String?
-  division            String?
+  division            OrgBranchDivision?
   office_location     String?
 
   // Employment details
@@ -230,6 +231,7 @@ model Organization {
   document_titles    OrganizationDocumentTitle[]
   documents          OrganizationDocument[]
   jobs               Job[]
+  job_templates      JobTemplate[]
   company_offices    CompanyOffice[]
   created_by         User @relation("OrganizationCreatedBy", fields: [created_by_user_id], references: [user_id])
 
@@ -451,6 +453,7 @@ model OrganizationDocument {
   file              String
   privacy           Privacy
   expiration_date   DateTime?
+  expiration_reason String?
   upload_date       DateTime  @default(now())
 
   // Relations
@@ -580,7 +583,7 @@ model Job {
 
   contact_previews ContactPreview[]
   contact_jobs ContactJob[]
-
+  job_templates JobTemplate[]
 
   @@index([created_by_user_id])
   @@index([organization_id])
@@ -667,6 +670,32 @@ model JobPosting {
   @@map("job_postings")
 }
 
+
+model JobTemplate {
+  template_id        String    @id @default(uuid())
+  job_id             String    // FK → the source job (data lives there)
+  organization_id    String?   // denormalized for fast filtering (from job)
+  created_by_user_id String
+  name               String    // "Warehouse Associate - Standard"
+  description        String?
+  is_active          Boolean   @default(true)
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  // ← THE KEY CHANGE: frozen snapshot of exactly what the user chose to save
+  snapshot           Json      // JobSnapshot shape (see below)
+  sections_included  Json      // { core, detail, rates, owners, notes } booleans
+
+  job          Job           @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organization_id], references: [organization_id], onDelete: SetNull)
+  created_by   User          @relation("TemplateCreatedBy", fields: [created_by_user_id], references: [user_id])
+
+  @@index([job_id])
+  @@index([organization_id])
+  @@index([created_by_user_id])
+  @@map("job_templates")
+}
+
 // ============================================
 // PAY & BILL
 // ============================================
@@ -743,7 +772,7 @@ model Applicant {
   is_optout              Boolean?  @default(false)
   is_private             Boolean?  @default(false)
   office_name            String?   // "MCL JASCO GOC"
-  office_division        String?   // "SMS Staffing Solutions"
+  office_division        OrgBranchDivision?   // "SMS Staffing Solutions"
 
 
   // Relations

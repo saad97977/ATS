@@ -10,6 +10,8 @@ const router = (0, express_1.Router)();
  */
 // Statistics endpoint (must be before :id routes)
 router.get('/stats', jobController_1.jobController.getJobStats);
+// Job counts endpoint (returns all, active, drafts, closed counts)
+router.get('/counts', jobController_1.jobController.getJobsCounts);
 // Special query endpoints (must be before :id routes)
 router.get('/approved', jobController_1.jobController.getApprovedJobs);
 router.get('/active', jobController_1.jobController.getActiveJobs);

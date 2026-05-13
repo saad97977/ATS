@@ -36,6 +36,8 @@ import {
   syncTimesheetToQB,
   syncInvoiceToQB,
   bulkSyncInvoicesToQB,
+  bulkApproveTimesheetsByJob,
+  getTimesheetsByJobGrouped,
 } from '../../controllers/timesheets/timesheetController';
 
 const router = Router();
@@ -133,6 +135,12 @@ router.post('/:id/submit', submitTimesheet);
 // Body: { reviewed_by_user_id, tax_rate?, net_terms_days? }
 router.post('/:id/approve', approveTimesheet);
 
+
+router.post('/jobs/:jobId/approve-all', bulkApproveTimesheetsByJob);
+
+router.get('/jobs/:jobId/grouped', getTimesheetsByJobGrouped);
+
+
 // SUBMITTED / UNDER_REVIEW  →  REJECTED
 // Body: { reviewed_by_user_id, rejection_reason }
 router.post('/:id/reject', rejectTimesheet);
@@ -142,6 +150,7 @@ router.post('/:id/reject', rejectTimesheet);
 // POST /api/timesheets/:id/qb-sync
 // Pushes all time entries as QB TimeActivities — only works on APPROVED timesheets
 router.post('/:id/qb-sync', syncTimesheetToQB);
+
 
 export default router;
 

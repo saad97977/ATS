@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Prisma, OrganizationStatus } from '@prisma/client';
 import prisma from '../../prisma.config';
 import { createCrudController } from '../../factories/crudFactory';
 import { createOrganizationSchema, updateOrganizationSchema } from '../../validators/schemas';
@@ -21,155 +22,6 @@ const baseCrud = createCrudController({
   defaultLimit: 10,
   maxLimit: 100,
 });
-
-// ===============================
-// GET ALL (FLAT RESPONSE)
-// ===============================
-
-const getAllOrganizations = async (req: Request, res: Response) => {
-  try {
-    const getAll = req.query.all === 'true';
-    const statusFilter = req.query.status as string | undefined;
-
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = getAll
-      ? undefined
-      : Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
-
-    const skip = getAll ? undefined : (page - 1) * limit!;
-
-    // Build where clause for status filter
-    const whereClause: any = {};
-    if (statusFilter) {
-      whereClause.status = statusFilter.toUpperCase();
-    }
-
-    const [rows, total, totalActive] = await Promise.all([
-      prisma.organization.findMany({
-        skip,
-        take: limit,
-        where: whereClause,
-        orderBy: { created_at: 'desc' },
-        select: getAll
-          ? {
-              organization_id: true,
-              name: true,
-              status: true,
-              jobs: {
-                select: {
-                  _count: {
-                    select: {
-                      applications: true,
-                    },
-                  },
-                },
-              },
-              _count: {
-                select: {
-                  jobs: true,
-                  organization_users: true,
-                },
-              },
-            }
-          : {
-              organization_id: true,
-              name: true,
-              website: true,
-              status: true,
-              phone: true,
-              created_at: true,
-              created_by_user_id: true,
-              created_by: {
-                select: {
-                  name: true,
-                  email: true,
-                  user_role: {
-                    select: {
-                      role: {
-                        select: {
-                          role_name: true,
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-              jobs: {
-                select: {
-                  _count: {
-                    select: {
-                      applications: true,
-                    },
-                  },
-                },
-              },
-              _count: {
-                select: {
-                  jobs: true,
-                  organization_users: true,
-                },
-              },
-            },
-      }),
-      prisma.organization.count({ where: whereClause }),
-      prisma.organization.count({
-        where: {
-          status: 'ACTIVE',
-        },
-      }),
-    ]);
-
-    // If all=true → data already in final shape with counts
-    if (getAll) {
-      const formattedData = rows.map((org: any) => ({
-        organization_id: org.organization_id,
-        name: org.name,
-        status: org.status,
-        jobs: org._count.jobs,
-        applicants: org.jobs.reduce((sum: number, job: any) => sum + job._count.applications, 0),
-        users: org._count.organization_users,
-      }));
-
-      return sendSuccess(res, {
-        data: formattedData,
-        paging: null,
-        totalActive,
-      });
-    }
-
-    // Normal paginated response
-    const data = rows.map((org: any) => ({
-      organization_id: org.organization_id,
-      name: org.name,
-      website: org.website,
-      status: org.status,
-      phone: org.phone,
-      created_at: org.created_at,
-      created_by_user_id: org.created_by_user_id,
-      created_by_name: org.created_by?.name ?? null,
-      created_by_email: org.created_by?.email ?? null,
-      created_by_role: org.created_by?.user_role?.role?.role_name ?? null,
-      jobs: org._count.jobs,
-      applicants: org.jobs.reduce((sum: number, job: any) => sum + job._count.applications, 0),
-      users: org._count.organization_users,
-    }));
-
-    return sendSuccess(res, {
-      data,
-      paging: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit!),
-      },
-      totalActive,
-    });
-  } catch (err) {
-    console.error('Error fetching organizations:', err);
-    return sendError(res, 'Failed to fetch organizations', 500);
-  }
-};
-
 
 // ===============================
 // GET BY ID (FULL ORGANIZATION)
@@ -828,6 +680,290 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
 };
 
 
+
+
+
+// ===============================
+// GET ALL (FLAT RESPONSE)
+// ===============================
+
+// const getAllOrganizations = async (req: Request, res: Response) => {
+//   try {
+//     const getAll = req.query.all === 'true';
+//     const statusFilter = req.query.status as string | undefined;
+
+//     const page = Math.max(1, parseInt(req.query.page as string) || 1);
+//     const limit = getAll
+//       ? undefined
+//       : Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+
+//     const skip = getAll ? undefined : (page - 1) * limit!;
+
+//     // Build where clause for status filter
+//     const whereClause: any = {};
+//     if (statusFilter) {
+//       whereClause.status = statusFilter.toUpperCase();
+//     }
+
+//     const [rows, total, totalActive] = await Promise.all([
+//       prisma.organization.findMany({
+//         skip,
+//         take: limit,
+//         where: whereClause,
+//         orderBy: { created_at: 'desc' },
+//         select: getAll
+//           ? {
+//               organization_id: true,
+//               name: true,
+//               status: true,
+//               jobs: {
+//                 select: {
+//                   _count: {
+//                     select: {
+//                       applications: true,
+//                     },
+//                   },
+//                 },
+//               },
+//               _count: {
+//                 select: {
+//                   jobs: true,
+//                   organization_users: true,
+//                 },
+//               },
+//             }
+//           : {
+//               organization_id: true,
+//               name: true,
+//               website: true,
+//               status: true,
+//               phone: true,
+//               created_at: true,
+//               created_by_user_id: true,
+//               created_by: {
+//                 select: {
+//                   name: true,
+//                   email: true,
+//                   user_role: {
+//                     select: {
+//                       role: {
+//                         select: {
+//                           role_name: true,
+//                         },
+//                       },
+//                     },
+//                   },
+//                 },
+//               },
+//               jobs: {
+//                 select: {
+//                   _count: {
+//                     select: {
+//                       applications: true,
+//                     },
+//                   },
+//                 },
+//               },
+//               _count: {
+//                 select: {
+//                   jobs: true,
+//                   organization_users: true,
+//                 },
+//               },
+//             },
+//       }),
+//       prisma.organization.count({ where: whereClause }),
+//       prisma.organization.count({
+//         where: {
+//           status: 'ACTIVE',
+//         },
+//       }),
+//     ]);
+
+//     // If all=true → data already in final shape with counts
+//     if (getAll) {
+//       const formattedData = rows.map((org: any) => ({
+//         organization_id: org.organization_id,
+//         name: org.name,
+//         status: org.status,
+//         jobs: org._count.jobs,
+//         applicants: org.jobs.reduce((sum: number, job: any) => sum + job._count.applications, 0),
+//         users: org._count.organization_users,
+//       }));
+
+//       return sendSuccess(res, {
+//         data: formattedData,
+//         paging: null,
+//         totalActive,
+//       });
+//     }
+
+//     // Normal paginated response
+//     const data = rows.map((org: any) => ({
+//       organization_id: org.organization_id,
+//       name: org.name,
+//       website: org.website,
+//       status: org.status,
+//       phone: org.phone,
+//       created_at: org.created_at,
+//       created_by_user_id: org.created_by_user_id,
+//       created_by_name: org.created_by?.name ?? null,
+//       created_by_email: org.created_by?.email ?? null,
+//       created_by_role: org.created_by?.user_role?.role?.role_name ?? null,
+//       jobs: org._count.jobs,
+//       applicants: org.jobs.reduce((sum: number, job: any) => sum + job._count.applications, 0),
+//       users: org._count.organization_users,
+//     }));
+
+//     return sendSuccess(res, {
+//       data,
+//       paging: {
+//         total,
+//         page,
+//         limit,
+//         totalPages: Math.ceil(total / limit!),
+//       },
+//       totalActive,
+//     });
+//   } catch (err) {
+//     console.error('Error fetching organizations:', err);
+//     return sendError(res, 'Failed to fetch organizations', 500);
+//   }
+// };
+
+
+const getAllOrganizations = async (req: Request, res: Response) => {
+  try {
+    const {
+      page,
+      limit: limitParam,
+      status,
+      search,
+    } = req.query as Record<string, string>;
+
+    const pageNum  = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limitParam) || 10));
+    const skip     = (pageNum - 1) * limitNum;
+
+    // ── Where clause ─────────────────────────────────────────────
+    const where: Prisma.OrganizationWhereInput = {
+      // Never surface soft-deleted orgs
+      NOT: { status: 'DELETE' as OrganizationStatus },
+
+      // Status filter — only apply when a valid enum value is passed
+      ...(status && status !== 'all' && isValidOrgStatus(status)
+        ? { status: status.toUpperCase() as OrganizationStatus }
+        : {}),
+
+      // Server-side search on name (Postgres ILIKE)
+      ...(search?.trim()
+        ? {
+            name: {
+              contains: search.trim(),
+              mode:     'insensitive' as Prisma.QueryMode,
+            },
+          }
+        : {}),
+    };
+
+    // ── Shared select ─────────────────────────────────────────────
+    const select: Prisma.OrganizationSelect = {
+      organization_id:    true,
+      name:               true,
+      website:            true,
+      status:             true,
+      phone:              true,
+      created_at:         true,
+      created_by_user_id: true,
+      created_by: {
+        select: {
+          name:      true,
+          email:     true,
+          user_role: {
+            select: {
+              role: {
+                select: { role_name: true },
+              },
+            },
+          },
+        },
+      },
+      jobs: {
+        select: {
+          _count: {
+            select: { applications: true },
+          },
+        },
+      },
+      _count: {
+        select: {
+          jobs:               true,
+          organization_users: true,
+        },
+      },
+    };
+
+    // ── Parallel queries ──────────────────────────────────────────
+    const [rows, total, totalActive] = await Promise.all([
+      prisma.organization.findMany({
+        where,
+        skip,
+        take:      limitNum,
+        orderBy:   { created_at: 'desc' },
+        select,
+      }),
+
+      // Total matching current search + filter
+      prisma.organization.count({ where }),
+
+      // Active count always reflects global active (unaffected by search/filter)
+      prisma.organization.count({
+        where: { status: OrganizationStatus.ACTIVE },
+      }),
+    ]);
+
+    // ── Shape response — same format as before ────────────────────
+    const data = rows.map((org: any) => ({
+      organization_id:    org.organization_id,
+      name:               org.name,
+      website:            org.website,
+      status:             org.status,
+      phone:              org.phone,
+      created_at:         org.created_at,
+      created_by_user_id: org.created_by_user_id,
+      created_by_name:    org.created_by?.name                              ?? null,
+      created_by_email:   org.created_by?.email                             ?? null,
+      created_by_role:    org.created_by?.user_role?.role?.role_name        ?? null,
+      jobs:               org._count.jobs,
+      applicants:         org.jobs.reduce(
+                            (sum: number, job: any) => sum + job._count.applications, 0
+                          ),
+      users:              org._count.organization_users,
+    }));
+
+    return sendSuccess(res, {
+      data,
+      paging: {
+        total,
+        page:       pageNum,
+        limit:      limitNum,
+        totalPages: Math.ceil(total / limitNum),
+      },
+      totalActive,
+    });
+
+  } catch (err) {
+    console.error('Error fetching organizations:', err);
+    return sendError(res, 'Failed to fetch organizations', 500);
+  }
+};
+
+// ── Guard: keeps the status cast safe ────────────────────────────
+function isValidOrgStatus(val: string): val is OrganizationStatus {
+  return Object.values(OrganizationStatus).includes(
+    val.toUpperCase() as OrganizationStatus
+  );
+}
 
 
 

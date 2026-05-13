@@ -14,6 +14,9 @@ const router = Router();
 // Statistics endpoint (must be before :id routes)
 router.get('/stats', jobController.getJobStats);
 
+// Job counts endpoint (returns all, active, drafts, closed counts)
+router.get('/counts', jobController.getJobsCounts);
+
 // Special query endpoints (must be before :id routes)
 router.get('/approved', jobController.getApprovedJobs);
 router.get('/active', jobController.getActiveJobs);

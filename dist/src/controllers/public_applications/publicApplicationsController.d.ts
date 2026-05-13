@@ -160,7 +160,7 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
         communication_preference: string | null;
         is_optout: boolean | null;
         is_private: boolean | null;
-        office_division: string | null;
+        office_division: import(".prisma/client").$Enums.OrgBranchDivision | null;
     };
     work_history: {
         created_at: Date;

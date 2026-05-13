@@ -92,6 +92,33 @@ export declare function widgetClientTimesheets(req: Request, res: Response): Pro
  */
 export declare function widgetClientPlacements(req: Request, res: Response): Promise<void>;
 /**
+ * GET /api/dashboard/widget/frontOffice/jobRequests/:userId
+ * Jobs where the authenticated user is the manager — a quick glance at their managed workload.
+ * Query: statuses (comma-sep JobStatus), dateRange, limit
+ */
+export declare function widgetJobRequests(req: Request, res: Response): Promise<void>;
+/**
+ * GET /api/dashboard/widget/frontOffice/expiringDocuments/:userId
+ * Organization documents expiring within the next 60 days OR already overdue,
+ * bucketed by urgency with color metadata for the frontend.
+ *
+ * Buckets (days remaining):
+ *   overdue   → < 0 days   → color: red    (#ef4444)
+ *   critical  → 1–15 days  → color: red    (#ef4444)
+ *   warning   → 16–30 days → color: orange (#f97316)
+ *   attention → 31–45 days → color: orange (#f97316)
+ *   watch     → 46–60 days → color: yellow (#eab308)
+ *
+ * Query: limit (default 50)
+ */
+export declare function widgetExpiringDocuments(req: Request, res: Response): Promise<void>;
+/**
+ * POST /api/dashboard/widget/frontOffice/expiringDocuments/sendReminders
+ * Sends expiry reminder emails to the uploader of each document that is
+ * overdue or expiring within 60 days. Safe to call from a cron job or manually.
+ */
+export declare function sendExpiryReminderEmails(req: Request, res: Response): Promise<void>;
+/**
  * GET /api/dashboard/widget/clientOffice/myTasks/:userId
  * Query: statuses, limit
  */

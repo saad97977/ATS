@@ -1,7 +1,6 @@
-// dashboard.controller.ts
+import prisma from '../../prisma.config';
 import { Request, Response } from "express";
 import {
-  PrismaClient,
   OrganizationStatus,
   TimesheetStatus,
   InvoiceStatus,
@@ -10,8 +9,7 @@ import {
   ApplicantStatus,
 } from "@prisma/client";
 import { sendSuccess, sendError } from "../../utils/response";
-
-const prisma = new PrismaClient();
+import { sendDocumentExpiryReminderEmail } from "../../services/emailService";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -1222,6 +1220,290 @@ export async function widgetClientPlacements(req: Request, res: Response) {
   } catch (err) {
     console.error(err);
     return sendError(res, "widgetClientPlacements failed", 500);
+  }
+}
+
+/**
+ * GET /api/dashboard/widget/frontOffice/jobRequests/:userId
+ * Jobs where the authenticated user is the manager — a quick glance at their managed workload.
+ * Query: statuses (comma-sep JobStatus), dateRange, limit
+ */
+export async function widgetJobRequests(req: Request, res: Response) {
+  try {
+    const userId = getUserId(req);
+    const since = resolveDateRange(req.query.dateRange as string);
+    const statusFilter = filterEnum(parseStatuses(req.query.statuses as string), JobStatus);
+    const limit = Number(req.query.limit ?? 10);
+
+    const where = {
+      manager_id: userId,
+      ...(statusFilter ? { status: { in: statusFilter } } : {}),
+      ...(since ? { created_at: { gte: since } } : {}),
+    };
+
+    const [total, byStatus, jobs] = await Promise.all([
+      prisma.job.count({ where }),
+
+      prisma.job.groupBy({
+        by: ["status"],
+        where: { manager_id: userId },
+        _count: { job_id: true },
+      }),
+
+      prisma.job.findMany({
+        take: limit,
+        orderBy: { created_at: "desc" },
+        where,
+        select: {
+          job_id: true,
+          job_title: true,
+          status: true,
+          job_type: true,
+          location: true,
+          open_positions: true,
+          max_positions: true,
+          start_date: true,
+          end_date: true,
+          approved: true,
+          created_at: true,
+          organization: {
+            select: {
+              organization_id: true,
+              name: true,
+              status: true,
+            },
+          },
+          company_office: {
+            select: {
+              company_office_id: true,
+              office_name: true,
+              city: true,
+              state: true,
+            },
+          },
+          _count: { select: { applications: true } },
+        },
+      }),
+    ]);
+
+    return sendSuccess(res, {
+      total,
+      byStatus: byStatus.map((j) => ({ status: j.status, count: j._count.job_id })),
+      jobs: jobs.map((j) => ({
+        ...j,
+        applicationCount: j._count.applications,
+        _count: undefined,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    return sendError(res, "widgetJobRequests failed", 500);
+  }
+}
+
+/**
+ * GET /api/dashboard/widget/frontOffice/expiringDocuments/:userId
+ * Organization documents expiring within the next 60 days OR already overdue,
+ * bucketed by urgency with color metadata for the frontend.
+ *
+ * Buckets (days remaining):
+ *   overdue   → < 0 days   → color: red    (#ef4444)
+ *   critical  → 1–15 days  → color: red    (#ef4444)
+ *   warning   → 16–30 days → color: orange (#f97316)
+ *   attention → 31–45 days → color: orange (#f97316)
+ *   watch     → 46–60 days → color: yellow (#eab308)
+ *
+ * Query: limit (default 50)
+ */
+export async function widgetExpiringDocuments(req: Request, res: Response) {
+  try {
+    const limit  = Number(req.query.limit ?? 50);
+    const now    = new Date();
+    const cutoff = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
+
+    // Fetch docs expiring within 60 days AND already-overdue ones
+    const documents = await prisma.organizationDocument.findMany({
+      take: limit,
+      orderBy: { expiration_date: "asc" },
+      where: {
+        expiration_date: { lte: cutoff },
+      },
+      select: {
+        document_id:       true,
+        document_name:     true,
+        document_type:     true,
+        privacy:           true,
+        expiration_date:   true,
+        expiration_reason: true,
+        upload_date:       true,
+        organization: {
+          select: { organization_id: true, name: true, status: true },
+        },
+        title: {
+          select: { document_title_id: true, document_title: true },
+        },
+        user: {
+          select: { user_id: true, name: true, email: true },
+        },
+      },
+    });
+
+    type BucketKey = "overdue" | "critical" | "warning" | "attention" | "watch";
+
+    interface EnrichedDoc {
+      document_id:       string;
+      document_name:     string;
+      document_type:     string;
+      privacy:           string;
+      expiration_date:   Date | null;
+      expiration_reason: string | null;
+      upload_date:       Date;
+      organization:      { organization_id: string; name: string; status: string };
+      title:             { document_title_id: string; document_title: string };
+      user:              { user_id: string; name: string; email: string };
+      days_left:         number;
+      is_overdue:        boolean;
+      bucket:            BucketKey;
+      color:             string;
+      bg_color:          string;
+    }
+
+    const bucketMeta: Record<BucketKey, { label: string; color: string; bgColor: string; daysRange: string }> = {
+      overdue:   { label: "Overdue",   color: "#ef4444", bgColor: "#fee2e2", daysRange: "past due"  },
+      critical:  { label: "Critical",  color: "#ef4444", bgColor: "#fee2e2", daysRange: "1–15 days" },
+      warning:   { label: "Warning",   color: "#f97316", bgColor: "#ffedd5", daysRange: "16–30 days"},
+      attention: { label: "Attention", color: "#f97316", bgColor: "#ffedd5", daysRange: "31–45 days"},
+      watch:     { label: "Watch",     color: "#eab308", bgColor: "#fef9c3", daysRange: "46–60 days"},
+    };
+
+    const grouped: Record<BucketKey, EnrichedDoc[]> = {
+      overdue: [], critical: [], warning: [], attention: [], watch: [],
+    };
+
+    for (const doc of documents) {
+      const msLeft   = doc.expiration_date!.getTime() - now.getTime();
+      const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+
+      let bucket: BucketKey;
+      if (daysLeft < 0)        bucket = "overdue";
+      else if (daysLeft <= 15) bucket = "critical";
+      else if (daysLeft <= 30) bucket = "warning";
+      else if (daysLeft <= 45) bucket = "attention";
+      else                     bucket = "watch";
+
+      const meta = bucketMeta[bucket];
+      grouped[bucket].push({
+        ...doc,
+        organization: {
+          organization_id: doc.organization.organization_id,
+          name:            doc.organization.name,
+          status:          doc.organization.status as string,
+        },
+        days_left:  daysLeft,
+        is_overdue: daysLeft < 0,
+        bucket,
+        color:      meta.color,
+        bg_color:   meta.bgColor,
+      });
+    }
+
+    const buildBucket = (key: BucketKey) => ({
+      ...bucketMeta[key],
+      count:     grouped[key].length,
+      documents: grouped[key],
+    });
+
+    return sendSuccess(res, {
+      total:     documents.length,
+      lookahead: 60,
+      summary: {
+        overdue:   grouped.overdue.length,
+        critical:  grouped.critical.length,
+        warning:   grouped.warning.length,
+        attention: grouped.attention.length,
+        watch:     grouped.watch.length,
+      },
+      buckets: {
+        overdue:   buildBucket("overdue"),
+        critical:  buildBucket("critical"),
+        warning:   buildBucket("warning"),
+        attention: buildBucket("attention"),
+        watch:     buildBucket("watch"),
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return sendError(res, "widgetExpiringDocuments failed", 500);
+  }
+}
+
+/**
+ * POST /api/dashboard/widget/frontOffice/expiringDocuments/sendReminders
+ * Sends expiry reminder emails to the uploader of each document that is
+ * overdue or expiring within 60 days. Safe to call from a cron job or manually.
+ */
+export async function sendExpiryReminderEmails(req: Request, res: Response) {
+  try {
+    const now    = new Date();
+    const cutoff = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
+
+    const documents = await prisma.organizationDocument.findMany({
+      where: { expiration_date: { lte: cutoff } },
+      select: {
+        document_id:       true,
+        document_name:     true,
+        document_type:     true,
+        expiration_date:   true,
+        expiration_reason: true,
+        organization: { select: { name: true } },
+        title:             { select: { document_title: true } },
+        user:              { select: { name: true, email: true } },
+      },
+    });
+
+    const results = await Promise.all(
+      documents.map(async (doc) => {
+        const daysLeft = Math.ceil(
+          (doc.expiration_date!.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+        );
+
+        const result = await sendDocumentExpiryReminderEmail({
+          recipientEmail:   doc.user.email,
+          recipientName:    doc.user.name,
+          documentName:     doc.document_name,
+          documentType:     doc.document_type,
+          documentTitle:    doc.title.document_title,
+          organizationName: doc.organization.name,
+          expirationDate:   doc.expiration_date!,
+          expirationReason: doc.expiration_reason,
+          daysLeft,
+        });
+
+        return {
+          document_id:   doc.document_id,
+          document_name: doc.document_name,
+          recipient:     doc.user.email,
+          days_left:     daysLeft,
+          is_overdue:    daysLeft < 0,
+          email_sent:    result.success,
+          error:         result.error ?? null,
+        };
+      })
+    );
+
+    const sent   = results.filter((r) => r.email_sent).length;
+    const failed = results.filter((r) => !r.email_sent).length;
+
+    return sendSuccess(res, {
+      message: `Reminder emails sent: ${sent} succeeded, ${failed} failed`,
+      total:   results.length,
+      sent,
+      failed,
+      results,
+    });
+  } catch (err) {
+    console.error(err);
+    return sendError(res, "sendExpiryReminderEmails failed", 500);
   }
 }
 

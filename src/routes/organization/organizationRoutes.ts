@@ -5,7 +5,8 @@ import { authenticateToken, authorizeRole } from '../../middleware/authMiddlewar
 
 const router = Router();
 
-router.get('/', authenticateToken, authorizeRole('HCM_USER'), organizationController.getAll);
+
+router.get('/',  organizationController.getAll);
 router.get('/:id', organizationController.getById);
 router.post('/', organizationController.create);
 router.patch('/:id', organizationController.update);

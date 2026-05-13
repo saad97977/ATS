@@ -22,6 +22,11 @@ import {
   widgetCandidates,
   widgetInterviews,
   widgetMyTasks,
+  widgetJobRequests,
+
+  // Back Office (extra)
+  widgetExpiringDocuments,
+  sendExpiryReminderEmails,
 
   // Client Office
   widgetMyOrgs,
@@ -55,12 +60,14 @@ router.post("/preferences/:userId", saveDashboardPreference);
 //   ?statuses=ACTIVE,INACTIVE         (comma-separated)
 //   ?limit=10
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/widget/backOffice/userStats/:userId",    widgetUserStats);
-router.get("/widget/backOffice/orgStats/:userId",     widgetOrgStats);
-router.get("/widget/backOffice/timesheets/:userId",   widgetTimesheets);
-router.get("/widget/backOffice/invoiceStats/:userId", widgetInvoiceStats);
-router.get("/widget/backOffice/contracts/:userId",    widgetContracts);
-router.get("/widget/backOffice/myTasks/:userId",      widgetMyTasksGrouped);
+router.get("/widget/backOffice/userStats/:userId",      widgetUserStats);
+router.get("/widget/backOffice/orgStats/:userId",       widgetOrgStats);
+router.get("/widget/backOffice/timesheets/:userId",     widgetTimesheets);
+router.get("/widget/backOffice/invoiceStats/:userId",   widgetInvoiceStats);
+router.get("/widget/backOffice/contracts/:userId",      widgetContracts);
+router.get("/widget/backOffice/myTasks/:userId",        widgetMyTasksGrouped);
+router.get("/widget/frontOffice/expiringDocuments/:userId",        widgetExpiringDocuments);
+router.post("/widget/frontOffice/expiringDocuments/sendReminders",  sendExpiryReminderEmails);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FRONT OFFICE WIDGETS
@@ -79,6 +86,7 @@ router.get("/widget/frontOffice/pipeline/:userId",     widgetPipeline);
 router.get("/widget/frontOffice/candidates/:userId",   widgetCandidates);
 router.get("/widget/frontOffice/interviews/:userId",   widgetInterviews);
 router.get("/widget/frontOffice/myTasks/:userId",      widgetMyTasks);
+router.get("/widget/frontOffice/jobRequests/:userId",  widgetJobRequests);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT OFFICE WIDGETS

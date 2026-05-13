@@ -106,6 +106,21 @@ export declare const sendAssignmentNotificationEmail: (data: {
     messageId?: string;
     error?: string;
 }>;
+export declare const sendDocumentExpiryReminderEmail: (data: {
+    recipientEmail: string;
+    recipientName: string;
+    documentName: string;
+    documentType: string;
+    documentTitle: string;
+    organizationName: string;
+    expirationDate: Date;
+    expirationReason?: string | null;
+    daysLeft: number;
+}) => Promise<{
+    success: boolean;
+    messageId?: string;
+    error?: string;
+}>;
 declare const _default: {
     sendInterviewInvitationEmail: (data: {
         applicantEmail: string;
@@ -204,6 +219,21 @@ declare const _default: {
             send_to_candidate?: boolean;
         }>;
         attachments?: EmailAttachment[];
+    }) => Promise<{
+        success: boolean;
+        messageId?: string;
+        error?: string;
+    }>;
+    sendDocumentExpiryReminderEmail: (data: {
+        recipientEmail: string;
+        recipientName: string;
+        documentName: string;
+        documentType: string;
+        documentTitle: string;
+        organizationName: string;
+        expirationDate: Date;
+        expirationReason?: string | null;
+        daysLeft: number;
     }) => Promise<{
         success: boolean;
         messageId?: string;

@@ -59,7 +59,7 @@ const generateBlobName = (organizationId: string, originalName: string): string 
  */
 export const createOrganizationDocumentWithFile = async (req: Request, res: Response) => {
   try {
-    const { organization_id, document_title_id, document_type, document_name, user_id, privacy, expiration_date } = req.body;
+    const { organization_id, document_title_id, document_type, document_name, user_id, privacy, expiration_date, expiration_reason } = req.body;
     const file = (req as any).file;
 
     // Validate required fields
@@ -169,6 +169,7 @@ export const createOrganizationDocumentWithFile = async (req: Request, res: Resp
         file: JSON.stringify(fileMetadata),
         privacy,
         expiration_date: expiration_date ? new Date(expiration_date) : null,
+        expiration_reason: expiration_reason || null,
       },
     });
 
@@ -201,7 +202,7 @@ export const createOrganizationDocumentWithFile = async (req: Request, res: Resp
 export const updateOrganizationDocumentWithFile = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { document_title_id, document_type, document_name, privacy, expiration_date } = req.body;
+    const { document_title_id, document_type, document_name, privacy, expiration_date, expiration_reason } = req.body;
     const file = (req as any).file;
 
     // Check if document exists
@@ -243,6 +244,10 @@ export const updateOrganizationDocumentWithFile = async (req: Request, res: Resp
 
     if (expiration_date) {
       updateData.expiration_date = new Date(expiration_date);
+    }
+
+    if (expiration_reason !== undefined) {
+      updateData.expiration_reason = expiration_reason || null;
     }
 
     // ✅ NEW: Check if document name already exists under the target document title
@@ -446,6 +451,7 @@ export const getAllOrganizationDocuments = async (req: Request, res: Response) =
           user_id: true,
           privacy: true,
           expiration_date: true,
+          expiration_reason: true,
           upload_date: true,
           file: true,
           // Include related data
@@ -494,6 +500,7 @@ export const getAllOrganizationDocuments = async (req: Request, res: Response) =
         document_type: doc.document_type,
         privacy: doc.privacy,
         expiration_date: doc.expiration_date,
+        expiration_reason: doc.expiration_reason,
         upload_date: doc.upload_date,
         file_url: fileUrl,
         organization: doc.organization,
@@ -538,6 +545,7 @@ export const getAllOrganizationDocuments = async (req: Request, res: Response) =
         document_type: doc.document_type,
         privacy: doc.privacy,
         expiration_date: doc.expiration_date,
+        expiration_reason: doc.expiration_reason,
         upload_date: doc.upload_date,
         file_url: doc.file_url,
         uploaded_by: doc.uploaded_by,
@@ -674,6 +682,7 @@ export const getAllOrganizationDocuments = async (req: Request, res: Response) =
           user_id: true,
           privacy: true,
           expiration_date: true,
+          expiration_reason: true,
           upload_date: true,
           // Exclude file to reduce response size
         },
@@ -765,6 +774,7 @@ export const getDocumentsByOrganizationId = async (req: Request, res: Response) 
         user_id: true,
         privacy: true,
         expiration_date: true,
+        expiration_reason: true,
         upload_date: true,
       },
       orderBy: { upload_date: 'desc' },

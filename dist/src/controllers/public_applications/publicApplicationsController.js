@@ -58,7 +58,7 @@ const submitApplicationSchema = zod_1.z.object({
     is_optout: zod_1.z.boolean().optional(),
     is_private: zod_1.z.boolean().optional(),
     office_name: zod_1.z.string().optional(),
-    office_division: zod_1.z.string().optional(),
+    office_division: zod_1.z.enum(['SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN', 'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC']).optional(),
     // Application-only fields (ignored when job_id is absent)
     cover_letter: zod_1.z.string().optional(),
     linkedin_url: zod_1.z.string().url().optional(),

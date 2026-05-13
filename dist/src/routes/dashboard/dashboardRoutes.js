@@ -29,6 +29,8 @@ router.get("/widget/backOffice/timesheets/:userId", dashboardController_1.widget
 router.get("/widget/backOffice/invoiceStats/:userId", dashboardController_1.widgetInvoiceStats);
 router.get("/widget/backOffice/contracts/:userId", dashboardController_1.widgetContracts);
 router.get("/widget/backOffice/myTasks/:userId", dashboardController_1.widgetMyTasksGrouped);
+router.get("/widget/frontOffice/expiringDocuments/:userId", dashboardController_1.widgetExpiringDocuments);
+router.post("/widget/frontOffice/expiringDocuments/sendReminders", dashboardController_1.sendExpiryReminderEmails);
 // ─────────────────────────────────────────────────────────────────────────────
 // FRONT OFFICE WIDGETS
 // Base: /api/dashboard/widget/frontOffice
@@ -46,6 +48,7 @@ router.get("/widget/frontOffice/pipeline/:userId", dashboardController_1.widgetP
 router.get("/widget/frontOffice/candidates/:userId", dashboardController_1.widgetCandidates);
 router.get("/widget/frontOffice/interviews/:userId", dashboardController_1.widgetInterviews);
 router.get("/widget/frontOffice/myTasks/:userId", dashboardController_1.widgetMyTasks);
+router.get("/widget/frontOffice/jobRequests/:userId", dashboardController_1.widgetJobRequests);
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT OFFICE WIDGETS
 // Base: /api/dashboard/widget/clientOffice

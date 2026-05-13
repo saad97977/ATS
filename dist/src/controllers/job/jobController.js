@@ -2118,6 +2118,36 @@ const getJobRequirements = async (req, res) => {
         return (0, response_1.sendError)(res, 'Failed to fetch job requirements', 500);
     }
 };
+/**
+ * GET /api/jobs/counts
+ *
+ * Returns aggregate counts for jobs across all statuses
+ *
+ * Response:
+ *   {
+ *     all:    <number> – total job count,
+ *     active: <number> – count of jobs with status OPEN,
+ *     drafts: <number> – count of jobs with status DRAFT,
+ *     closed: <number> – count of jobs with status CLOSED
+ *   }
+ */
+const getJobsCounts = async (req, res) => {
+    try {
+        const [all, active, drafts, closed] = await Promise.all([
+            prisma_config_1.default.job.count(),
+            prisma_config_1.default.job.count({ where: { status: 'OPEN' } }),
+            prisma_config_1.default.job.count({ where: { status: 'DRAFT' } }),
+            prisma_config_1.default.job.count({ where: { status: 'CLOSED' } }),
+            prisma_config_1.default.job.count({ where: { status: 'DECLINED' } }),
+            prisma_config_1.default.job.count({ where: { status: 'PENDING' } }),
+        ]);
+        return (0, response_1.sendSuccess)(res, { all, active, drafts, closed });
+    }
+    catch (err) {
+        console.error('Error fetching job counts:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch job counts', 500);
+    }
+};
 // Export controller with custom methods
 exports.jobController = {
     ...baseCrudMethods,
@@ -2143,5 +2173,6 @@ exports.jobController = {
     getClosedJobsByManager,
     getDraftJobsByManager,
     getJobRequirements,
+    getJobsCounts,
 };
 //# sourceMappingURL=jobController.js.map

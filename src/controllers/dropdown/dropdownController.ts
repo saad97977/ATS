@@ -33,6 +33,7 @@ const parseTake = (raw: unknown): number =>
 const isSearchable = (search: unknown): search is string =>
   typeof search === 'string' && search.trim().length >= MIN_SEARCH_LENGTH;
 
+
 // ============================================================
 // ORGANIZATIONS DROPDOWN
 // ============================================================
@@ -294,6 +295,51 @@ const getDocumentCategoriesDropdown = async (req: Request, res: Response) => {
 };
 
 // ============================================================
+// LOCATIONS DROPDOWN
+// ============================================================
+
+/**
+ * GET /api/dropdowns/locations
+ *
+ * Returns all unique locations from Job table (grouped by location)
+ * Useful for location filter dropdowns
+ *
+ * Response:
+ *   [
+ *     { location: "New York, NY" },
+ *     { location: "San Francisco, CA" },
+ *     ...
+ *   ]
+ */
+const getLocations = async (req: Request, res: Response) => {
+  try {
+    const locations = await prisma.job.groupBy({
+      by: ['location'],
+      _count: true,
+      orderBy: { location: 'asc' },
+      where: {
+        location: {
+          not: '',
+        },
+      },
+    });
+
+    // Transform to simple array of location strings
+    const data = locations
+      .filter((loc) => loc.location && loc.location.trim() !== '')
+      .map((loc) => ({
+        location: loc.location,
+        count: loc._count,
+      }));
+
+    return sendSuccess(res, data);
+  } catch (err) {
+    console.error('Error fetching locations dropdown:', err);
+    return sendError(res, 'Failed to fetch locations', 500);
+  }
+};
+
+// ============================================================
 // EXPORTS
 // ============================================================
 
@@ -302,4 +348,5 @@ export const dropdownController = {
   getJobs:               getJobsDropdown,
   getOrganizationUsers:  getOrganizationUsersDropdown,
   getDocumentCategories: getDocumentCategoriesDropdown,
+  getLocations:          getLocations,
 };
