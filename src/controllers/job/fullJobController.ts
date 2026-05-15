@@ -133,6 +133,11 @@ const createJobCompleteSchema = z.object({
   week_duration: z.enum(['MON_SUN', 'SUN_SAT', 'SAT_FRI']).optional().default('MON_SUN'),
   rate_type: z.enum(['HOURLY', 'SALARY', 'DAILY']).optional().default('HOURLY'),
   paycom_position: z.string().optional(),
+  workers_comp_codes: z.array(z.object({
+    code: z.string().min(1, 'Compensation code is required'),
+    description: z.string().optional(),
+    pct: z.number().min(0).max(100, 'Percentage must be between 0 and 100'),
+  })).min(1, "At least one workers' compensation code is required"),
 
   
   // Related entities
@@ -203,6 +208,7 @@ const createJobComplete = async (req: Request, res: Response) => {
       week_duration,
       rate_type,
       paycom_position,
+      workers_comp_codes,
 
     } = validation.data;
 
@@ -357,6 +363,7 @@ const createJobComplete = async (req: Request, res: Response) => {
           week_duration,
           rate_type,
           paycom_position,
+          workers_comp_codes,
 
         },
       });

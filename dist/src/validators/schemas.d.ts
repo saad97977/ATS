@@ -82,22 +82,6 @@ export declare const updateOrganizationLicenseSchema: z.ZodObject<{
     license_document: z.ZodOptional<z.ZodString>;
     expiration_date: z.ZodOptional<z.ZodOptional<z.ZodPipe<z.ZodString, z.ZodTransform<Date, string>>>>;
 }, z.core.$strict>;
-export declare const createOrganizationAccountingSchema: z.ZodObject<{
-    organization_id: z.ZodString;
-    account_type: z.ZodString;
-    bank_name: z.ZodString;
-    account_number: z.ZodString;
-    routing_number: z.ZodString;
-    country: z.ZodString;
-}, z.core.$strict>;
-export declare const updateOrganizationAccountingSchema: z.ZodObject<{
-    organization_id: z.ZodOptional<z.ZodString>;
-    account_type: z.ZodOptional<z.ZodString>;
-    bank_name: z.ZodOptional<z.ZodString>;
-    account_number: z.ZodOptional<z.ZodString>;
-    routing_number: z.ZodOptional<z.ZodString>;
-    country: z.ZodOptional<z.ZodString>;
-}, z.core.$strict>;
 export declare const createOrganizationUserSchema: z.ZodObject<{
     organization_id: z.ZodString;
     user_id: z.ZodString;
@@ -622,8 +606,6 @@ export type CreateOrganizationContact = z.infer<typeof createOrganizationContact
 export type UpdateOrganizationContact = z.infer<typeof updateOrganizationContactSchema>;
 export type CreateOrganizationLicense = z.infer<typeof createOrganizationLicenseSchema>;
 export type UpdateOrganizationLicense = z.infer<typeof updateOrganizationLicenseSchema>;
-export type CreateOrganizationAccounting = z.infer<typeof createOrganizationAccountingSchema>;
-export type UpdateOrganizationAccounting = z.infer<typeof updateOrganizationAccountingSchema>;
 export type CreateOrganizationUser = z.infer<typeof createOrganizationUserSchema>;
 export type UpdateOrganizationUser = z.infer<typeof updateOrganizationUserSchema>;
 export type CreateOrganizationDocumentTitle = z.infer<typeof createOrganizationDocumentTitleSchema>;

@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendDocumentExpiryReminderEmail = exports.sendAssignmentNotificationEmail = exports.sendOnboardingWelcomeEmail = exports.verifyEmailConfiguration = exports.sendOfferLetterEmail = exports.sendInterviewRejectionEmail = exports.sendInterviewRescheduleEmail = exports.sendInterviewInvitationEmail = void 0;
+exports.sendNewApplicationEmail = exports.sendDocumentExpiryReminderEmail = exports.sendAssignmentNotificationEmail = exports.sendOnboardingWelcomeEmail = exports.verifyEmailConfiguration = exports.sendOfferLetterEmail = exports.sendInterviewRejectionEmail = exports.sendInterviewRescheduleEmail = exports.sendInterviewInvitationEmail = void 0;
 const nodemailer_1 = __importDefault(require("nodemailer"));
 /**
  * Email Service
@@ -552,6 +552,60 @@ Please take action to renew this document as soon as possible.
     }
 };
 exports.sendDocumentExpiryReminderEmail = sendDocumentExpiryReminderEmail;
+// ─── New Application Submitted — Manager Notification ────────────────────────
+const sendNewApplicationEmail = async (data) => {
+    try {
+        const htmlContent = `
+      <p>A new application has been submitted for the position of <strong>${data.jobTitle}</strong>.</p>
+
+      <div class="info-box">
+        <p><strong>Applicant:</strong> ${data.applicantName}</p>
+        <p><strong>Applicant Email:</strong> <a href="mailto:${data.applicantEmail}">${data.applicantEmail}</a></p>
+        <p><strong>Position:</strong> ${data.jobTitle}</p>
+        <p><strong>Organization:</strong> ${data.organizationName}</p>
+        <p><strong>Application ID:</strong> ${data.applicationId}</p>
+        <p><strong>Submitted At:</strong> ${fmtDateTime(new Date())}</p>
+      </div>
+
+      <p>Please log in to the ATS portal to review this application and take appropriate action.</p>
+    `;
+        const rawContent = `
+A new application has been submitted for the position of ${data.jobTitle}.
+
+Applicant:       ${data.applicantName}
+Applicant Email: ${data.applicantEmail}
+Position:        ${data.jobTitle}
+Organization:    ${data.organizationName}
+Application ID:  ${data.applicationId}
+Submitted At:    ${fmtDateTime(new Date())}
+
+Please log in to the ATS portal to review this application.
+    `.trim();
+        const transporter = createTransporter();
+        const info = await transporter.sendMail({
+            from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
+            to: data.managerEmail,
+            subject: `New Application Received — ${data.jobTitle}`,
+            text: generateBaseEmailText({
+                applicantName: data.managerName,
+                organizationName: data.organizationName,
+                content: rawContent,
+            }),
+            html: generateBaseEmailHTML({
+                applicantName: data.managerName,
+                organizationName: data.organizationName,
+                subject: `New Application — ${data.jobTitle}`,
+                content: htmlContent,
+            }),
+        });
+        return { success: true, messageId: info.messageId };
+    }
+    catch (error) {
+        console.error('Error sending new application notification email:', error);
+        return { success: false, error: error.message || 'Failed to send email' };
+    }
+};
+exports.sendNewApplicationEmail = sendNewApplicationEmail;
 exports.default = {
     sendInterviewInvitationEmail: exports.sendInterviewInvitationEmail,
     sendInterviewRescheduleEmail: exports.sendInterviewRescheduleEmail,
@@ -560,6 +614,7 @@ exports.default = {
     sendOnboardingWelcomeEmail: exports.sendOnboardingWelcomeEmail,
     sendAssignmentNotificationEmail: exports.sendAssignmentNotificationEmail,
     sendDocumentExpiryReminderEmail: exports.sendDocumentExpiryReminderEmail,
+    sendNewApplicationEmail: exports.sendNewApplicationEmail,
     verifyEmailConfiguration: exports.verifyEmailConfiguration,
 };
 //# sourceMappingURL=emailService.js.map

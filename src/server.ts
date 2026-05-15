@@ -15,7 +15,6 @@ import organizationContactRoutes from './routes/organization/organizationContact
 import organizationLicenseRoutes from './routes/organization/organizationLicenseRoutes';
 import companyOfficeRoutes from './routes/organization/companyOfficeRoutes';
 import { contactActivityDropdownRouter, contactPreviewRouter, organizationActivityRouter, contactJobRouter } from './routes/organization/contactActivityRoutes';
-import organizationAccountingRoutes from './routes/organization/organizationAccountingRoutes';
 import organizationUserRoutes from './routes/organization/organizationUserRoutes';
 import organizationDocumentTitleRoutes from './routes/organization/organizationDocumentTitleRoutes';
 import organizationDocumentRoutes from './routes/organization/organizationDocumentRoutes';
@@ -38,6 +37,7 @@ import organizationCompleteRoutes from './routes/organization/fullOrganizationRo
 import jobCompleteRoutes from './routes/job/fullJobRoutes';
 import publicRoutes from './routes/public_application/publicRoutes';
 import applicantProfileRoutes from './routes/applicant/applicantProfileRoutes';
+import applicantCommunicationRoutes from './routes/applicant/applicantCommunicationRoutes';
 import pipelineRoutes from './routes/application/pipelineRoutes';
 import initializeCronJobs from '../src/services/cronJobService'
 import timesheetRoutes from './routes/timesheets/timesheetRoutes';
@@ -46,6 +46,7 @@ import dropdownRoutes from './routes/dropdown/dropdownRoutes';
 import dashboardRoutes from './routes/dashboard/dashboardRoutes';
 import userProfileRoutes from './routes/user/userProfileRoutes';
 import jobCloneRoutes from './routes/job/jobCloneRoutes';
+import jobSubSectionRoutes from './routes/job/jobSubSectionRoutes';
 
 
 dotenv.config();
@@ -147,13 +148,13 @@ app.use('/api/job-rates', jobRateRoutes);
 app.use('/api/job-notes', jobNoteRoutes);
 app.use('/api/job-owners', jobOwnerRoutes);
 app.use('/api/job-templates', jobCloneRoutes); // Job cloning and templates
+app.use('/api/jobs', jobSubSectionRoutes);     // Job sub-section views
 
 // Organization routes
 app.use('/api/organizations', organizationRoutes);
 app.use('/api/organization-addresses', organizationAddressRoutes);
 app.use('/api/organization-contacts', organizationContactRoutes);
 app.use('/api/organization-licenses', organizationLicenseRoutes);
-app.use('/api/organization-accounting', organizationAccountingRoutes);
 app.use('/api/organization-users', organizationUserRoutes);
 app.use('/api/organization-document-titles', organizationDocumentTitleRoutes);
 app.use('/api/organization-documents', organizationDocumentRoutes);
@@ -182,6 +183,9 @@ app.use('/api/applicant-references', applicantReferencesRoutes);
 app.use('/api/applicant-social-profiles', applicantSocialProfilesRoutes);
 app.use('/api/applicant-work-history', applicantWorkHistoryRoutes);
 app.use('/api/applicant-documents', applicantDocumentsRoutes);
+
+// Applicant Communication (email/call/note logs + manual send)
+app.use('/api/applicant-communications', applicantCommunicationRoutes);
 
 
 // Timesheets and Payroll routes

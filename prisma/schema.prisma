@@ -54,6 +54,7 @@ model User {
   contact_previews ContactPreview[] @relation("PreviewLoggedBy")
   contact_representative OrganizationContact[] @relation("ContactRepresentative")
   created_templates JobTemplate[] @relation("TemplateCreatedBy")
+  sent_communications ApplicantCommunication[] @relation("CommSentBy")
 
   @@index([email])
   @@map("users")
@@ -225,7 +226,6 @@ model Organization {
   addresses          OrganizationAddress[]
   contacts           OrganizationContact[]
   licenses           OrganizationLicense[]
-  accounting         OrganizationAccounting[]
   organization_users OrganizationUser[]
   contracts          Contract[]
   document_titles    OrganizationDocumentTitle[]
@@ -315,22 +315,6 @@ model ContactPreview {
   @@map("contact_previews")
 }
 
-
-model OrganizationAccounting {
-  organization_accounting_id String @id @default(uuid())
-  organization_id            String
-  account_type               String
-  bank_name                  String
-  account_number             String
-  routing_number             String
-  country                    String
-
-  // Relations
-  organization Organization @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
-
-  @@index([organization_id])
-  @@map("organization_accounting")
-}
 
 
 model OrganizationLicense {
@@ -564,10 +548,7 @@ model Job {
   week_duration         WeekDurationType @default(MON_SUN)
   rate_type             RateType        @default(HOURLY)
   paycom_position       String?
-
-
-
-
+  workers_comp_codes    Json?          // [{ code, description, pct }]
 
   // Relations
   organization  Organization   @relation(fields: [organization_id], references: [organization_id])
@@ -786,6 +767,7 @@ model Applicant {
   classification       ApplicantClassification?     // ← NEW
   applicant_tags       ApplicantTag[]               // ← NEW (rated tags)
   applications         Application[]
+  communications       ApplicantCommunication[]
 
   @@map("applicants")
 }
@@ -1000,10 +982,13 @@ model Application {
   // ← NEW: Application-specific data
   documents       ApplicantDocument[]     // Resume, cover letter for THIS application
   work_history    ApplicantWorkHistory[]  // Work history snapshot for THIS application
+  communications  ApplicantCommunication[]
 
   @@index([job_id])
   @@index([applicant_id])
   @@index([status])
+  @@index([job_id, status])          // getJobApplications filters by both constantly
+  @@index([job_id, applied_at])      // default sort column
   @@map("applications")
 }
 
@@ -1038,6 +1023,8 @@ model Interview {
 
   @@unique([application_id, round]) // prevents duplicate rounds, not duplicate applications
   @@index([application_id])
+  @@index([application_id, status])
+  @@index([application_id, interview_date])
   @@map("interviews")
 }
 
@@ -1056,6 +1043,7 @@ model PipelineStage {
 
 
   @@index([application_id])
+  @@index([application_id, stage_name])
   @@index([credit_organization_user_id])
   @@index([representative_organization_user_id])
   @@map("pipeline_stages")
@@ -1101,6 +1089,8 @@ model Assignment {
   payrolls     Payroll[]
   imports  TimesheetImport[]
 
+  @@index([start_date])
+  @@index([end_date])
   @@map("assignments")
 }
 
@@ -1172,6 +1162,8 @@ model Timesheet {
   @@index([assignment_id])
   @@index([week_start_date])
   @@index([status])
+  @@index([assignment_id, status])            // groupBy + filtered counts
+  @@index([status, assignment_id])            // overview's approved-only aggregate
   @@map("timesheets")
   
 }
@@ -1322,6 +1314,51 @@ model QBTokenStore {
 
   @@map("qb_token_store")
 }
+
+// ============================================
+// APPLICANT COMMUNICATION LOG
+// ============================================
+
+model ApplicantCommunication {
+  communication_id      String         @id @default(uuid())
+  applicant_id          String
+
+  communication_type    CommType       // EMAIL | CALL | SMS | NOTE
+  direction             CommDirection? // OUTBOUND | INBOUND
+  trigger               CommTrigger    // MANUAL | AUTOMATIC
+
+  // ── Email-specific ──────────────────────────────────────────
+  subject               String?
+  body                  String?        // HTML or plain-text body
+  from_address          String?
+  to_address            String?
+  email_message_id      String?        // nodemailer messageId for dedup
+
+  // ── Call-specific ────────────────────────────────────────────
+  call_duration_minutes Int?
+  call_outcome          CallOutcome?   // ANSWERED | NO_ANSWER | VOICEMAIL | BUSY
+
+  // ── Shared ───────────────────────────────────────────────────
+  status                CommStatus     @default(LOGGED)
+  notes                 String?        // HR internal notes
+  sent_by_user_id       String?        // null = system-triggered
+  application_id        String?        // optional application context
+  metadata              Json?          // extra data (interview_id, round, etc.)
+
+  created_at            DateTime       @default(now())
+  updated_at            DateTime       @updatedAt
+
+  applicant             Applicant      @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+  sent_by               User?          @relation("CommSentBy", fields: [sent_by_user_id], references: [user_id])
+  application           Application?   @relation(fields: [application_id], references: [application_id], onDelete: SetNull)
+
+  @@index([applicant_id])
+  @@index([applicant_id, communication_type])
+  @@index([applicant_id, created_at])
+  @@index([sent_by_user_id])
+  @@map("applicant_communications")
+}
+
 
 // ============================================
 // ENUMS
@@ -1616,5 +1653,38 @@ enum EmploymentStatus {
   INTERN
   ON_LEAVE
   TERMINATED
+}
+
+// ── Communication module enums ────────────────────────────────────────────────
+
+enum CommType {
+  EMAIL
+  SMS
+  CALL
+  NOTE
+}
+
+enum CommDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum CommTrigger {
+  MANUAL
+  AUTOMATIC
+}
+
+enum CommStatus {
+  SENT
+  FAILED
+  LOGGED
+  DRAFT
+}
+
+enum CallOutcome {
+  ANSWERED
+  NO_ANSWER
+  VOICEMAIL
+  BUSY
 }
 

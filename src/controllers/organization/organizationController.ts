@@ -65,7 +65,6 @@ const getOrganizationById = async (req: Request, res: Response) => {
 
         // Organization Details (from update schema)
         addresses: true,
-        accounting: true,
         company_offices: true,
 
         // Contacts with representative details
@@ -141,16 +140,6 @@ const companyOfficeUpdateSchema = z.object({
   type: z.enum(['REMOTE', 'HYBRID', 'ONSITE']).optional(),
   address: z.string().min(1).optional(),
   is_primary: z.boolean().optional(),
-  _action: z.enum(['create', 'update', 'delete']).optional(),
-});
- 
-const organizationAccountingUpdateSchema = z.object({
-  organization_accounting_id: z.string().uuid().optional(),
-  account_type: z.string().min(1).optional(),
-  bank_name: z.string().min(1).optional(),
-  account_number: z.string().min(1).optional(),
-  routing_number: z.string().min(1).optional(),
-  country: z.string().min(1).optional(),
   _action: z.enum(['create', 'update', 'delete']).optional(),
 });
  
@@ -233,7 +222,6 @@ const updateOrganizationCompleteSchema = z.object({
  
   // Related entities
   company_offices: z.array(companyOfficeUpdateSchema).optional(),
-  accounting: z.array(organizationAccountingUpdateSchema).optional(),
   addresses: z.array(organizationAddressUpdateSchema).optional(),
   contacts: z.array(organizationContactUpdateSchema).optional(),
   organization_users: z.array(organizationUserUpdateSchema).optional(),
@@ -273,7 +261,7 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
       representative_id, branch_region, branch_name, default_ot_rule,
       contract_markup, permanent_markup, overview, custom_company_id,
       org_branch_division,
-      company_offices, accounting, addresses, contacts, organization_users,
+      company_offices, addresses, contacts, organization_users,
     } = validation.data;
  
     // Check organization exists
@@ -281,7 +269,6 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
       where: { organization_id: id },
       include: {
         company_offices: true,
-        accounting: true,
         addresses: true,
         contacts: true,
         organization_users: true,
@@ -418,42 +405,7 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
         }
       }
  
-      // 3. Accounting
-      const accountingResults = { created: [] as any[], updated: [] as any[], deleted: [] as any[] };
-      if (accounting && accounting.length > 0) {
-        for (const acc of accounting) {
-          if (acc._action === 'delete' && acc.organization_accounting_id) {
-            accountingResults.deleted.push(
-              await tx.organizationAccounting.delete({ where: { organization_accounting_id: acc.organization_accounting_id } })
-            );
-          } else if (acc._action === 'update' && acc.organization_accounting_id) {
-            const d: any = {};
-            if (acc.account_type !== undefined)   d.account_type = acc.account_type;
-            if (acc.bank_name !== undefined)       d.bank_name = acc.bank_name;
-            if (acc.account_number !== undefined)  d.account_number = acc.account_number;
-            if (acc.routing_number !== undefined)  d.routing_number = acc.routing_number;
-            if (acc.country !== undefined)         d.country = acc.country;
-            accountingResults.updated.push(
-              await tx.organizationAccounting.update({ where: { organization_accounting_id: acc.organization_accounting_id }, data: d })
-            );
-          } else {
-            accountingResults.created.push(
-              await tx.organizationAccounting.create({
-                data: {
-                  organization_id: id,
-                  account_type: acc.account_type!,
-                  bank_name: acc.bank_name!,
-                  account_number: acc.account_number!,
-                  routing_number: acc.routing_number!,
-                  country: acc.country!,
-                },
-              })
-            );
-          }
-        }
-      }
- 
-      // 4. Addresses
+      // 3. Addresses
       const addressResults = { created: [] as any[], updated: [] as any[], deleted: [] as any[] };
       if (addresses && addresses.length > 0) {
         for (const addr of addresses) {
@@ -593,7 +545,6 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
       return {
         organization: updatedOrganization,
         company_offices: officeResults,
-        accounting: accountingResults,
         addresses: addressResults,
         contacts: contactResults,
         organization_users: orgUserResults,
@@ -605,7 +556,6 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
       where: { organization_id: id },
       include: {
         company_offices: true,
-        accounting: true,
         addresses: true,
         contacts: {
           include: {
@@ -645,11 +595,6 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
           created: result.company_offices.created.length,
           updated: result.company_offices.updated.length,
           deleted: result.company_offices.deleted.length,
-        },
-        accounting: {
-          created: result.accounting.created.length,
-          updated: result.accounting.updated.length,
-          deleted: result.accounting.deleted.length,
         },
         addresses: {
           created: result.addresses.created.length,

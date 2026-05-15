@@ -65,21 +65,6 @@ export const createOrganizationLicenseSchema = z.object({
 export const updateOrganizationLicenseSchema = createOrganizationLicenseSchema.partial();
 
 // ============================================
-// ORGANIZATION ACCOUNTING SCHEMAS
-// ============================================
-
-export const createOrganizationAccountingSchema = z.object({
-  organization_id: z.string().uuid('Invalid organization ID'),
-  account_type: z.string().min(1, 'Account type is required'),
-  bank_name: z.string().min(1, 'Bank name is required'),
-  account_number: z.string().min(1, 'Account number is required'),
-  routing_number: z.string().regex(/^\d{9}$/, 'Invalid routing number'),
-  country: z.string().min(1, 'Country is required'),
-}).strict();
-
-export const updateOrganizationAccountingSchema = createOrganizationAccountingSchema.partial();
-
-// ============================================
 // ORGANIZATION USER SCHEMAS
 // ============================================
 
@@ -535,9 +520,6 @@ export type UpdateOrganizationContact = z.infer<typeof updateOrganizationContact
 
 export type CreateOrganizationLicense = z.infer<typeof createOrganizationLicenseSchema>;
 export type UpdateOrganizationLicense = z.infer<typeof updateOrganizationLicenseSchema>;
-
-export type CreateOrganizationAccounting = z.infer<typeof createOrganizationAccountingSchema>;
-export type UpdateOrganizationAccounting = z.infer<typeof updateOrganizationAccountingSchema>;
 
 export type CreateOrganizationUser = z.infer<typeof createOrganizationUserSchema>;
 export type UpdateOrganizationUser = z.infer<typeof updateOrganizationUserSchema>;

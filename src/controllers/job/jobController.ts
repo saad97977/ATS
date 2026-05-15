@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import prisma from '../../prisma.config';
 import { createCrudController } from '../../factories/crudFactory';
 import { createJobSchema, updateJobSchema } from '../../validators/schemas';
@@ -1125,6 +1126,11 @@ const updateJobCompleteSchema = z.object({
   week_duration: z.enum(['MON_SUN', 'SUN_SAT', 'SAT_FRI']).optional(),
   rate_type: z.enum(['HOURLY', 'SALARY', 'DAILY']).optional(),
   paycom_position: z.string().optional().nullable(),
+  workers_comp_codes: z.array(z.object({
+    code: z.string().min(1),
+    description: z.string().optional(),
+    pct: z.number().min(0).max(100),
+  })).min(1).optional().nullable(),
 
   
   // Related entities
@@ -1198,6 +1204,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
       week_duration,
       rate_type,
       paycom_position,
+      workers_comp_codes,
 
     } = validation.data;
 
@@ -1402,6 +1409,7 @@ const updateJobComplete = async (req: Request, res: Response) => {
       if (week_duration !== undefined) jobUpdateData.week_duration = week_duration;
       if (rate_type !== undefined) jobUpdateData.rate_type = rate_type;
       if (paycom_position !== undefined) jobUpdateData.paycom_position = paycom_position;
+      if (workers_comp_codes !== undefined) jobUpdateData.workers_comp_codes = workers_comp_codes ?? Prisma.JsonNull;
 
       const updatedJob = Object.keys(jobUpdateData).length > 0
         ? await tx.job.update({

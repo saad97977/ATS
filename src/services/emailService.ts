@@ -674,6 +674,71 @@ Please take action to renew this document as soon as possible.
   }
 };
 
+// ─── New Application Submitted — Manager Notification ────────────────────────
+
+export const sendNewApplicationEmail = async (data: {
+  managerEmail:     string;
+  managerName:      string;
+  applicantName:    string;
+  applicantEmail:   string;
+  jobTitle:         string;
+  organizationName: string;
+  applicationId:    string;
+}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+  try {
+    const htmlContent = `
+      <p>A new application has been submitted for the position of <strong>${data.jobTitle}</strong>.</p>
+
+      <div class="info-box">
+        <p><strong>Applicant:</strong> ${data.applicantName}</p>
+        <p><strong>Applicant Email:</strong> <a href="mailto:${data.applicantEmail}">${data.applicantEmail}</a></p>
+        <p><strong>Position:</strong> ${data.jobTitle}</p>
+        <p><strong>Organization:</strong> ${data.organizationName}</p>
+        <p><strong>Application ID:</strong> ${data.applicationId}</p>
+        <p><strong>Submitted At:</strong> ${fmtDateTime(new Date())}</p>
+      </div>
+
+      <p>Please log in to the ATS portal to review this application and take appropriate action.</p>
+    `;
+
+    const rawContent = `
+A new application has been submitted for the position of ${data.jobTitle}.
+
+Applicant:       ${data.applicantName}
+Applicant Email: ${data.applicantEmail}
+Position:        ${data.jobTitle}
+Organization:    ${data.organizationName}
+Application ID:  ${data.applicationId}
+Submitted At:    ${fmtDateTime(new Date())}
+
+Please log in to the ATS portal to review this application.
+    `.trim();
+
+    const transporter = createTransporter();
+    const info = await transporter.sendMail({
+      from:    { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
+      to:      data.managerEmail,
+      subject: `New Application Received — ${data.jobTitle}`,
+      text:    generateBaseEmailText({
+        applicantName:    data.managerName,
+        organizationName: data.organizationName,
+        content:          rawContent,
+      }),
+      html: generateBaseEmailHTML({
+        applicantName:    data.managerName,
+        organizationName: data.organizationName,
+        subject:          `New Application — ${data.jobTitle}`,
+        content:          htmlContent,
+      }),
+    });
+
+    return { success: true, messageId: info.messageId };
+  } catch (error: any) {
+    console.error('Error sending new application notification email:', error);
+    return { success: false, error: error.message || 'Failed to send email' };
+  }
+};
+
 export default {
   sendInterviewInvitationEmail,
   sendInterviewRescheduleEmail,
@@ -682,5 +747,6 @@ export default {
   sendOnboardingWelcomeEmail,
   sendAssignmentNotificationEmail,
   sendDocumentExpiryReminderEmail,
+  sendNewApplicationEmail,
   verifyEmailConfiguration,
 };

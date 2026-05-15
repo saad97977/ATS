@@ -3,6 +3,8 @@ import prisma from '../../prisma.config';
 import { sendSuccess, sendError } from '../../utils/response';
 import { z } from 'zod';
 import { BlobServiceClient } from '@azure/storage-blob';
+import { updateUserActivity } from '../../services/activityService';
+import { sendNewApplicationEmail } from '../../services/emailService';
 
 if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
   throw new Error('AZURE_STORAGE_CONNECTION_STRING is not defined in environment variables');
@@ -331,6 +333,7 @@ export const submitApplication = async (req: Request, res: Response) => {
         },
         include: {
           organization: { select: { name: true } },
+          manager: { select: { user_id: true, name: true, email: true } },
         },
       }),
       findExistingApplicant(data.email),
@@ -519,6 +522,35 @@ export const submitApplication = async (req: Request, res: Response) => {
         work_history: { where: { application_id: result.application.application_id } },
       },
     });
+
+    // ── Notify job manager (fire-and-forget, non-blocking) ──────────────────
+    if (job.manager) {
+      const manager = job.manager;
+      const applicationId = result.application.application_id;
+      const applicantName = completeApplication?.applicant?.full_name ?? data.full_name;
+      const applicantEmail = completeApplication?.applicant?.contact?.email ?? data.email;
+      const orgName = job.organization.name;
+
+      // Internal notification via activity log
+      updateUserActivity(manager.user_id, {
+        action_type: 'NEW_APPLICATION',
+        entity_type: 'APPLICATION',
+        entity_id: applicationId,
+        entity_name: `${applicantName} applied for ${job.job_title}`,
+        timestamp: new Date().toISOString(),
+      }).catch((err) => console.error('Activity log failed for new application:', err));
+
+      // Email notification
+      sendNewApplicationEmail({
+        managerEmail:     manager.email,
+        managerName:      manager.name,
+        applicantName,
+        applicantEmail,
+        jobTitle:         job.job_title,
+        organizationName: orgName,
+        applicationId,
+      }).catch((err) => console.error('Email notification failed for new application:', err));
+    }
 
     return sendSuccess(res, {
       application: completeApplication,

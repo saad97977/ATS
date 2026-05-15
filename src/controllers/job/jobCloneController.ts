@@ -44,6 +44,7 @@ interface JobSnapshot {
   invoice_with_hours?:       boolean;
   paycom_position?:          string | null;
   company_office_id?:        string | null;
+  workers_comp_codes?:       Array<{ code: string; description?: string; pct: number }> | null;
   detail?: {
     description: string;
     skills: any;
@@ -118,6 +119,7 @@ function buildSnapshot(
       invoice_with_hours:       job.invoice_with_hours,
       paycom_position:          job.paycom_position,
       company_office_id:        job.company_office_id ?? null,
+      workers_comp_codes:       (job.workers_comp_codes as any) ?? null,
     });
   }
 
@@ -208,6 +210,7 @@ function buildJobDataFromSnapshot(
     withhold_emails:    snap.withhold_emails    ?? false,
     invoice_with_hours: snap.invoice_with_hours ?? false,
     paycom_position:    snap.paycom_position    ?? null,
+    workers_comp_codes: snap.workers_comp_codes != null ? snap.workers_comp_codes : Prisma.JsonNull,
 
     // Always reset on new job
     status:    'DRAFT',

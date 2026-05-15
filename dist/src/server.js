@@ -20,7 +20,6 @@ const organizationContactRoutes_1 = __importDefault(require("./routes/organizati
 const organizationLicenseRoutes_1 = __importDefault(require("./routes/organization/organizationLicenseRoutes"));
 const companyOfficeRoutes_1 = __importDefault(require("./routes/organization/companyOfficeRoutes"));
 const contactActivityRoutes_1 = require("./routes/organization/contactActivityRoutes");
-const organizationAccountingRoutes_1 = __importDefault(require("./routes/organization/organizationAccountingRoutes"));
 const organizationUserRoutes_1 = __importDefault(require("./routes/organization/organizationUserRoutes"));
 const organizationDocumentTitleRoutes_1 = __importDefault(require("./routes/organization/organizationDocumentTitleRoutes"));
 const organizationDocumentRoutes_1 = __importDefault(require("./routes/organization/organizationDocumentRoutes"));
@@ -42,6 +41,7 @@ const fullOrganizationRoutes_1 = __importDefault(require("./routes/organization/
 const fullJobRoutes_1 = __importDefault(require("./routes/job/fullJobRoutes"));
 const publicRoutes_1 = __importDefault(require("./routes/public_application/publicRoutes"));
 const applicantProfileRoutes_1 = __importDefault(require("./routes/applicant/applicantProfileRoutes"));
+const applicantCommunicationRoutes_1 = __importDefault(require("./routes/applicant/applicantCommunicationRoutes"));
 const pipelineRoutes_1 = __importDefault(require("./routes/application/pipelineRoutes"));
 const cronJobService_1 = __importDefault(require("../src/services/cronJobService"));
 const timesheetRoutes_1 = __importDefault(require("./routes/timesheets/timesheetRoutes"));
@@ -50,6 +50,7 @@ const dropdownRoutes_1 = __importDefault(require("./routes/dropdown/dropdownRout
 const dashboardRoutes_1 = __importDefault(require("./routes/dashboard/dashboardRoutes"));
 const userProfileRoutes_1 = __importDefault(require("./routes/user/userProfileRoutes"));
 const jobCloneRoutes_1 = __importDefault(require("./routes/job/jobCloneRoutes"));
+const jobSubSectionRoutes_1 = __importDefault(require("./routes/job/jobSubSectionRoutes"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -127,12 +128,12 @@ app.use('/api/job-rates', jobRateRoutes_1.default);
 app.use('/api/job-notes', jobNoteRoutes_1.default);
 app.use('/api/job-owners', jobOwnerRoutes_1.default);
 app.use('/api/job-templates', jobCloneRoutes_1.default); // Job cloning and templates
+app.use('/api/jobs', jobSubSectionRoutes_1.default); // Job sub-section views
 // Organization routes
 app.use('/api/organizations', organizationRoutes_1.default);
 app.use('/api/organization-addresses', organizationAddressRoutes_1.default);
 app.use('/api/organization-contacts', organizationContactRoutes_1.default);
 app.use('/api/organization-licenses', organizationLicenseRoutes_1.default);
-app.use('/api/organization-accounting', organizationAccountingRoutes_1.default);
 app.use('/api/organization-users', organizationUserRoutes_1.default);
 app.use('/api/organization-document-titles', organizationDocumentTitleRoutes_1.default);
 app.use('/api/organization-documents', organizationDocumentRoutes_1.default);
@@ -154,6 +155,8 @@ app.use('/api/applicant-references', applicantReferencesRoutes_1.default);
 app.use('/api/applicant-social-profiles', applicantSocialProfilesRoutes_1.default);
 app.use('/api/applicant-work-history', applicantWorkHistoryRoutes_1.default);
 app.use('/api/applicant-documents', applicantDocumentsRoutes_1.default);
+// Applicant Communication (email/call/note logs + manual send)
+app.use('/api/applicant-communications', applicantCommunicationRoutes_1.default);
 // Timesheets and Payroll routes
 app.use('/api/timesheets', timesheetRoutes_1.default);
 app.use('/api/payroll', payrollRoutes_1.default);

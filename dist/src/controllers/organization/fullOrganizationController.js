@@ -20,13 +20,6 @@ const companyOfficeSchema = zod_1.z.object({
     address: zod_1.z.string().min(1, 'Address is required'),
     is_primary: zod_1.z.boolean().optional().default(false),
 });
-const organizationAccountingSchema = zod_1.z.object({
-    account_type: zod_1.z.string().min(1, 'Account type is required'),
-    bank_name: zod_1.z.string().min(1, 'Bank name is required'),
-    account_number: zod_1.z.string().min(1, 'Account number is required'),
-    routing_number: zod_1.z.string().min(1, 'Routing number is required'),
-    country: zod_1.z.string().min(1, 'Country is required'),
-});
 const organizationAddressSchema = zod_1.z.object({
     address_type: zod_1.z.enum(['WORKSITE', 'BILLING']),
     address1: zod_1.z.string().min(1, 'Address line 1 is required'),
@@ -96,7 +89,6 @@ const createOrganizationCompleteSchema = zod_1.z.object({
     ]).optional(),
     // Related entities
     company_offices: zod_1.z.array(companyOfficeSchema).optional(),
-    accounting: zod_1.z.array(organizationAccountingSchema).optional(),
     addresses: zod_1.z.array(organizationAddressSchema).optional(),
     contacts: zod_1.z.array(organizationContactSchema).optional(),
     organization_users: zod_1.z.array(organizationUserSchema).optional(),
@@ -122,7 +114,7 @@ const createOrganizationComplete = async (req, res) => {
         // New org fields
         fax, zip, industry, revenue, employee_count, last_contacted_at, representative_id, branch_region, branch_name, default_ot_rule, contract_markup, permanent_markup, overview, custom_company_id, org_branch_division, 
         // Relations
-        company_offices, accounting, addresses, contacts, organization_users, } = validation.data;
+        company_offices, addresses, contacts, organization_users, } = validation.data;
         // Check if creator exists
         const userExists = await prisma_config_1.default.user.findFirst({
             where: { user_id: created_by_user_id },
@@ -239,20 +231,7 @@ const createOrganizationComplete = async (req, res) => {
                     })),
                 });
             }
-            // 3. Accounting
-            if (accounting && accounting.length > 0) {
-                await tx.organizationAccounting.createMany({
-                    data: accounting.map(acc => ({
-                        organization_id: newOrganization.organization_id,
-                        account_type: acc.account_type,
-                        bank_name: acc.bank_name,
-                        account_number: acc.account_number,
-                        routing_number: acc.routing_number,
-                        country: acc.country,
-                    })),
-                });
-            }
-            // 4. Addresses
+            // 3. Addresses
             if (addresses && addresses.length > 0) {
                 await tx.organizationAddress.createMany({
                     data: addresses.map(addr => ({
@@ -267,7 +246,7 @@ const createOrganizationComplete = async (req, res) => {
                     })),
                 });
             }
-            // 5. Contacts (use create — not createMany — to support all new nullable fields)
+            // 4. Contacts (use create — not createMany — to support all new nullable fields)
             if (contacts && contacts.length > 0) {
                 await tx.organizationContact.createMany({
                     data: contacts.map(contact => ({
@@ -296,7 +275,7 @@ const createOrganizationComplete = async (req, res) => {
                     })),
                 });
             }
-            // 6. Organization Users
+            // 5. Organization Users
             if (organization_users && organization_users.length > 0) {
                 await tx.organizationUser.createMany({
                     data: organization_users.map(orgUser => ({
@@ -319,7 +298,6 @@ const createOrganizationComplete = async (req, res) => {
             where: { organization_id: result.organization_id },
             include: {
                 company_offices: true,
-                accounting: true,
                 addresses: true,
                 contacts: {
                     include: {

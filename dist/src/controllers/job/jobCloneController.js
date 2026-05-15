@@ -63,6 +63,7 @@ function buildSnapshot(job, sections, fieldOverrides = {}) {
             invoice_with_hours: job.invoice_with_hours,
             paycom_position: job.paycom_position,
             company_office_id: job.company_office_id ?? null,
+            workers_comp_codes: job.workers_comp_codes ?? null,
         });
     }
     if (sections.detail && job.job_detail) {
@@ -137,6 +138,7 @@ function buildJobDataFromSnapshot(snap, resolvedOrgId, createdByUserId, fallback
         withhold_emails: snap.withhold_emails ?? false,
         invoice_with_hours: snap.invoice_with_hours ?? false,
         paycom_position: snap.paycom_position ?? null,
+        workers_comp_codes: snap.workers_comp_codes != null ? snap.workers_comp_codes : client_1.Prisma.JsonNull,
         // Always reset on new job
         status: 'DRAFT',
         approved: false,

@@ -61,7 +61,6 @@ const getOrganizationById = async (req, res) => {
                 },
                 // Organization Details (from update schema)
                 addresses: true,
-                accounting: true,
                 company_offices: true,
                 // Contacts with representative details
                 contacts: {
@@ -127,15 +126,6 @@ const companyOfficeUpdateSchema = zod_1.z.object({
     type: zod_1.z.enum(['REMOTE', 'HYBRID', 'ONSITE']).optional(),
     address: zod_1.z.string().min(1).optional(),
     is_primary: zod_1.z.boolean().optional(),
-    _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
-});
-const organizationAccountingUpdateSchema = zod_1.z.object({
-    organization_accounting_id: zod_1.z.string().uuid().optional(),
-    account_type: zod_1.z.string().min(1).optional(),
-    bank_name: zod_1.z.string().min(1).optional(),
-    account_number: zod_1.z.string().min(1).optional(),
-    routing_number: zod_1.z.string().min(1).optional(),
-    country: zod_1.z.string().min(1).optional(),
     _action: zod_1.z.enum(['create', 'update', 'delete']).optional(),
 });
 const organizationAddressUpdateSchema = zod_1.z.object({
@@ -212,7 +202,6 @@ const updateOrganizationCompleteSchema = zod_1.z.object({
     ]).optional().nullable(),
     // Related entities
     company_offices: zod_1.z.array(companyOfficeUpdateSchema).optional(),
-    accounting: zod_1.z.array(organizationAccountingUpdateSchema).optional(),
     addresses: zod_1.z.array(organizationAddressUpdateSchema).optional(),
     contacts: zod_1.z.array(organizationContactUpdateSchema).optional(),
     organization_users: zod_1.z.array(organizationUserUpdateSchema).optional(),
@@ -243,13 +232,12 @@ const updateOrganizationComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { name, website, status, phone, fax, zip, industry, revenue, employee_count, last_contacted_at, representative_id, branch_region, branch_name, default_ot_rule, contract_markup, permanent_markup, overview, custom_company_id, org_branch_division, company_offices, accounting, addresses, contacts, organization_users, } = validation.data;
+        const { name, website, status, phone, fax, zip, industry, revenue, employee_count, last_contacted_at, representative_id, branch_region, branch_name, default_ot_rule, contract_markup, permanent_markup, overview, custom_company_id, org_branch_division, company_offices, addresses, contacts, organization_users, } = validation.data;
         // Check organization exists
         const existingOrg = await prisma_config_1.default.organization.findUnique({
             where: { organization_id: id },
             include: {
                 company_offices: true,
-                accounting: true,
                 addresses: true,
                 contacts: true,
                 organization_users: true,
@@ -390,42 +378,7 @@ const updateOrganizationComplete = async (req, res) => {
                     }
                 }
             }
-            // 3. Accounting
-            const accountingResults = { created: [], updated: [], deleted: [] };
-            if (accounting && accounting.length > 0) {
-                for (const acc of accounting) {
-                    if (acc._action === 'delete' && acc.organization_accounting_id) {
-                        accountingResults.deleted.push(await tx.organizationAccounting.delete({ where: { organization_accounting_id: acc.organization_accounting_id } }));
-                    }
-                    else if (acc._action === 'update' && acc.organization_accounting_id) {
-                        const d = {};
-                        if (acc.account_type !== undefined)
-                            d.account_type = acc.account_type;
-                        if (acc.bank_name !== undefined)
-                            d.bank_name = acc.bank_name;
-                        if (acc.account_number !== undefined)
-                            d.account_number = acc.account_number;
-                        if (acc.routing_number !== undefined)
-                            d.routing_number = acc.routing_number;
-                        if (acc.country !== undefined)
-                            d.country = acc.country;
-                        accountingResults.updated.push(await tx.organizationAccounting.update({ where: { organization_accounting_id: acc.organization_accounting_id }, data: d }));
-                    }
-                    else {
-                        accountingResults.created.push(await tx.organizationAccounting.create({
-                            data: {
-                                organization_id: id,
-                                account_type: acc.account_type,
-                                bank_name: acc.bank_name,
-                                account_number: acc.account_number,
-                                routing_number: acc.routing_number,
-                                country: acc.country,
-                            },
-                        }));
-                    }
-                }
-            }
-            // 4. Addresses
+            // 3. Addresses
             const addressResults = { created: [], updated: [], deleted: [] };
             if (addresses && addresses.length > 0) {
                 for (const addr of addresses) {
@@ -578,7 +531,6 @@ const updateOrganizationComplete = async (req, res) => {
             return {
                 organization: updatedOrganization,
                 company_offices: officeResults,
-                accounting: accountingResults,
                 addresses: addressResults,
                 contacts: contactResults,
                 organization_users: orgUserResults,
@@ -589,7 +541,6 @@ const updateOrganizationComplete = async (req, res) => {
             where: { organization_id: id },
             include: {
                 company_offices: true,
-                accounting: true,
                 addresses: true,
                 contacts: {
                     include: {
@@ -627,11 +578,6 @@ const updateOrganizationComplete = async (req, res) => {
                     created: result.company_offices.created.length,
                     updated: result.company_offices.updated.length,
                     deleted: result.company_offices.deleted.length,
-                },
-                accounting: {
-                    created: result.accounting.created.length,
-                    updated: result.accounting.updated.length,
-                    deleted: result.accounting.deleted.length,
                 },
                 addresses: {
                     created: result.addresses.created.length,

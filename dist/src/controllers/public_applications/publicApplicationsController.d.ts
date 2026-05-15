@@ -94,6 +94,7 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
         week_duration: import(".prisma/client").$Enums.WeekDurationType;
         rate_type: import(".prisma/client").$Enums.RateType;
         paycom_position: string | null;
+        workers_comp_codes: import("@prisma/client/runtime/library").JsonValue | null;
     };
     documents: {
         created_at: Date;
@@ -110,8 +111,8 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
             city: string | null;
             state: string | null;
             zip: string | null;
-            country: string | null;
             work_phone: string | null;
+            country: string | null;
             address: string | null;
             applicant_id: string;
             applicant_contact_id: string;

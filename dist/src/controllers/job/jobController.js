@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.jobController = void 0;
+const client_1 = require("@prisma/client");
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const crudFactory_1 = require("../../factories/crudFactory");
 const schemas_1 = require("../../validators/schemas");
@@ -1034,6 +1035,11 @@ const updateJobCompleteSchema = zod_1.z.object({
     week_duration: zod_1.z.enum(['MON_SUN', 'SUN_SAT', 'SAT_FRI']).optional(),
     rate_type: zod_1.z.enum(['HOURLY', 'SALARY', 'DAILY']).optional(),
     paycom_position: zod_1.z.string().optional().nullable(),
+    workers_comp_codes: zod_1.z.array(zod_1.z.object({
+        code: zod_1.z.string().min(1),
+        description: zod_1.z.string().optional(),
+        pct: zod_1.z.number().min(0).max(100),
+    })).min(1).optional().nullable(),
     // Related entities
     job_detail: jobDetailUpdateSchema.optional(),
     job_notes: zod_1.z.array(jobNoteUpdateSchema).optional(),
@@ -1059,7 +1065,7 @@ const updateJobComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, start_date, end_date, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, interview_rounds, job_detail, job_notes, job_rates, job_owners, open_date, contract_duration, address, city, state, manager_last_contacted, job_branch, job_category, custom_job_id, po_number, po_amount, withhold_emails, invoice_with_hours, time_capture, pay_period, week_duration, rate_type, paycom_position, } = validation.data;
+        const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, start_date, end_date, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, interview_rounds, job_detail, job_notes, job_rates, job_owners, open_date, contract_duration, address, city, state, manager_last_contacted, job_branch, job_category, custom_job_id, po_number, po_amount, withhold_emails, invoice_with_hours, time_capture, pay_period, week_duration, rate_type, paycom_position, workers_comp_codes, } = validation.data;
         // Check if job exists
         const existingJob = await prisma_config_1.default.job.findUnique({
             where: { job_id: id },
@@ -1259,6 +1265,8 @@ const updateJobComplete = async (req, res) => {
                 jobUpdateData.rate_type = rate_type;
             if (paycom_position !== undefined)
                 jobUpdateData.paycom_position = paycom_position;
+            if (workers_comp_codes !== undefined)
+                jobUpdateData.workers_comp_codes = workers_comp_codes ?? client_1.Prisma.JsonNull;
             const updatedJob = Object.keys(jobUpdateData).length > 0
                 ? await tx.job.update({
                     where: { job_id: id },

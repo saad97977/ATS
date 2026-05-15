@@ -12,6 +12,7 @@ import {
   sendAssignmentNotificationEmail
 } from '../../services/emailService';
 import { updateUserActivity } from '../../services/activityService';
+import { logApplicantCommunication } from '../applicant/applicantCommunicationController';
 import crypto from 'crypto';
 import { BlobServiceClient, ContainerClient } from '@azure/storage-blob';
 import multer from 'multer';
@@ -416,6 +417,24 @@ const createInterviewForPipeline = async (req: Request, res: Response) => {
       }).then((r) => {
         if (r.success) console.log(`✅ Round ${roundToSchedule} invitation email sent`, { interviewId: result.interview_id });
         else           console.error('❌ Failed to send invitation email', { error: r.error });
+        logApplicantCommunication({
+          applicant_id:       result.application.applicant.applicant_id,
+          application_id:     result.application_id,
+          communication_type: 'EMAIL',
+          direction:          'OUTBOUND',
+          trigger:            'AUTOMATIC',
+          status:             r.success ? 'SENT' : 'FAILED',
+          subject:            `Interview Invitation – Round ${roundToSchedule} - ${result.application.job.job_title}`,
+          to_address:         result.application.applicant.contact.email,
+          from_address:       process.env.SMTP_USER || 'noreply@company.com',
+          email_message_id:   r.messageId,
+          metadata: {
+            interview_id: result.interview_id,
+            round:        roundToSchedule,
+            total_rounds: totalRounds,
+            interview_type: interviewType,
+          },
+        });
       }).catch((e) => console.error('❌ Email error', e.message));
     } else {
       console.log('ℹ️ Skipping interview invitation email because job.withhold_emails is enabled', {
@@ -498,7 +517,22 @@ const updateInterviewDate = async (req: Request, res: Response) => {
         oldDate,
         newDate: updated.interview_date,
         location: updated.application.job.location,
-      }).then((r) => { if (!r.success) console.error('❌ Reschedule email failed:', r.error); })
+      }).then((r) => {
+        if (!r.success) console.error('❌ Reschedule email failed:', r.error);
+        logApplicantCommunication({
+          applicant_id:       updated.application.applicant_id,
+          application_id:     updated.application_id,
+          communication_type: 'EMAIL',
+          direction:          'OUTBOUND',
+          trigger:            'AUTOMATIC',
+          status:             r.success ? 'SENT' : 'FAILED',
+          subject:            `Interview Rescheduled - ${updated.application.job.job_title}`,
+          to_address:         aEmail,
+          from_address:       process.env.SMTP_USER || 'noreply@company.com',
+          email_message_id:   r.messageId,
+          metadata: { interview_id: interviewId },
+        });
+      })
         .catch((e) => console.error('❌ Reschedule email error:', e.message));
     } else if (aEmail) {
       console.log('ℹ️ Skipping reschedule email because job.withhold_emails is enabled', {
@@ -687,7 +721,22 @@ const rejectInterview = async (req: Request, res: Response) => {
         applicantName:    result.application.applicant.full_name,
         jobTitle:         result.application.job.job_title,
         organizationName: result.application.job.organization.name,
-      }).then((r) => { if (!r.success) console.error('❌ Rejection email failed:', r.error); })
+      }).then((r) => {
+        if (!r.success) console.error('❌ Rejection email failed:', r.error);
+        logApplicantCommunication({
+          applicant_id:       result.application.applicant.applicant_id,
+          application_id:     result.application_id,
+          communication_type: 'EMAIL',
+          direction:          'OUTBOUND',
+          trigger:            'AUTOMATIC',
+          status:             r.success ? 'SENT' : 'FAILED',
+          subject:            `Application Status - ${result.application.job.job_title}`,
+          to_address:         aEmail,
+          from_address:       process.env.SMTP_USER || 'noreply@company.com',
+          email_message_id:   r.messageId,
+          metadata: { interview_id: interviewId, reason: 'interview_rejected' },
+        });
+      })
         .catch((e) => console.error('❌ Rejection email error:', e.message));
     } else if (aEmail) {
       console.log('ℹ️ Skipping rejection email because job.withhold_emails is enabled', {
@@ -769,8 +818,22 @@ const acceptInterview = async (req: Request, res: Response) => {
           applicantName:    result.application.applicant.full_name,
           jobTitle:         result.application.job.job_title,
           organizationName: result.application.job.organization.name,
-        }).then((r) => { if (!r.success) console.error('❌ Offer email failed:', r.error); })
-          .catch((e) => console.error('❌ Offer email error:', e.message));
+        }).then((r) => {
+          if (!r.success) console.error('❌ Offer email failed:', r.error);
+          logApplicantCommunication({
+            applicant_id:       result.application.applicant.applicant_id,
+            application_id:     result.application_id,
+            communication_type: 'EMAIL',
+            direction:          'OUTBOUND',
+            trigger:            'AUTOMATIC',
+            status:             r.success ? 'SENT' : 'FAILED',
+            subject:            `Job Offer - ${result.application.job.job_title}`,
+            to_address:         aEmail,
+            from_address:       process.env.SMTP_USER || 'noreply@company.com',
+            email_message_id:   r.messageId,
+            metadata: { interview_id: interviewId, round: currentRound },
+          });
+        }).catch((e) => console.error('❌ Offer email error:', e.message));
       }
     } else if (isLastRound) {
       console.log('ℹ️ Skipping offer letter email because job.withhold_emails is enabled', {
@@ -1384,7 +1447,29 @@ const onboardCandidate = async (req: Request, res: Response) => {
       );
     }
 
-    Promise.all(emailPromises).catch(e =>
+    Promise.all(emailPromises).then(results => {
+      // Log the onboarding email to the applicant communication trail
+      if (!shouldWithholdEmails && aEmail) {
+        const onboardingResult = results[0];
+        logApplicantCommunication({
+          applicant_id:       result!.application.applicant_id,
+          application_id:     result!.application_id,
+          communication_type: 'EMAIL',
+          direction:          'OUTBOUND',
+          trigger:            'AUTOMATIC',
+          status:             onboardingResult?.success ? 'SENT' : 'FAILED',
+          subject:            `Welcome to ${orgName} - Onboarding for ${jobTitle}`,
+          to_address:         aEmail,
+          from_address:       process.env.SMTP_USER || 'noreply@company.com',
+          email_message_id:   onboardingResult?.messageId,
+          metadata: {
+            pipeline_stage_id: pipelineStageId,
+            employment_type,
+            start_date: startDate,
+          },
+        });
+      }
+    }).catch(e =>
       console.error('❌ One or more onboarding emails failed:', e.message)
     );
 

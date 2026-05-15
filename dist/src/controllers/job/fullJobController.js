@@ -128,6 +128,11 @@ const createJobCompleteSchema = zod_1.z.object({
     week_duration: zod_1.z.enum(['MON_SUN', 'SUN_SAT', 'SAT_FRI']).optional().default('MON_SUN'),
     rate_type: zod_1.z.enum(['HOURLY', 'SALARY', 'DAILY']).optional().default('HOURLY'),
     paycom_position: zod_1.z.string().optional(),
+    workers_comp_codes: zod_1.z.array(zod_1.z.object({
+        code: zod_1.z.string().min(1, 'Compensation code is required'),
+        description: zod_1.z.string().optional(),
+        pct: zod_1.z.number().min(0).max(100, 'Percentage must be between 0 and 100'),
+    })).min(1, "At least one workers' compensation code is required"),
     // Related entities
     job_detail: jobDetailSchema.optional(),
     job_notes: zod_1.z.array(jobNoteSchema).optional(),
@@ -151,7 +156,7 @@ const createJobComplete = async (req, res) => {
         }
         const { organization_id, manager_id, company_office_id, job_title, status, job_type, location, days_active, days_inactive, approved, start_date, end_date, created_by_user_id, max_positions, open_positions, resume_required, interview_Round1, interview_Round2, interview_rounds, job_detail, job_notes, job_rates, job_owners, 
         // ── NEW ──
-        open_date, contract_duration, address, city, state, manager_last_contacted, job_branch, job_category, custom_job_id, po_number, po_amount, withhold_emails, invoice_with_hours, time_capture, pay_period, week_duration, rate_type, paycom_position, } = validation.data;
+        open_date, contract_duration, address, city, state, manager_last_contacted, job_branch, job_category, custom_job_id, po_number, po_amount, withhold_emails, invoice_with_hours, time_capture, pay_period, week_duration, rate_type, paycom_position, workers_comp_codes, } = validation.data;
         // Check if organization exists
         const organizationExists = await prisma_config_1.default.organization.findUnique({
             where: { organization_id },
@@ -278,6 +283,7 @@ const createJobComplete = async (req, res) => {
                     week_duration,
                     rate_type,
                     paycom_position,
+                    workers_comp_codes,
                 },
             });
             // 2. Create JobDetail (if provided)

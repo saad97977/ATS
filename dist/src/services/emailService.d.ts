@@ -121,6 +121,19 @@ export declare const sendDocumentExpiryReminderEmail: (data: {
     messageId?: string;
     error?: string;
 }>;
+export declare const sendNewApplicationEmail: (data: {
+    managerEmail: string;
+    managerName: string;
+    applicantName: string;
+    applicantEmail: string;
+    jobTitle: string;
+    organizationName: string;
+    applicationId: string;
+}) => Promise<{
+    success: boolean;
+    messageId?: string;
+    error?: string;
+}>;
 declare const _default: {
     sendInterviewInvitationEmail: (data: {
         applicantEmail: string;
@@ -234,6 +247,19 @@ declare const _default: {
         expirationDate: Date;
         expirationReason?: string | null;
         daysLeft: number;
+    }) => Promise<{
+        success: boolean;
+        messageId?: string;
+        error?: string;
+    }>;
+    sendNewApplicationEmail: (data: {
+        managerEmail: string;
+        managerName: string;
+        applicantName: string;
+        applicantEmail: string;
+        jobTitle: string;
+        organizationName: string;
+        applicationId: string;
     }) => Promise<{
         success: boolean;
         messageId?: string;
