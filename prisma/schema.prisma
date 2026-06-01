@@ -1458,6 +1458,26 @@ enum PipelineStageName {
   PIPELINED
   INTERVIEWED
   ONBOARDED
+
+  // Active
+  ACTIVE                  @map("Active")
+  CONTACTED               @map("Contacted")
+  FOLLOWING_UP            @map("Following up")
+  PACKET_1_COMPLETE       @map("Packet 1_Complete")
+  QUALIFIED               @map("Qualified")
+  READY_TO_BE_SCREENED    @map("Ready to be Screened")
+  SCHEDULED_PHONE_SCREEN  @map("Scheduled Phone Screen")
+  UNDER_REVIEW            @map("Under Review")
+  QUALIFIED_HOSPITALITY   @map("Qualified: Hospitality")
+  ORIENTATION_SCHEDULED   @map("Orientation Scheduled")
+  ORIENTATION_COMPLETE    @map("Orientation Complete")
+
+  // Declined
+  LACK_OF_RESPONSE        @map("Lack of Response")
+  NO_SHOW_FOR_PI          @map("No Show for P/I")
+  NOT_A_FIT               @map("Not a fit")
+  PAY_SALARY              @map("Pay/Salary")
+  DECLINED_FROM_PIPELINE  @map("Declined from Pipeline")
 }
 
 enum EmploymentType {

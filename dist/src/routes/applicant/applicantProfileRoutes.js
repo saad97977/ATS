@@ -37,6 +37,10 @@ router.get('/jobs-dropdown', applicantProfileController_1.getJobsDropdown);
 //          employment_type_pref, work_authorization, office_name,
 //          sort_by, sort_dir, cursor
 router.get('/', applicantProfileController_1.listApplicants);
+// POST /api/applicants
+//   Create a new applicant with first_name + last_name as required identity.
+//   full_name is auto-derived. Email + phone required for deduplication.
+router.post('/', applicantProfileController_1.createApplicantProfile);
 // ════════════════════════════════════════════════════════════════════════════
 //  SINGLE APPLICANT — CORE PROFILE
 // ════════════════════════════════════════════════════════════════════════════

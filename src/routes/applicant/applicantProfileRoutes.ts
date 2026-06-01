@@ -3,6 +3,7 @@ import multer from 'multer';
 import {
   // Core profile
   listApplicants,
+  createApplicantProfile,
   getApplicantProfile,
   updateApplicantProfile,
   deleteApplicant,
@@ -81,6 +82,11 @@ router.get('/jobs-dropdown', getJobsDropdown);
 //          employment_type_pref, work_authorization, office_name,
 //          sort_by, sort_dir, cursor
 router.get('/', listApplicants);
+
+// POST /api/applicants
+//   Create a new applicant with first_name + last_name as required identity.
+//   full_name is auto-derived. Email + phone required for deduplication.
+router.post('/', createApplicantProfile);
 
 // ════════════════════════════════════════════════════════════════════════════
 //  SINGLE APPLICANT — CORE PROFILE

@@ -26,11 +26,67 @@ const generateBlobName = (applicantId: string, suffix: string, originalName: str
   return `${applicantId}/${suffix}/${ts}-${rand}-${safe}`;
 };
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+/** Build `full_name` from first + last, or fall back to the supplied full_name. */
+const buildFullName = (firstName?: string, lastName?: string, fallback?: string): string => {
+  const derived = [firstName, lastName].filter(Boolean).join(' ').trim();
+  return derived || fallback || '';
+};
+
 // ─── Validation Schemas ──────────────────────────────────────────────────────
+const createApplicantSchema = z.object({
+  // ── Primary identity (first + last are REQUIRED for new profiles) ────────
+  first_name:               z.string().min(1, 'First name is required'),
+  last_name:                z.string().min(1, 'Last name is required'),
+  full_name:                z.string().optional(), // auto-derived if omitted
+
+  headline:                 z.string().optional(),
+  notes:                    z.string().optional(),
+  comp_code_last:           z.string().max(4).optional(),
+  source:                   z.string().optional(),
+  is_us_citizen:            z.boolean().optional(),
+  employment_type_pref:     z.enum(['W2', '1099', 'C2C']).optional(),
+  first_impression:         z.enum(['A', 'B', 'C', 'D', 'F']).optional(),
+  add_to_hotlist:           z.boolean().optional(),
+  text_consent:             z.enum(['No Response', 'Yes', 'No']).optional(),
+  communication_preference: z.string().optional(),
+  is_optout:                z.boolean().optional(),
+  is_private:               z.boolean().optional(),
+  office_name:              z.string().optional(),
+  office_division:          z.enum(['SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN', 'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC']).optional(),
+  home_office:              z.string().optional(),
+  geo_code:                 z.string().optional(),
+  school_district:          z.string().optional(),
+
+  // Contact (email + phone required for deduplication)
+  email:       z.string().email('Valid email is required'),
+  phone:       z.string().min(7, 'Valid phone number is required'),
+  email2:      z.string().email().optional(),
+  work_phone:  z.string().optional(),
+  home_phone:  z.string().optional(),
+  address:     z.string().optional(),
+  city:        z.string().optional(),
+  state:       z.string().optional(),
+  zip:         z.string().optional(),
+  country:     z.string().optional(),
+
+  // Demographics
+  birth_date:            z.string().datetime().optional(),
+  gender:                z.string().optional(),
+  race:                  z.string().optional(),
+  disability:            z.string().optional(),
+  work_authorization:    z.string().optional(),
+  authorization_expiry:  z.string().datetime().optional(),
+
+  // Social
+  linkedin_url:   z.string().url().optional(),
+  portfolio_url:  z.string().url().optional(),
+});
+
 const updateApplicantSchema = z.object({
   full_name:                z.string().min(2).optional(),
-  first_name:               z.string().optional(),
-  last_name:                z.string().optional(),
+  first_name:               z.string().min(1).optional(),
+  last_name:                z.string().min(1).optional(),
   headline:                 z.string().optional(),
   notes:                    z.string().optional(),
   comp_code_last:           z.string().max(4).optional(),
@@ -268,6 +324,126 @@ export const listApplicants = async (req: Request, res: Response) => {
 };
 
 // ════════════════════════════════════════════════════════════════════════════
+//  1b. CREATE NEW APPLICANT (full profile in one shot)
+//      POST /api/applicantsprofiles
+//      Deduplicates by primary email — if an applicant with the same email
+//      already exists the endpoint returns 409 with the existing record.
+//      first_name + last_name are REQUIRED; full_name is derived from them.
+// ════════════════════════════════════════════════════════════════════════════
+export const createApplicantProfile = async (req: Request, res: Response) => {
+  try {
+    const validation = createApplicantSchema.safeParse(req.body);
+    if (!validation.success) {
+      return sendError(res, 'Validation failed', 400,
+        validation.error.issues.map(i => ({ field: i.path.join('.'), message: i.message }))
+      );
+    }
+    const data = validation.data;
+
+    // Always derive full_name from first + last (canonical source of truth)
+    const full_name = buildFullName(data.first_name, data.last_name, data.full_name);
+    if (!full_name) return sendError(res, 'Could not derive a valid full name', 400);
+
+    // ── Duplicate check by email ──────────────────────────────────────────────
+    const duplicate = await prisma.applicant.findFirst({
+      where: { contact: { email: data.email } },
+      select: { applicant_id: true, first_name: true, last_name: true, full_name: true },
+    });
+    if (duplicate) {
+      return sendError(
+        res,
+        `An applicant with email ${data.email} already exists`,
+        409,
+        [{ field: 'email', message: `Email already in use (applicant ID: ${duplicate.applicant_id})` }]
+      );
+    }
+
+    const hasDemographics = !!(
+      data.birth_date || data.gender || data.race ||
+      data.disability || data.work_authorization
+    );
+
+    const applicant = await prisma.applicant.create({
+      data: {
+        first_name:               data.first_name,
+        last_name:                data.last_name,
+        full_name,
+        headline:                 data.headline,
+        source:                   data.source ?? 'INTERNAL',
+        is_us_citizen:            data.is_us_citizen,
+        employment_type_pref:     data.employment_type_pref as any,
+        first_impression:         data.first_impression as any,
+        add_to_hotlist:           data.add_to_hotlist ?? false,
+        notes:                    data.notes,
+        comp_code_last:           data.comp_code_last,
+        status:                   'APPLIED',
+        text_consent:             data.text_consent ?? 'No Response',
+        communication_preference: data.communication_preference,
+        is_optout:                data.is_optout ?? false,
+        is_private:               data.is_private ?? false,
+        office_name:              data.office_name,
+        office_division:          data.office_division as any,
+        home_office:              data.home_office,
+        geo_code:                 data.geo_code,
+        school_district:          data.school_district,
+
+        contact: {
+          create: {
+            email:      data.email,
+            email2:     data.email2,
+            phone:      data.phone,
+            work_phone: data.work_phone,
+            home_phone: data.home_phone,
+            address:    data.address,
+            city:       data.city,
+            state:      data.state,
+            zip:        data.zip,
+            country:    data.country,
+          },
+        },
+
+        ...(hasDemographics && {
+          demographic: {
+            create: {
+              birth_date:           data.birth_date            ? new Date(data.birth_date)            : null,
+              gender:               data.gender,
+              race:                 data.race,
+              disability:           data.disability,
+              work_authorization:   data.work_authorization,
+              authorization_expiry: data.authorization_expiry  ? new Date(data.authorization_expiry)  : null,
+            },
+          },
+        }),
+      },
+      include: FULL_PROFILE_INCLUDE,
+    }) as any;
+
+    // ── Social profiles (LinkedIn / Portfolio) ────────────────────────────────
+    const socialEntries: { profile_title: string; profile_link: string }[] = [];
+    if (data.linkedin_url)  socialEntries.push({ profile_title: 'LinkedIn',  profile_link: data.linkedin_url  });
+    if (data.portfolio_url) socialEntries.push({ profile_title: 'Portfolio', profile_link: data.portfolio_url });
+    if (socialEntries.length > 0) {
+      await prisma.applicantSocialProfiles.createMany({
+        data: socialEntries.map(e => ({ applicant_id: applicant.applicant_id, ...e })),
+        skipDuplicates: true,
+      });
+    }
+
+    // Re-fetch to return the final, fully populated profile
+    const created = await prisma.applicant.findUnique({
+      where:   { applicant_id: applicant.applicant_id },
+      include: FULL_PROFILE_INCLUDE,
+    }) as any;
+
+    return sendSuccess(res, { applicant: created, message: 'Applicant profile created successfully' }, 201);
+  } catch (err: any) {
+    console.error('createApplicantProfile error:', err);
+    if (err.code === 'P2002') return sendError(res, 'Email already exists for another applicant', 409);
+    return sendError(res, 'Failed to create applicant profile', 500);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════════════════
 //  2. GET SINGLE APPLICANT FULL PROFILE
 //     GET /api/applicantprofiles/applicants/:applicantId
 //     Returns core profile: contact, demographics, social, documents,
@@ -350,6 +526,13 @@ export const updateApplicantProfile = async (req: Request, res: Response) => {
       'add_to_hotlist','text_consent','communication_preference','is_optout',
       'is_private','office_name','office_division','home_office','geo_code','school_district',
     ].forEach(f => { if ((data as any)[f] !== undefined) coreFields[f] = (data as any)[f]; });
+
+    // ── Auto-derive full_name when first or last name changes ─────────────────
+    const resolvedFirst = coreFields.first_name ?? existing.first_name ?? '';
+    const resolvedLast  = coreFields.last_name  ?? existing.last_name  ?? '';
+    if (coreFields.first_name !== undefined || coreFields.last_name !== undefined) {
+      coreFields.full_name = buildFullName(resolvedFirst, resolvedLast, coreFields.full_name ?? existing.full_name);
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.applicant.update({ where: { applicant_id: applicantId }, data: coreFields });
@@ -447,7 +630,7 @@ export const getApplicantStats = async (req: Request, res: Response) => {
   try {
     const { applicantId } = req.params;
 
-    const [applicant, applicationsByStatus, documentCount] = await Promise.all([
+    const [applicant, applicationsByStatus, documentCount, activeNominations] = await Promise.all([
       prisma.applicant.findUnique({
         where:  { applicant_id: applicantId },
         select: { applicant_id: true, full_name: true, last_active_at: true, created_at: true },
@@ -460,6 +643,35 @@ export const getApplicantStats = async (req: Request, res: Response) => {
       prisma.applicantDocument.count({
         where: { applicant_id: applicantId, application_id: null },
       }),
+      // Active nominations: all applications with latest pipeline stage, job and assignment info
+      prisma.application.findMany({
+        where:   { applicant_id: applicantId },
+        orderBy: { applied_at: 'desc' },
+        select: {
+          application_id: true,
+          status:         true,
+          source:         true,
+          applied_at:     true,
+          job: {
+            select: {
+              job_id:    true,
+              job_title: true,
+              job_type:  true,
+              city:      true,
+              state:     true,
+              organization: { select: { name: true } },
+            },
+          },
+          pipeline_stages: {
+            orderBy: { pipeline_date: 'desc' },
+            take:    1,
+            select: { stage_name: true, pipeline_date: true },
+          },
+          evaluations: { select: { ai_score: true } },
+          assignment:  { select: { assignment_id: true, start_date: true, end_date: true } },
+          _count: { select: { interviews: true, pipeline_stages: true } },
+        },
+      }) as any,
     ]);
 
     if (!applicant) return sendError(res, 'Applicant not found', 404);
@@ -479,6 +691,20 @@ export const getApplicantStats = async (req: Request, res: Response) => {
       document_count:     documentCount,
       last_active_at:     applicant.last_active_at,
       member_since:       applicant.created_at,
+      active_count:       activeNominations.length,
+      active_nominations: (activeNominations as any[]).map((a: any) => ({
+        application_id:       a.application_id,
+        status:               a.status,
+        source:               a.source,
+        applied_at:           a.applied_at,
+        job:                  a.job,
+        latest_stage:         a.pipeline_stages[0] ?? null,
+        ai_score:             (a.evaluations as any)?.ai_score ?? null,
+        has_assignment:       !!a.assignment,
+        assignment:           a.assignment,
+        interview_count:      a._count.interviews,
+        pipeline_stage_count: a._count.pipeline_stages,
+      })),
     });
   } catch (err: any) {
     console.error('getApplicantStats error:', err);

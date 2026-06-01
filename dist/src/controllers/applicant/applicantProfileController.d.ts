@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 export declare const listApplicants: (req: Request, res: Response) => Promise<void>;
+export declare const createApplicantProfile: (req: Request, res: Response) => Promise<void>;
 export declare const getApplicantProfile: (req: Request, res: Response) => Promise<void>;
 export declare const updateApplicantProfile: (req: Request, res: Response) => Promise<void>;
 export declare const deleteApplicant: (req: Request, res: Response) => Promise<void>;

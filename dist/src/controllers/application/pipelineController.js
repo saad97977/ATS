@@ -232,10 +232,15 @@ const createPipeline = async (req, res) => {
                 select: { pipeline_stage_id: true },
             });
             await tx.application.update({ where: { application_id }, data: { status: 'SCREENED' } });
-            await tx.applicant.update({
-                where: { applicant_id: application.applicant_id },
-                data: { status: 'SHORTLISTED' },
-            });
+            // Only advance applicant status to SHORTLISTED if they haven't already progressed
+            // further (e.g. PLACED from a prior onboarding). This prevents regressing a
+            // currently-placed applicant who is being considered for a second position.
+            if (application.applicant.status === 'APPLIED') {
+                await tx.applicant.update({
+                    where: { applicant_id: application.applicant_id },
+                    data: { status: 'SHORTLISTED' },
+                });
+            }
             return ps.pipeline_stage_id;
         });
         const result = await prisma_config_1.default.pipelineStage.findUnique({
@@ -342,7 +347,9 @@ const createInterviewForPipeline = async (req, res) => {
                 },
                 select: { interview_id: true },
             });
-            if (roundToSchedule === 1) {
+            if (roundToSchedule === 1 && pipelineStage.application.applicant.status !== 'PLACED') {
+                // Only advance to INTERVIEWING if not already PLACED in another active assignment.
+                // A placed applicant re-entering the pipeline for a second job keeps their PLACED status.
                 await tx.applicant.update({
                     where: { applicant_id: pipelineStage.application.applicant_id },
                     data: { status: 'INTERVIEWING' },

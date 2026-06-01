@@ -30,9 +30,10 @@ const generateBlobName = (applicantId, applicationId, originalName) => {
 const submitApplicationSchema = zod_1.z.object({
     // job_id is now OPTIONAL — omit to do a profile-only upsert
     job_id: zod_1.z.string().uuid('Valid job ID is required').optional(),
-    first_name: zod_1.z.string().optional(),
-    last_name: zod_1.z.string().optional(),
-    full_name: zod_1.z.string().min(2, 'Full name must be at least 2 characters'),
+    // ── Identity: first + last are primary; full_name is auto-derived ──────────
+    first_name: zod_1.z.string().min(1, 'First name is required'),
+    last_name: zod_1.z.string().min(1, 'Last name is required'),
+    full_name: zod_1.z.string().optional(), // derived from first+last if omitted
     email: zod_1.z.string().email('Valid email is required'),
     phone: zod_1.z.string().min(10, 'Valid phone number is required'),
     email2: zod_1.z.string().email().optional(),
@@ -101,16 +102,22 @@ const submitApplicationSchema = zod_1.z.object({
         to_date: zod_1.z.string().datetime().optional(),
     })).optional()),
 });
+// ── Shared: build full_name from first+last (canonical derivation) ───────────
+const buildFullName = (first, last, fallback) => {
+    const derived = [first, last].filter(Boolean).join(' ').trim();
+    return derived || fallback || '';
+};
 // ── Shared: upsert applicant inside a transaction ────────────────────────────
 // Returns the applicant record. Works the same whether or not a job_id is present.
 async function upsertApplicant(tx, data, existingApplicant) {
+    const full_name = buildFullName(data.first_name, data.last_name, data.full_name);
     const hasDemographics = !!(data.birth_date || data.gender || data.race ||
         data.disability || data.work_authorization);
     if (!existingApplicant) {
         // ── NEW APPLICANT ──────────────────────────────────────────────────────
         return tx.applicant.create({
             data: {
-                full_name: data.full_name,
+                full_name,
                 first_name: data.first_name,
                 last_name: data.last_name,
                 headline: data.headline,
@@ -194,9 +201,9 @@ async function upsertApplicant(tx, data, existingApplicant) {
             where: { applicant_id: existingApplicant.applicant_id },
             data: {
                 last_active_at: new Date(),
-                full_name: data.full_name,
-                ...(data.first_name && { first_name: data.first_name }),
-                ...(data.last_name && { last_name: data.last_name }),
+                full_name,
+                first_name: data.first_name,
+                last_name: data.last_name,
                 ...(data.headline !== undefined && { headline: data.headline }),
                 ...(data.is_us_citizen !== undefined && { is_us_citizen: data.is_us_citizen }),
                 ...(data.employment_type_pref && { employment_type_pref: data.employment_type_pref }),
@@ -476,7 +483,8 @@ const submitApplication = async (req, res) => {
         if (job.manager) {
             const manager = job.manager;
             const applicationId = result.application.application_id;
-            const applicantName = completeApplication?.applicant?.full_name ?? data.full_name;
+            const derivedFull = [data.first_name, data.last_name].filter(Boolean).join(' ').trim();
+            const applicantName = completeApplication?.applicant?.full_name ?? derivedFull;
             const applicantEmail = completeApplication?.applicant?.contact?.email ?? data.email;
             const orgName = job.organization.name;
             // Internal notification via activity log

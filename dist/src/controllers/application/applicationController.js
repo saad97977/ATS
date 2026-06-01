@@ -41,10 +41,16 @@ const getAllApplications = async (req, res) => {
         const page = Math.max(1, parseInt(req.query.page) || 1);
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
         const skip = (page - 1) * limit;
+        const statusFilter = req.query.status;
+        const fetchAll = req.query.all === 'true';
+        const whereClause = {};
+        if (statusFilter)
+            whereClause.status = statusFilter;
         const [applications, total] = await Promise.all([
             prisma_config_1.default.application.findMany({
-                skip,
-                take: limit,
+                where: whereClause,
+                skip: fetchAll ? undefined : skip,
+                take: fetchAll ? undefined : limit,
                 orderBy: { applied_at: 'desc' },
                 include: {
                     job: {
@@ -84,16 +90,13 @@ const getAllApplications = async (req, res) => {
                     },
                 },
             }),
-            prisma_config_1.default.application.count(),
+            prisma_config_1.default.application.count({ where: whereClause }),
         ]);
         return (0, response_1.sendSuccess)(res, {
             data: applications,
-            paging: {
-                total,
-                page,
-                limit,
-                totalPages: Math.ceil(total / limit),
-            },
+            paging: fetchAll
+                ? { total: applications.length, page: 1, limit: applications.length, totalPages: 1 }
+                : { total, page, limit, totalPages: Math.ceil(total / limit) },
         });
     }
     catch (err) {
