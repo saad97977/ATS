@@ -28,6 +28,7 @@ import applicantReferencesRoutes from './routes/applicant/applicantReferencesRou
 import applicantSocialProfilesRoutes from './routes/applicant/applicantSocialProfilesRoutes';
 import applicantDocumentsRoutes from './routes/applicant/applicantDocumentsRoutes';
 import organizationContractorRoutes from './routes/organization/organizationContractRoutes';
+import organizationFiltersRoutes from './routes/organization/organizationFiltersRoutes';
 import applicationRoutes from './routes/application/applicationRoutes';
 import interviewRoutes from './routes/application/interviewRoutes';
 import assignmentRoutes from './routes/application/assignmentRoutes';
@@ -161,6 +162,7 @@ app.use('/api/organization-documents', organizationDocumentRoutes);
 app.use('/api/organization-document-signatures', organizationDocumentSignatureRoutes);
 app.use('/api/company-offices', companyOfficeRoutes);
 app.use('/api/organization-contracts', organizationContractorRoutes);
+app.use('/api/organizations', organizationFiltersRoutes);
 
 
 // Contact Activity routes of Organization
