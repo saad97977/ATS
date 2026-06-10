@@ -27,6 +27,7 @@ router.use(authenticateToken);
  */
 
 // Statistics and overview routes
+router.patch('/:pipelineStageId/stage', pipelineController.updatePipelineStageManually);
 router.get('/search', pipelineController.searchPipelinedApplicants);
 router.get('/filter-by-interview-status', pipelineController.getPipelineByInterviewStatus);
 router.get('/stats', pipelineController.getPipelineStats);
