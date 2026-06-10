@@ -18,6 +18,27 @@ const multer_1 = __importDefault(require("multer"));
 // TIMEZONE CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
 const TIMEZONE_OFFSET_HOURS = -5; // informational only
+const ALL_VALID_STAGE_FILTER_VALUES = new Set([
+    'PIPELINED',
+    'INTERVIEWED',
+    'ONBOARDED',
+    'ACTIVE',
+    'CONTACTED',
+    'FOLLOWING_UP',
+    'PACKET_1_COMPLETE',
+    'QUALIFIED',
+    'READY_TO_BE_SCREENED',
+    'SCHEDULED_PHONE_SCREEN',
+    'UNDER_REVIEW',
+    'QUALIFIED_HOSPITALITY',
+    'ORIENTATION_SCHEDULED',
+    'ORIENTATION_COMPLETE',
+    'LACK_OF_RESPONSE',
+    'NO_SHOW_FOR_PI',
+    'NOT_A_FIT',
+    'PAY_SALARY',
+    'DECLINED_FROM_PIPELINE',
+]);
 // Base CRUD methods
 const baseCrudMethods = (0, crudFactory_1.createCrudController)({
     model: prisma_config_1.default.pipelineStage,
@@ -176,7 +197,7 @@ const getAllPipelineStages = async (req, res) => {
         const skip = (page - 1) * limit;
         const stage = req.query.stage;
         const whereClause = {};
-        if (stage && ['PIPELINED', 'INTERVIEWED', 'ONBOARDED'].includes(stage.toUpperCase())) {
+        if (stage && ALL_VALID_STAGE_FILTER_VALUES.has(stage.toUpperCase())) {
             whereClause.stage_name = stage.toUpperCase();
         }
         const [pipelineStages, total] = await Promise.all([
@@ -828,7 +849,7 @@ const getPipelineByJob = async (req, res) => {
         const skip = (page - 1) * limit;
         const stage = req.query.stage;
         const whereClause = { application: { job_id: jobId } };
-        if (stage && ['PIPELINED', 'INTERVIEWED', 'ONBOARDED'].includes(stage.toUpperCase())) {
+        if (stage && ALL_VALID_STAGE_FILTER_VALUES.has(stage.toUpperCase())) {
             whereClause.stage_name = stage.toUpperCase();
         }
         const [pipelineStages, total] = await Promise.all([
@@ -1367,6 +1388,131 @@ const onboardCandidate = async (req, res) => {
     }
 };
 // ─────────────────────────────────────────────────────────────────────────────
+// UPDATE PIPELINE STAGE MANUALLY
+// PATCH /api/pipeline/:pipelineStageId/stage
+//
+// Allows HR to manually set a pipeline stage to any valid PipelineStageName.
+// Restricted stages (INTERVIEWED, ONBOARDED) cannot be set manually —
+// those are system-controlled via interview/onboard flows.
+//
+// Body: { stage_name: PipelineStageName }
+// ─────────────────────────────────────────────────────────────────────────────
+const MANUALLY_SETTABLE_STAGES = new Set([
+    // Active group
+    'ACTIVE',
+    'CONTACTED',
+    'FOLLOWING_UP',
+    'PACKET_1_COMPLETE',
+    'QUALIFIED',
+    'READY_TO_BE_SCREENED',
+    'SCHEDULED_PHONE_SCREEN',
+    'UNDER_REVIEW',
+    'QUALIFIED_HOSPITALITY',
+    'ORIENTATION_SCHEDULED',
+    'ORIENTATION_COMPLETE',
+    // Declined group
+    'LACK_OF_RESPONSE',
+    'NO_SHOW_FOR_PI',
+    'NOT_A_FIT',
+    'PAY_SALARY',
+    'DECLINED_FROM_PIPELINE',
+    // Base stage — allow moving back to pipelined manually if needed
+    'PIPELINED',
+]);
+// Human-readable labels for each stage value — used in activity logs
+const STAGE_LABELS = {
+    ACTIVE: 'Active',
+    CONTACTED: 'Contacted',
+    FOLLOWING_UP: 'Following up',
+    PACKET_1_COMPLETE: 'Packet 1_Complete',
+    QUALIFIED: 'Qualified',
+    READY_TO_BE_SCREENED: 'Ready to be Screened',
+    SCHEDULED_PHONE_SCREEN: 'Scheduled Phone Screen',
+    UNDER_REVIEW: 'Under Review',
+    QUALIFIED_HOSPITALITY: 'Qualified: Hospitality',
+    ORIENTATION_SCHEDULED: 'Orientation Scheduled',
+    ORIENTATION_COMPLETE: 'Orientation Complete',
+    LACK_OF_RESPONSE: 'Lack of Response',
+    NO_SHOW_FOR_PI: 'No Show for P/I',
+    NOT_A_FIT: 'Not a fit',
+    PAY_SALARY: 'Pay/Salary',
+    DECLINED_FROM_PIPELINE: 'Declined from Pipeline',
+    PIPELINED: 'Pipelined',
+    INTERVIEWED: 'Interviewed',
+    ONBOARDED: 'Onboarded',
+};
+const updatePipelineStageManually = async (req, res) => {
+    try {
+        const { pipelineStageId } = req.params;
+        const { stage_name } = req.body;
+        // ── 1. Validate payload ────────────────────────────────────────────────
+        if (!stage_name || typeof stage_name !== 'string') {
+            return (0, response_1.sendError)(res, 'stage_name is required', 400);
+        }
+        const normalised = stage_name.trim().toUpperCase();
+        if (!MANUALLY_SETTABLE_STAGES.has(normalised)) {
+            return (0, response_1.sendError)(res, `Invalid or non-editable stage: "${stage_name}". ` +
+                `Stages INTERVIEWED and ONBOARDED are system-controlled.`, 400);
+        }
+        // ── 2. Fetch current stage ─────────────────────────────────────────────
+        const existing = await prisma_config_1.default.pipelineStage.findUnique({
+            where: { pipeline_stage_id: pipelineStageId },
+            include: {
+                application: {
+                    select: {
+                        application_id: true,
+                        applicant: { select: { applicant_id: true, full_name: true } },
+                        job: { select: { job_id: true, job_title: true } },
+                    },
+                },
+            },
+        });
+        if (!existing)
+            return (0, response_1.sendError)(res, 'Pipeline stage not found', 404);
+        // ── 3. Guard: never allow overwriting system-set stages ───────────────
+        //    INTERVIEWED / ONBOARDED are locked once set by the system.
+        if (existing.stage_name === 'INTERVIEWED' ||
+            existing.stage_name === 'ONBOARDED') {
+            return (0, response_1.sendError)(res, `Cannot manually change a stage that is already ${existing.stage_name}. ` +
+                `Use the dedicated interview/onboard endpoints.`, 409);
+        }
+        // ── 4. No-op guard ─────────────────────────────────────────────────────
+        if (existing.stage_name.toUpperCase() === normalised) {
+            return (0, response_1.sendSuccess)(res, {
+                message: `Stage is already set to "${stage_name}". No change made.`,
+                data: existing,
+            });
+        }
+        // ── 5. Persist ─────────────────────────────────────────────────────────
+        const updated = await prisma_config_1.default.pipelineStage.update({
+            where: { pipeline_stage_id: pipelineStageId },
+            data: { stage_name: normalised }, // cast — Prisma enum sync lag
+            include: pipelineInclude,
+        });
+        // ── 6. Activity log ────────────────────────────────────────────────────
+        const userId = req.user?.user_id;
+        if (userId) {
+            await (0, activityService_1.updateUserActivity)(userId, {
+                action_type: 'UPDATE',
+                entity_type: 'PIPELINE_STAGE',
+                entity_id: pipelineStageId,
+                entity_name: `Stage updated to "${STAGE_LABELS[normalised] ?? normalised}" ` +
+                    `for ${existing.application.applicant.full_name} — ` +
+                    `${existing.application.job.job_title}`,
+                timestamp: new Date().toISOString(),
+            });
+        }
+        return (0, response_1.sendSuccess)(res, {
+            message: `Pipeline stage updated to "${STAGE_LABELS[normalised] ?? normalised}"`,
+            data: reshapePipelineStage(updated),
+        });
+    }
+    catch (err) {
+        console.error('Error updating pipeline stage manually:', err);
+        return (0, response_1.sendError)(res, 'Failed to update pipeline stage', 500);
+    }
+};
+// ─────────────────────────────────────────────────────────────────────────────
 // EXPORT
 // ─────────────────────────────────────────────────────────────────────────────
 exports.pipelineController = {
@@ -1388,5 +1534,6 @@ exports.pipelineController = {
     getPipelineByInterviewStatus,
     searchPipelinedApplicants,
     uploadOnboardingDocs: exports.uploadOnboardingDocs,
+    updatePipelineStageManually
 };
 //# sourceMappingURL=pipelineController.js.map

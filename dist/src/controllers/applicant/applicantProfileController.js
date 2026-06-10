@@ -236,15 +236,17 @@ const listApplicants = async (req, res) => {
                         select: { work_authorization: true },
                     },
                     _count: { select: { applications: true } },
-                    // Latest application snippet for the table row
+                    // Latest application snippets for the table row (up to 5)
                     applications: {
                         orderBy: { applied_at: 'desc' },
-                        take: 1,
+                        take: 5,
                         select: {
+                            application_id: true,
                             status: true,
                             applied_at: true,
                             job: {
                                 select: {
+                                    job_id: true,
                                     job_title: true,
                                     organization: { select: { name: true } },
                                 },

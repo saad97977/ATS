@@ -28,6 +28,7 @@ router.use(authMiddleware_1.authenticateToken);
  * DELETE /api/pipeline/:id                          - Delete pipeline stage
  */
 // Statistics and overview routes
+router.patch('/:pipelineStageId/stage', pipelineController_1.pipelineController.updatePipelineStageManually);
 router.get('/search', pipelineController_1.pipelineController.searchPipelinedApplicants);
 router.get('/filter-by-interview-status', pipelineController_1.pipelineController.getPipelineByInterviewStatus);
 router.get('/stats', pipelineController_1.pipelineController.getPipelineStats);

@@ -19,5 +19,6 @@ export declare const pipelineController: {
     getPipelineByInterviewStatus: (req: Request, res: Response) => Promise<void>;
     searchPipelinedApplicants: (req: Request, res: Response) => Promise<void>;
     uploadOnboardingDocs: import("express").RequestHandler<import("express-serve-static-core").ParamsDictionary, any, any, import("qs").ParsedQs, Record<string, any>>;
+    updatePipelineStageManually: (req: Request, res: Response) => Promise<void>;
 };
 //# sourceMappingURL=pipelineController.d.ts.map

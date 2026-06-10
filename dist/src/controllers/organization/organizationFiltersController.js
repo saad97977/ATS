@@ -348,9 +348,17 @@ const getOrganizationApplicants = async (req, res) => {
                             skill_sets: true,
                         },
                     },
-                    // Applications scoped to THIS org only
+                    // Total application count (this org) — uses DB count, not array length
+                    _count: {
+                        select: {
+                            applications: { where: { job: { organization_id: id } } },
+                        },
+                    },
+                    // Latest 5 applications scoped to THIS org (for chip display only)
                     applications: {
                         where: { job: { organization_id: id } },
+                        take: 5,
+                        orderBy: { applied_at: 'desc' },
                         select: {
                             application_id: true,
                             status: true,
@@ -376,7 +384,6 @@ const getOrganizationApplicants = async (req, res) => {
                                 },
                             },
                         },
-                        orderBy: { applied_at: 'desc' },
                     },
                     // Latest resume document
                     documents: {
@@ -409,7 +416,7 @@ const getOrganizationApplicants = async (req, res) => {
             skills: a.classification?.skill_sets ?? [],
             resume_url: a.documents[0]?.file_url ?? null,
             // Applications summary for this org
-            application_count: a.applications.length,
+            application_count: a._count.applications,
             applications: a.applications.map((app) => ({
                 application_id: app.application_id,
                 status: app.status,
