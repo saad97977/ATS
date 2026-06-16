@@ -106,6 +106,79 @@ const baseCrudMethods = createCrudController({
 });
 
 /**
+ * GET /api/tasks
+ * Override default readAll to include assigned_to and created_by user info
+ */
+const getAllTasks = async (req: Request, res: Response) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+
+    const [tasks, total] = await Promise.all([
+      prisma.task.findMany({
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          assigned_to: {
+            select: { user_id: true, name: true, email: true },
+          },
+          created_by: {
+            select: { user_id: true, name: true, email: true },
+          },
+        },
+      }),
+      prisma.task.count(),
+    ]);
+
+    return sendSuccess(res, {
+      data: tasks,
+      paging: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    console.error('Error fetching tasks:', err);
+    return sendError(res, 'Failed to fetch tasks', 500);
+  }
+};
+
+/**
+ * GET /api/tasks/:id
+ * Override default read to include assigned_to and created_by user info
+ */
+const getTaskById = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const task = await prisma.task.findUnique({
+      where: { task_id: id },
+      include: {
+        assigned_to: {
+          select: { user_id: true, name: true, email: true },
+        },
+        created_by: {
+          select: { user_id: true, name: true, email: true },
+        },
+      },
+    });
+
+    if (!task) {
+      return sendError(res, 'Task not found', 404);
+    }
+
+    return sendSuccess(res, task);
+  } catch (err: any) {
+    console.error('Error fetching task:', err);
+    return sendError(res, 'Failed to fetch task', 500);
+  }
+};
+
+/**
  * GET /api/tasks/filter
  * ─────────────────────────────────────────────────────────────────────────
  * Get tasks with advanced filtering by status, creator, or assigned user
@@ -162,11 +235,20 @@ const getFilteredTasks = async (req: Request, res: Response) => {
         skip,
         take: limit,
         orderBy: { created_at: 'desc' },
+        include: {
+          assigned_to: {
+            select: { user_id: true, name: true, email: true },
+          },
+          created_by: {
+            select: { user_id: true, name: true, email: true },
+          },
+        },
       }),
       prisma.task.count({
         where: whereClause,
       }),
     ]);
+
 
     return sendSuccess(res, {
       data: tasks,
@@ -405,6 +487,8 @@ const getTaskStats = async (req: Request, res: Response) => {
 //   - getTaskStats: GET /api/tasks/stats (custom)
 export const TasksController = {
   ...baseCrudMethods,
+  getAll: getAllTasks, // Override default readAll
+  getById: getTaskById, // Override default read
   getFilteredTasks, // Custom filter API
   getUpcomingTasks, // Upcoming tasks API
   getTaskStats, // Bonus: Task statistics API

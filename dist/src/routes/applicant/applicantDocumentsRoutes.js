@@ -63,6 +63,14 @@ const handleMulterError = (err, req, res, next) => {
     }
     next();
 };
+// NEW: all documents for an applicant (paginated, with view/download links)
+// GET /api/applicant-documents/all
+router.get('/all', applicantDocumentsController_1.getApplicantAllDocuments);
+// View document inline (PDF/image)
+// GET /api/applicant-documents/:id/view
+router.get('/:id/view', applicantDocumentsController_1.viewApplicantDocument);
+// keep existing download route, just point at new handler (already imported)
+// router.get('/:id/download', downloadApplicantDocument);
 /**
  * Applicant Document Routes
  * Base path: /api/applicant-documents

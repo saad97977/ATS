@@ -8,6 +8,8 @@ import {
   getApplicantDocumentById,
   deleteApplicantDocument,
   getDocumentsByApplicantId,
+  getApplicantAllDocuments,
+  viewApplicantDocument,
 } from '../../controllers/applicant/applicantDocumentsController';
 
 const router = Router();
@@ -68,6 +70,20 @@ const handleMulterError = (err: any, req: any, res: any, next: any) => {
   }
   next();
 };
+
+
+
+// NEW: all documents for an applicant (paginated, with view/download links)
+// GET /api/applicant-documents/all
+router.get('/all', getApplicantAllDocuments);
+
+// View document inline (PDF/image)
+// GET /api/applicant-documents/:id/view
+router.get('/:id/view', viewApplicantDocument);
+
+// keep existing download route, just point at new handler (already imported)
+// router.get('/:id/download', downloadApplicantDocument);
+
 
 /**
  * Applicant Document Routes

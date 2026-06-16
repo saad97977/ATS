@@ -138,7 +138,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/user-activity', userActivityRoutes);
-app.use('/api/user-tasks', taskRoutes);
+app.use('/api/tasks', taskRoutes);
 app.use('/api/user-profile', userProfileRoutes);
 
 

@@ -120,7 +120,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/api/users', userRoutes_1.default);
 app.use('/api/user-activity', userActivityRoutes_1.default);
-app.use('/api/user-tasks', taskRoutes_1.default);
+app.use('/api/tasks', taskRoutes_1.default);
 app.use('/api/user-profile', userProfileRoutes_1.default);
 // Job routes
 app.use('/api/jobs', jobRoutes_1.default);

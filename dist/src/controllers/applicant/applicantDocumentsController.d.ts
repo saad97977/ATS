@@ -8,10 +8,6 @@ export declare const createApplicantDocumentWithFile: (req: Request, res: Respon
  */
 export declare const updateApplicantDocumentWithFile: (req: Request, res: Response) => Promise<void>;
 /**
- * Download Applicant Document from Azure Blob
- */
-export declare const downloadApplicantDocument: (req: Request, res: Response) => Promise<void>;
-/**
  * Get All Applicant Documents (without file data)
  */
 export declare const getAllApplicantDocuments: (req: Request, res: Response) => Promise<void>;
@@ -27,4 +23,14 @@ export declare const deleteApplicantDocument: (req: Request, res: Response) => P
  * Get All Documents by Applicant ID
  */
 export declare const getDocumentsByApplicantId: (req: Request, res: Response) => Promise<void>;
+export declare const viewApplicantDocument: (req: Request, res: Response) => Promise<void>;
+export declare const downloadApplicantDocument: (req: Request, res: Response) => Promise<void>;
+/**
+ * Get all applicants with their documents, paginated by applicant.
+ * Each applicant entry includes all of their documents (resume, cover letter,
+ * onboarding docs, etc.) with view/download links.
+ *
+ * GET /api/applicant-documents/all?page=&limit=&search=
+ */
+export declare const getApplicantAllDocuments: (req: Request, res: Response) => Promise<void>;
 //# sourceMappingURL=applicantDocumentsController.d.ts.map
