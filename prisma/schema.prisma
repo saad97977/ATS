@@ -768,6 +768,9 @@ model Applicant {
   applicant_tags       ApplicantTag[]               // ← NEW (rated tags)
   applications         Application[]
   communications       ApplicantCommunication[]
+  email_preferences    ApplicantEmailPreference[]
+
+
 
   @@map("applicants")
 }
@@ -1360,6 +1363,33 @@ model ApplicantCommunication {
 }
 
 
+
+model EmailAutomationRule {
+  rule_id        String          @id @default(uuid())
+  trigger_event  EmailTriggerEvent  // enum: INTERVIEW_SCHEDULED, INTERVIEW_RESCHEDULED, etc.
+  is_enabled     Boolean         @default(true)
+  email_subject_override  String?  // optional custom subject
+  created_at     DateTime        @default(now())
+  updated_at     DateTime        @updatedAt
+
+  @@map("email_automation_rules")
+}
+
+model ApplicantEmailPreference {
+  preference_id   String         @id @default(uuid())
+  applicant_id    String
+  trigger_event   EmailTriggerEvent
+  is_suppressed   Boolean        @default(false)  // true = don't send this type to this applicant
+  suppressed_at   DateTime?
+  suppressed_reason String?
+
+  applicant Applicant @relation(fields: [applicant_id],references: [applicant_id], onDelete: Cascade)
+  
+  @@unique([applicant_id, trigger_event])
+  @@map("applicant_email_preferences")
+}
+
+
 // ============================================
 // ENUMS
 // ============================================
@@ -1708,3 +1738,12 @@ enum CallOutcome {
   BUSY
 }
 
+
+enum EmailTriggerEvent {
+  INTERVIEW_SCHEDULED
+  INTERVIEW_RESCHEDULED
+  INTERVIEW_REJECTED
+  OFFER_LETTER_SENT
+  ONBOARDING_WELCOME
+  ASSIGNMENT_NOTIFICATION  // credit/rep user emails
+}

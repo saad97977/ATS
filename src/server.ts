@@ -48,7 +48,7 @@ import dashboardRoutes from './routes/dashboard/dashboardRoutes';
 import userProfileRoutes from './routes/user/userProfileRoutes';
 import jobCloneRoutes from './routes/job/jobCloneRoutes';
 import jobSubSectionRoutes from './routes/job/jobSubSectionRoutes';
-
+import emailAutomationRoutes from './routes/automation/automationRoutes';
 
 dotenv.config();
 
@@ -215,7 +215,10 @@ app.use('/api/public', publicRoutes);
 app.use('/organizations/complete', organizationCompleteRoutes);
 app.use('/jobs/complete', jobCompleteRoutes);
 
-    
+// Automation routes
+app.use('/api/email-automation', emailAutomationRoutes);
+
+
 // adding health endpoint for render:
 app.get('/health', (req, res) => {
   res.status(200).send('OK');
