@@ -134,6 +134,19 @@ export declare const sendNewApplicationEmail: (data: {
     messageId?: string;
     error?: string;
 }>;
+export declare const sendCustomStageEmail: ({ to, subject, body, }: {
+    to: string;
+    subject: string;
+    body: string;
+}) => Promise<{
+    success: boolean;
+    messageId: string;
+    error?: undefined;
+} | {
+    success: boolean;
+    error: any;
+    messageId?: undefined;
+}>;
 declare const _default: {
     sendInterviewInvitationEmail: (data: {
         applicantEmail: string;
@@ -175,6 +188,19 @@ declare const _default: {
         success: boolean;
         messageId?: string;
         error?: string;
+    }>;
+    sendCustomStageEmail: ({ to, subject, body, }: {
+        to: string;
+        subject: string;
+        body: string;
+    }) => Promise<{
+        success: boolean;
+        messageId: string;
+        error?: undefined;
+    } | {
+        success: boolean;
+        error: any;
+        messageId?: undefined;
     }>;
     sendOfferLetterEmail: (data: {
         applicantEmail: string;

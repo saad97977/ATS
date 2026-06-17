@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendNewApplicationEmail = exports.sendDocumentExpiryReminderEmail = exports.sendAssignmentNotificationEmail = exports.sendOnboardingWelcomeEmail = exports.verifyEmailConfiguration = exports.sendOfferLetterEmail = exports.sendInterviewRejectionEmail = exports.sendInterviewRescheduleEmail = exports.sendInterviewInvitationEmail = void 0;
+exports.sendCustomStageEmail = exports.sendNewApplicationEmail = exports.sendDocumentExpiryReminderEmail = exports.sendAssignmentNotificationEmail = exports.sendOnboardingWelcomeEmail = exports.verifyEmailConfiguration = exports.sendOfferLetterEmail = exports.sendInterviewRejectionEmail = exports.sendInterviewRescheduleEmail = exports.sendInterviewInvitationEmail = void 0;
 const nodemailer_1 = __importDefault(require("nodemailer"));
 /**
  * Email Service
@@ -606,10 +606,27 @@ Please log in to the ATS portal to review this application.
     }
 };
 exports.sendNewApplicationEmail = sendNewApplicationEmail;
+const sendCustomStageEmail = async ({ to, subject, body, }) => {
+    try {
+        const transporter = createTransporter();
+        const info = await transporter.sendMail({
+            from: process.env.SMTP_USER,
+            to,
+            subject,
+            html: body,
+        });
+        return { success: true, messageId: info.messageId };
+    }
+    catch (error) {
+        return { success: false, error: error.message };
+    }
+};
+exports.sendCustomStageEmail = sendCustomStageEmail;
 exports.default = {
     sendInterviewInvitationEmail: exports.sendInterviewInvitationEmail,
     sendInterviewRescheduleEmail: exports.sendInterviewRescheduleEmail,
     sendInterviewRejectionEmail: exports.sendInterviewRejectionEmail,
+    sendCustomStageEmail: exports.sendCustomStageEmail,
     sendOfferLetterEmail: exports.sendOfferLetterEmail,
     sendOnboardingWelcomeEmail: exports.sendOnboardingWelcomeEmail,
     sendAssignmentNotificationEmail: exports.sendAssignmentNotificationEmail,

@@ -55,6 +55,8 @@ model User {
   contact_representative OrganizationContact[] @relation("ContactRepresentative")
   created_templates JobTemplate[] @relation("TemplateCreatedBy")
   sent_communications ApplicantCommunication[] @relation("CommSentBy")
+  stage_automations  StageEmailAutomation[]  @relation("AutomationCreatedBy")
+
 
   @@index([email])
   @@map("users")
@@ -237,6 +239,8 @@ model Organization {
 
   representative        User?            @relation("OrganizationRepresentative", fields: [representative_id], references: [user_id])
   activities OrganizationActivity[]
+  stage_automations  StageEmailAutomation[]
+
 
 
 
@@ -565,6 +569,8 @@ model Job {
   contact_previews ContactPreview[]
   contact_jobs ContactJob[]
   job_templates JobTemplate[]
+  stage_automations  StageEmailAutomation[]
+
 
   @@index([created_by_user_id])
   @@index([organization_id])
@@ -1388,6 +1394,39 @@ model ApplicantEmailPreference {
   @@unique([applicant_id, trigger_event])
   @@map("applicant_email_preferences")
 }
+
+
+model StageEmailAutomation {
+  automation_id     String            @id @default(uuid())
+  organization_id   String
+  job_id            String?           // null = applies to all jobs in org
+  stage_name        PipelineStageName
+  is_enabled        Boolean           @default(true)
+
+  // Email content
+  email_subject     String
+  email_body        String            // HTML rich text
+  
+  // Attached document URLs (stored as JSON array of { name, url, blobName })
+  attachments       Json?             
+
+  created_by_user_id String
+  created_at        DateTime          @default(now())
+  updated_at        DateTime          @updatedAt
+
+  organization      Organization      @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  job               Job?              @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+  created_by        User              @relation("AutomationCreatedBy", fields: [created_by_user_id], references: [user_id])
+
+  @@index([organization_id])
+  @@index([job_id])
+  @@index([stage_name])
+  @@index([organization_id, stage_name])
+  @@map("stage_email_automations")
+}
+
+
+
 
 
 // ============================================

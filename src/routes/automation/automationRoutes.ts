@@ -1,8 +1,24 @@
 import { Router } from 'express';
 import { emailAutomationController } from '../../controllers/automation/automationController';
-// import { authenticateToken } from '../middleware/auth'; // uncomment if you use auth middleware
+import { authenticateToken } from '../../middleware/authMiddleware';
+import { stageAutomationController } from '../../controllers/automation/stageAutomationController';
+
+
+// whole on -> app.use('/api/email-automation', emailAutomationRoutes);
+
 
 const router = Router();
+
+// Apply authentication to all routes
+router.use(authenticateToken);
+
+router.get   ('/stage-automations',                stageAutomationController.getAllStageAutomations);
+router.post  ('/stage-automations',                stageAutomationController.createStageAutomation);
+router.patch ('/stage-automations/:automationId',  stageAutomationController.updateStageAutomation);
+router.patch ('/stage-automations/:automationId/toggle', stageAutomationController.toggleStageAutomation);
+router.delete('/stage-automations/:automationId',  stageAutomationController.deleteStageAutomation);
+
+
 
 // ── Global rules ──────────────────────────────────────────────────────────────
 // GET  /api/email-automation/rules          → list all 7 rules with current state

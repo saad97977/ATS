@@ -16,6 +16,8 @@ import { logApplicantCommunication } from '../applicant/applicantCommunicationCo
 import crypto from 'crypto';
 import { BlobServiceClient, ContainerClient } from '@azure/storage-blob';
 import multer from 'multer';
+import { fireStageAutomations } from '../automation/stageAutomationController';
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1752,6 +1754,23 @@ const updatePipelineStageManually = async (req: Request, res: Response) => {
       data:  { stage_name: normalised as any },   // cast — Prisma enum sync lag
       include: pipelineInclude,
     });
+
+    const appWithOrg = await prisma.application.findUnique({
+      where: { application_id: existing.application.application_id },
+      select: { job: { select: { job_id: true, organization_id: true } } },
+    });
+
+    if (appWithOrg) {
+      fireStageAutomations(
+        normalised,
+        existing.application.applicant.applicant_id,
+        existing.application.application_id,
+        appWithOrg.job.job_id,
+        appWithOrg.job.organization_id,
+      ).catch(e => console.error('Stage automation error:', e.message));
+    }
+
+  
 
     // ── 6. Activity log ────────────────────────────────────────────────────
     const userId = (req as any).user?.user_id;

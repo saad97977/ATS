@@ -14,6 +14,7 @@ const applicantCommunicationController_1 = require("../applicant/applicantCommun
 const crypto_1 = __importDefault(require("crypto"));
 const storage_blob_1 = require("@azure/storage-blob");
 const multer_1 = __importDefault(require("multer"));
+const stageAutomationController_1 = require("../automation/stageAutomationController");
 // ─────────────────────────────────────────────────────────────────────────────
 // TIMEZONE CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1547,6 +1548,13 @@ const updatePipelineStageManually = async (req, res) => {
             data: { stage_name: normalised }, // cast — Prisma enum sync lag
             include: pipelineInclude,
         });
+        const appWithOrg = await prisma_config_1.default.application.findUnique({
+            where: { application_id: existing.application.application_id },
+            select: { job: { select: { job_id: true, organization_id: true } } },
+        });
+        if (appWithOrg) {
+            (0, stageAutomationController_1.fireStageAutomations)(normalised, existing.application.applicant.applicant_id, existing.application.application_id, appWithOrg.job.job_id, appWithOrg.job.organization_id).catch(e => console.error('Stage automation error:', e.message));
+        }
         // ── 6. Activity log ────────────────────────────────────────────────────
         const userId = req.user?.user_id;
         if (userId) {

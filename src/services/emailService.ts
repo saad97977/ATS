@@ -739,10 +739,33 @@ Please log in to the ATS portal to review this application.
   }
 };
 
+
+export const sendCustomStageEmail = async ({
+  to, subject, body,
+}: {
+  to: string;
+  subject: string;
+  body: string;
+}) => {
+  try {
+    const transporter = createTransporter();
+    const info = await transporter.sendMail({
+      from:    process.env.SMTP_USER,
+      to,
+      subject,
+      html:    body,
+    });
+    return { success: true, messageId: info.messageId };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+};
+
 export default {
   sendInterviewInvitationEmail,
   sendInterviewRescheduleEmail,
   sendInterviewRejectionEmail,
+  sendCustomStageEmail,
   sendOfferLetterEmail,
   sendOnboardingWelcomeEmail,
   sendAssignmentNotificationEmail,
