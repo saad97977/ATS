@@ -169,32 +169,55 @@ export type EmailTriggerEvent =
 // Returns true  → send the email
 // Returns false → suppress the email
 // ─────────────────────────────────────────────────────────────────────────────
+// The DB enum (EmailTriggerEvent in schema.prisma) only has a single
+// "ASSIGNMENT_NOTIFICATION" value — it does NOT have separate CREDIT/REP
+// values. Our app-level type distinguishes them (so future code/logs can
+// tell which recipient triggered the check), but whenever we talk to
+// Prisma we must collapse both down to the one value that actually exists
+// in the database enum.
+const toDbTriggerEvent = (triggerEvent: EmailTriggerEvent): string => {
+  if (triggerEvent === 'ASSIGNMENT_NOTIFICATION_CREDIT' || triggerEvent === 'ASSIGNMENT_NOTIFICATION_REP') {
+    return 'ASSIGNMENT_NOTIFICATION';
+  }
+  return triggerEvent;
+};
+
 const shouldSendEmail = async (
   triggerEvent: EmailTriggerEvent,
   applicantId: string,
   job: { withhold_emails?: boolean | null } | null | undefined,
 ): Promise<boolean> => {
-  // Layer 1: legacy hard block
-  if (job?.withhold_emails === true) return false;
+  try {
+    // Layer 1: legacy hard block
+    if (job?.withhold_emails === true) return false;
 
-  // Layer 2: global automation rule
-  const rule = await (prisma as any).emailAutomationRule.findFirst({
-    where: { trigger_event: triggerEvent },
-  });
-  if (rule && !rule.is_enabled) return false;
+    const dbTriggerEvent = toDbTriggerEvent(triggerEvent);
 
-  // Layer 3: applicant-level preference
-  const pref = await (prisma as any).applicantEmailPreference.findFirst({
-    where: {
-      applicant_id:  applicantId,
-      trigger_event: triggerEvent,
-    },
-  });
+    // Layer 2: global automation rule
+    const rule = await (prisma as any).emailAutomationRule.findFirst({
+      where: { trigger_event: dbTriggerEvent },
+    });
+    if (rule && !rule.is_enabled) return false;
 
-  if (pref?.is_suppressed) return false;
+    // Layer 3: applicant-level preference
+    const pref = await (prisma as any).applicantEmailPreference.findFirst({
+      where: {
+        applicant_id:  applicantId,
+        trigger_event: dbTriggerEvent,
+      },
+    });
 
-  return true;
+    if (pref?.is_suppressed) return false;
+
+    return true;
+  } catch (err: any) {
+    // Never let a lookup failure here block or fail onboarding —
+    // just suppress this particular email and move on.
+    console.error(`⚠️ shouldSendEmail check failed for "${triggerEvent}" — suppressing this email`, err.message);
+    return false;
+  }
 };
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED INCLUDE FRAGMENT
@@ -1197,9 +1220,20 @@ export const uploadOnboardingDocs = multer({
   limits:  { fileSize: 20 * 1024 * 1024 },
 }).array('files', 20);
 
+// ── NEW: resolve which onboarding documents are required for this org/state/company-code/recipient combo ──
+const getRequiredOnboardingDocuments = async (organizationId: string) => {
+  const orgDocs = await prisma.organizationOnboardingDocument.findMany({
+    where: { organization_id: organizationId, is_required: true },
+    include: { template: true },
+  });
+
+  return orgDocs
+    .map(od => od.template)
+    .filter(t => t.is_active);
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
-const onboardCandidate = async (req: Request, res: Response) => {
-  try {
+const onboardCandidate = async (req: Request, res: Response) => {  try {
     const { pipelineStageId } = req.params;
 
     // ── 1. Parse body ──────────────────────────────────────────────────────────
@@ -1208,6 +1242,9 @@ const onboardCandidate = async (req: Request, res: Response) => {
       ssn, filing_status, additional_withholding,
       exempt_from_federal, exempt_from_state,
       work_state, resident_state,
+      // ── NEW ──
+      employee_number, local_tax_jurisdiction, local_tax_rate, exempt_from_local,
+      flsa_status,
     } = req.body;
 
     let workersCompCodes: Array<{ code: string; description?: string; pct: number }> = [];
@@ -1224,10 +1261,47 @@ const onboardCandidate = async (req: Request, res: Response) => {
       return sendError(res, 'Invalid company_codes format — expected JSON array', 400);
     }
 
-    const files           = (req as any).files as Express.Multer.File[] ?? [];
-    const documentNames   = [req.body.document_names   ?? []].flat() as string[];
-    const documentTypes   = [req.body.document_types   ?? []].flat() as string[];
-    const sendToCandidate = [req.body.send_to_candidate ?? []].flat() as string[];
+    // ── NEW: bank accounts, benefit deductions, garnishments ──
+    let bankAccounts: Array<{
+      bank_name: string; account_type?: string; routing_number: string;
+      account_number: string; amount?: number; amount_type?: string; is_active?: boolean;
+    }> = [];
+    try {
+      bankAccounts = JSON.parse(req.body.bank_accounts || '[]');
+    } catch {
+      return sendError(res, 'Invalid bank_accounts format — expected JSON array', 400);
+    }
+
+    let benefitDeductions: Array<{
+      deduction_type: string; amount?: number; percentage?: number;
+      is_active?: boolean; effective_date?: string; end_date?: string; notes?: string;
+    }> = [];
+    try {
+      benefitDeductions = JSON.parse(req.body.benefit_deductions || '[]');
+    } catch {
+      return sendError(res, 'Invalid benefit_deductions format — expected JSON array', 400);
+    }
+
+    
+    let garnishments: Array<{
+      garnishment_type: string; case_number?: string; priority_order?: number;
+      amount?: number; percentage?: number; max_amount?: number;
+      is_active?: boolean; start_date?: string; end_date?: string; notes?: string;
+    }> = [];
+    try {
+      garnishments = JSON.parse(req.body.garnishments || '[]');
+    } catch {
+      return sendError(res, 'Invalid garnishments format — expected JSON array', 400);
+    }
+
+    const files               = (req as any).files as Express.Multer.File[] ?? [];
+    const documentNames       = [req.body.document_names       ?? []].flat() as string[];
+    const documentTypes       = [req.body.document_types       ?? []].flat() as string[];
+    const sendToCandidate     = [req.body.send_to_candidate     ?? []].flat() as string[];
+    // ── NEW: which required onboarding template (if any) each uploaded file satisfies ──
+    const documentTemplateIds = [req.body.document_template_ids ?? []].flat() as string[];
+    const recipientType       = (req.body.recipient_type as string) || 'ALL';
+    
 
     // ── 2. Basic validation ────────────────────────────────────────────────────
     if (!start_date || !employment_type)
@@ -1256,6 +1330,33 @@ const onboardCandidate = async (req: Request, res: Response) => {
 
     if (!ssn || !/^\d{9}$/.test(ssn))
       return sendError(res, 'Valid 9-digit SSN is required', 400);
+
+    // ── NEW validations ──
+    if (flsa_status && !['EXEMPT', 'NON_EXEMPT'].includes(flsa_status))
+      return sendError(res, 'flsa_status must be EXEMPT or NON_EXEMPT', 400);
+
+    if (bankAccounts.length) {
+      for (const b of bankAccounts) {
+        if (!b.bank_name?.trim() || !b.routing_number || !b.account_number)
+          return sendError(res, 'Each bank account requires bank_name, routing_number, and account_number', 400);
+        if (!/^\d{9}$/.test(b.routing_number))
+          return sendError(res, 'Each routing_number must be exactly 9 digits', 400);
+        if (b.account_type && !['CHECKING', 'SAVINGS'].includes(b.account_type))
+          return sendError(res, 'account_type must be CHECKING or SAVINGS', 400);
+        if (b.amount_type && !['FIXED', 'REMAINING'].includes(b.amount_type))
+          return sendError(res, 'amount_type must be FIXED or REMAINING', 400);
+      }
+      const remainingCount = bankAccounts.filter(b => (b.amount_type || 'REMAINING') === 'REMAINING').length;
+      if (remainingCount > 1)
+        return sendError(res, 'Only one bank account can be set to amount_type REMAINING', 400);
+    }
+
+    if (garnishments.some(g => !g.garnishment_type?.trim()))
+      return sendError(res, 'Each garnishment requires a garnishment_type', 400);
+
+    if (benefitDeductions.some(d => !d.deduction_type?.trim()))
+      return sendError(res, 'Each benefit deduction requires a deduction_type', 400);
+
 
     if (!companyCodes.length)
       return sendError(res, 'At least one company code is required', 400);
@@ -1315,6 +1416,30 @@ const onboardCandidate = async (req: Request, res: Response) => {
     if (existing)
       return sendError(res, 'Assignment already exists for this application', 400);
 
+    // ── 5b. NEW: Required onboarding document check ────────────────────────────
+    const requiredTemplates = await getRequiredOnboardingDocuments(
+      job.organization.organization_id,
+    );
+
+    if (requiredTemplates.length) {
+      const providedIds = new Set(documentTemplateIds.filter(Boolean));
+
+      const existingDocs = await prisma.applicantDocument.findMany({
+        where: { applicant_id: applicant.applicant_id, template_id: { not: null } },
+        select: { template_id: true },
+      });
+      existingDocs.forEach(d => d.template_id && providedIds.add(d.template_id));
+
+      const missing = requiredTemplates.filter(t => !providedIds.has(t.template_id));
+      if (missing.length) {
+        return sendError(
+          res,
+          `Missing required onboarding documents: ${missing.map(t => t.name).join(', ')}`,
+          400,
+        );
+      }
+    }
+
     // ── 6. Upload documents to Azure ───────────────────────────────────────────
     // FIX 2: Parallel uploads via Promise.all instead of a sequential for-loop.
     //         3 files × ~500ms each: old = ~1500ms sequential, new = ~500ms parallel.
@@ -1327,6 +1452,7 @@ const onboardCandidate = async (req: Request, res: Response) => {
       mime_type:         string;
       size:              number;
       send_to_candidate: boolean;
+      template_id:       string | null;
     }
 
     let uploadedDocs: UploadedDoc[] = [];
@@ -1358,6 +1484,7 @@ const onboardCandidate = async (req: Request, res: Response) => {
             mime_type:         f.mimetype,
             size:              f.size,
             send_to_candidate: sendToCandidate[i] === 'true',
+            template_id:       documentTemplateIds[i] || null,
           } satisfies UploadedDoc;
         })
       );
@@ -1375,6 +1502,16 @@ const onboardCandidate = async (req: Request, res: Response) => {
       work_state,
       resident_state:         resident_state || work_state,
     };
+
+    // ── NEW: local tax payload ──
+    const localTaxInfoPayload = (local_tax_jurisdiction || local_tax_rate || exempt_from_local)
+      ? {
+          jurisdiction:      local_tax_jurisdiction || null,
+          local_tax_rate:    local_tax_rate ? parseFloat(local_tax_rate) : null,
+          exempt_from_local: exempt_from_local === 'true',
+        }
+      : undefined;
+
 
     // ── 8. DB transaction ─────────────────────────────────────────────────────
     // FIX 3: Parallel writes inside the transaction.
@@ -1407,11 +1544,20 @@ const onboardCandidate = async (req: Request, res: Response) => {
       await Promise.all([
         (tx as any).applicantDemographic.upsert({
           where:  { applicant_id: applicant.applicant_id },
-          update: { ssn_encrypted: encryptedSSN, tax_info: taxInfoPayload },
+          update: {
+            ssn_encrypted:   encryptedSSN,
+            tax_info:        taxInfoPayload,
+            employee_number: employee_number || undefined,
+            local_tax_info:  localTaxInfoPayload,
+            flsa_status:     flsa_status || undefined,
+          },
           create: {
-            applicant_id:  applicant.applicant_id,
-            ssn_encrypted: encryptedSSN,
-            tax_info:      taxInfoPayload,
+            applicant_id:    applicant.applicant_id,
+            ssn_encrypted:   encryptedSSN,
+            tax_info:        taxInfoPayload,
+            employee_number: employee_number || null,
+            local_tax_info:  localTaxInfoPayload,
+            flsa_status:     flsa_status || null,
           },
         }),
 
@@ -1434,6 +1580,7 @@ const onboardCandidate = async (req: Request, res: Response) => {
               applicant_id:   applicant.applicant_id,
               application_id: application.application_id,
               document_type:  doc.document_type,
+              template_id:    doc.template_id,
               file_url: JSON.stringify({
                 originalFileName: doc.original_name,
                 mimeType:         doc.mime_type,
@@ -1443,6 +1590,57 @@ const onboardCandidate = async (req: Request, res: Response) => {
                 sendToCandidate:  doc.send_to_candidate,
                 containerName:    ONBOARDING_CONTAINER,
               }),
+            },
+          })
+        ),
+
+        // ── NEW: bank accounts ──
+        ...bankAccounts.map(b =>
+          tx.bankAccount.create({
+            data: {
+              applicant_id:   applicant.applicant_id,
+              bank_name:      b.bank_name,
+              account_type:   (b.account_type as any) || 'CHECKING',
+              routing_number: b.routing_number,
+              account_number: b.account_number,
+              amount:         b.amount ?? null,
+              amount_type:    (b.amount_type as any) || 'REMAINING',
+              is_active:      b.is_active ?? true,
+            },
+          })
+        ),
+
+        // ── NEW: benefit deductions ──
+        ...benefitDeductions.map(d =>
+          tx.benefitDeduction.create({
+            data: {
+              applicant_id:   applicant.applicant_id,
+              deduction_type: d.deduction_type,
+              amount:         d.amount ?? null,
+              percentage:     d.percentage ?? null,
+              is_active:      d.is_active ?? true,
+              effective_date: d.effective_date ? new Date(d.effective_date) : null,
+              end_date:       d.end_date ? new Date(d.end_date) : null,
+              notes:          d.notes || null,
+            },
+          })
+        ),
+
+        // ── NEW: garnishments ──
+        ...garnishments.map(g =>
+          tx.garnishment.create({
+            data: {
+              applicant_id:     applicant.applicant_id,
+              garnishment_type: g.garnishment_type,
+              case_number:      g.case_number || null,
+              priority_order:   g.priority_order ?? 1,
+              amount:           g.amount ?? null,
+              percentage:       g.percentage ?? null,
+              max_amount:       g.max_amount ?? null,
+              is_active:        g.is_active ?? true,
+              start_date:       g.start_date ? new Date(g.start_date) : null,
+              end_date:         g.end_date ? new Date(g.end_date) : null,
+              notes:            g.notes || null,
             },
           })
         ),
@@ -1502,9 +1700,10 @@ const onboardCandidate = async (req: Request, res: Response) => {
     }));
 
     // ── 10. Emails ─────────────────────────────────────────────────────────────
-    // FIX 5 cont.: All 3 emails fired simultaneously with Promise.all instead of
-    //              3 separate staggered .then() chains. True fire-and-forget —
-    //              response is sent before any email resolves.
+    // Onboarding is ALREADY committed to the DB by this point (step 8).
+    // Wrapped in try/catch so any failure here (SMTP error, bad lookup, etc.)
+    // gets logged instead of turning a successful onboarding into a 500.
+    try {
     const emailPromises: Promise<any>[] = [];
 
     // Three-layer check for each distinct trigger event
@@ -1613,6 +1812,9 @@ const onboardCandidate = async (req: Request, res: Response) => {
           rep_notification:     !canSendRepNotif,
         },
       });
+    }
+    } catch (emailErr: any) {
+      console.error('❌ Email dispatch step failed (onboarding itself succeeded):', emailErr.message);
     }
 
     // ── 11. Respond ────────────────────────────────────────────────────────────
@@ -1798,6 +2000,28 @@ const updatePipelineStageManually = async (req: Request, res: Response) => {
 };
 
 
+// GET /pipeline/:pipelineStageId/required-onboarding-documents?work_state=MI&locality=Detroit&recipient_type=ALL&company_codes=SEEL,JASCO
+const getRequiredOnboardingDocumentsForStage = async (req: Request, res: Response) => {
+  try {
+    const { pipelineStageId } = req.params;
+
+    const pipelineStage = await prisma.pipelineStage.findUnique({
+      where: { pipeline_stage_id: pipelineStageId },
+      include: { application: { include: { job: { include: { organization: { select: { organization_id: true } } } } } } },
+    });
+    if (!pipelineStage) return sendError(res, 'Pipeline stage not found', 404);
+
+    const templates = await getRequiredOnboardingDocuments(
+      pipelineStage.application.job.organization.organization_id,
+    );
+
+    return sendSuccess(res, templates);
+  } catch (err: any) {
+    console.error('Error fetching required onboarding documents:', err);
+    return sendError(res, 'Failed to fetch required onboarding documents', 500);
+  }
+};
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORT
@@ -1821,5 +2045,6 @@ export const pipelineController = {
   getPipelineByInterviewStatus,
   searchPipelinedApplicants,
   uploadOnboardingDocs,
-  updatePipelineStageManually
+  updatePipelineStageManually,
+  getRequiredOnboardingDocumentsForStage
 };

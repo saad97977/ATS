@@ -102,6 +102,7 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
         applicant_id: string;
         file_url: string;
         application_id: string | null;
+        template_id: string | null;
         applicant_document_id: string;
     }[];
     applicant: {
@@ -130,6 +131,9 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
             applicant_demo_id: string;
             ssn_encrypted: string | null;
             tax_info: import("@prisma/client/runtime/library").JsonValue | null;
+            employee_number: string | null;
+            local_tax_info: import("@prisma/client/runtime/library").JsonValue | null;
+            flsa_status: import(".prisma/client").$Enums.FLSAStatus | null;
         } | null;
         social_profiles: {
             applicant_id: string;
@@ -219,6 +223,7 @@ export declare const getApplicantLatestResume: (applicantId: string) => Promise<
     applicant_id: string;
     file_url: string;
     application_id: string | null;
+    template_id: string | null;
     applicant_document_id: string;
 } | null>;
 /**

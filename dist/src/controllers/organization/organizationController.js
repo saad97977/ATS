@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.organizationController = void 0;
+exports.organizationController = exports.getOnboardingDocumentViewUrl = exports.setOrganizationOnboardingDocuments = exports.getOrganizationOnboardingDocuments = void 0;
 const client_1 = require("@prisma/client");
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const crudFactory_1 = require("../../factories/crudFactory");
@@ -11,6 +11,7 @@ const schemas_1 = require("../../validators/schemas");
 const response_1 = require("../../utils/response");
 const zod_1 = require("zod");
 const activityService_1 = require("../../services/activityService");
+const storage_blob_1 = require("@azure/storage-blob");
 // ===============================
 // Base CRUD
 // ===============================
@@ -858,6 +859,135 @@ const getAllOrganizations = async (req, res) => {
 function isValidOrgStatus(val) {
     return Object.values(client_1.OrganizationStatus).includes(val.toUpperCase());
 }
+// ─── Organization Onboarding Document Selection ──────────────────────────────
+// GET /organizations/:organizationId/onboarding-documents
+// Returns every active template with a flag showing whether this org currently requires it.
+const getOrganizationOnboardingDocuments = async (req, res) => {
+    try {
+        const { organizationId } = req.params;
+        const [templates, selected] = await Promise.all([
+            prisma_config_1.default.onboardingDocumentTemplate.findMany({
+                where: { is_active: true },
+                orderBy: [{ category: 'asc' }, { name: 'asc' }],
+            }),
+            prisma_config_1.default.organizationOnboardingDocument.findMany({
+                where: { organization_id: organizationId },
+            }),
+        ]);
+        const selectedIds = new Set(selected.filter(s => s.is_required).map(s => s.template_id));
+        return (0, response_1.sendSuccess)(res, templates.map(t => ({
+            ...t,
+            is_required: selectedIds.has(t.template_id),
+        })));
+    }
+    catch (err) {
+        console.error('Error fetching organization onboarding documents:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch onboarding documents', 500);
+    }
+};
+exports.getOrganizationOnboardingDocuments = getOrganizationOnboardingDocuments;
+// PUT /organizations/:organizationId/onboarding-documents
+// Body: { template_ids: string[] }  — replaces the org's selected set wholesale.
+const setOrganizationOnboardingDocuments = async (req, res) => {
+    try {
+        const { organizationId } = req.params;
+        const { template_ids } = req.body;
+        if (!Array.isArray(template_ids))
+            return (0, response_1.sendError)(res, 'template_ids must be an array', 400);
+        const org = await prisma_config_1.default.organization.findUnique({ where: { organization_id: organizationId } });
+        if (!org)
+            return (0, response_1.sendError)(res, 'Organization not found', 404);
+        if (template_ids.length) {
+            const validCount = await prisma_config_1.default.onboardingDocumentTemplate.count({
+                where: { template_id: { in: template_ids }, is_active: true },
+            });
+            if (validCount !== template_ids.length)
+                return (0, response_1.sendError)(res, 'One or more template_ids are invalid or inactive', 400);
+        }
+        await prisma_config_1.default.$transaction([
+            prisma_config_1.default.organizationOnboardingDocument.deleteMany({ where: { organization_id: organizationId } }),
+            ...(template_ids.length
+                ? [prisma_config_1.default.organizationOnboardingDocument.createMany({
+                        data: template_ids.map(template_id => ({
+                            organization_id: organizationId,
+                            template_id,
+                            is_required: true,
+                        })),
+                        skipDuplicates: true,
+                    })]
+                : []),
+        ]);
+        return (0, response_1.sendSuccess)(res, { organization_id: organizationId, template_ids });
+    }
+    catch (err) {
+        console.error('Error setting organization onboarding documents:', err);
+        return (0, response_1.sendError)(res, 'Failed to update onboarding documents', 500);
+    }
+};
+exports.setOrganizationOnboardingDocuments = setOrganizationOnboardingDocuments;
+// Same env vars / container as seed-onboarding-documents.ts — keep these in sync.
+const CONNECTION_STRING = process.env.AZURE_STORAGE_CONNECTION_STRING;
+const CONTAINER_NAME = process.env.AZURE_ONBOARDING_CONTAINER || 'onboarding-document-templates';
+const SAS_TTL_SECONDS = 10 * 60; // 10 minutes — long enough to open, short-lived by design
+if (!CONNECTION_STRING) {
+    // Fail loudly at boot rather than on first request
+    console.error('AZURE_STORAGE_CONNECTION_STRING is not set — onboarding document viewing will fail.');
+}
+const blobServiceClient = storage_blob_1.BlobServiceClient.fromConnectionString(CONNECTION_STRING);
+const containerClient = blobServiceClient.getContainerClient(CONTAINER_NAME);
+/**
+ * Given a full blob URL (as stored in master_file_url), extract the blob name
+ * (the path segment after the container name), e.g.:
+ *   https://acct.blob.core.windows.net/onboarding-document-templates/tax_form/al-w4.pdf
+ *   -> "tax_form/al-w4.pdf"
+ */
+function extractBlobName(masterFileUrl) {
+    try {
+        const url = new URL(masterFileUrl);
+        const prefix = `/${CONTAINER_NAME}/`;
+        const idx = url.pathname.indexOf(prefix);
+        if (idx === -1)
+            return null;
+        return decodeURIComponent(url.pathname.slice(idx + prefix.length));
+    }
+    catch {
+        return null;
+    }
+}
+// GET /organizations/:templateId/view
+// Returns a short-lived, read-only SAS URL for the template's master file.
+const getOnboardingDocumentViewUrl = async (req, res) => {
+    try {
+        const { templateId } = req.params;
+        const template = await prisma_config_1.default.onboardingDocumentTemplate.findUnique({
+            where: { template_id: templateId },
+        });
+        if (!template)
+            return (0, response_1.sendError)(res, 'Template not found', 404);
+        if (!template.master_file_url)
+            return (0, response_1.sendError)(res, 'No file is available for this document', 404);
+        const blobName = extractBlobName(template.master_file_url);
+        if (!blobName)
+            return (0, response_1.sendError)(res, 'Stored file reference is invalid', 500);
+        const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+        const exists = await blockBlobClient.exists();
+        if (!exists)
+            return (0, response_1.sendError)(res, 'File no longer exists in storage', 404);
+        const view_url = await blockBlobClient.generateSasUrl({
+            permissions: storage_blob_1.BlobSASPermissions.parse('r'), // read-only
+            expiresOn: new Date(Date.now() + SAS_TTL_SECONDS * 1000),
+        });
+        return (0, response_1.sendSuccess)(res, {
+            view_url,
+            expires_in_seconds: SAS_TTL_SECONDS,
+        });
+    }
+    catch (err) {
+        console.error('Error generating onboarding document view URL:', err);
+        return (0, response_1.sendError)(res, 'Failed to generate view URL', 500);
+    }
+};
+exports.getOnboardingDocumentViewUrl = getOnboardingDocumentViewUrl;
 // ===============================
 // EXPORT CONTROLLER
 // ===============================
@@ -866,5 +996,8 @@ exports.organizationController = {
     getAll: getAllOrganizations,
     getById: getOrganizationById,
     update: updateOrganizationComplete,
+    getOrganizationOnboardingDocuments: exports.getOrganizationOnboardingDocuments,
+    setOrganizationOnboardingDocuments: exports.setOrganizationOnboardingDocuments,
+    getOnboardingDocumentViewUrl: exports.getOnboardingDocumentViewUrl
 };
 //# sourceMappingURL=organizationController.js.map

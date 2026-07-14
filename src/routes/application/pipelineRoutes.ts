@@ -45,6 +45,7 @@ router.patch('/interview/:interviewId/accept', pipelineController.acceptIntervie
 // Onboarding route
 // router.patch('/:pipelineStageId/onboard', pipelineController.onboardCandidate);
 router.patch('/:pipelineStageId/onboard', pipelineController.uploadOnboardingDocs, pipelineController.onboardCandidate);
+router.get('/:pipelineStageId/required-onboarding-documents', pipelineController.getRequiredOnboardingDocumentsForStage);
 
 // CRUD routes
 router.get('/', pipelineController.getAll);

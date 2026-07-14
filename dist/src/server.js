@@ -53,6 +53,7 @@ const userProfileRoutes_1 = __importDefault(require("./routes/user/userProfileRo
 const jobCloneRoutes_1 = __importDefault(require("./routes/job/jobCloneRoutes"));
 const jobSubSectionRoutes_1 = __importDefault(require("./routes/job/jobSubSectionRoutes"));
 const automationRoutes_1 = __importDefault(require("./routes/automation/automationRoutes"));
+const batchTimeEntryRoutes_1 = __importDefault(require("./routes/updated-payroll/batchTimeEntryRoutes"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -179,6 +180,8 @@ app.use('/organizations/complete', fullOrganizationRoutes_1.default);
 app.use('/jobs/complete', fullJobRoutes_1.default);
 // Automation routes
 app.use('/api/email-automation', automationRoutes_1.default);
+// Timeentry routes
+app.use('/api/batch-timeentry', batchTimeEntryRoutes_1.default);
 // adding health endpoint for render:
 app.get('/health', (req, res) => {
     res.status(200).send('OK');

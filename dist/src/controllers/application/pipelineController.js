@@ -142,26 +142,47 @@ const shouldWithholdJobEmails = (job) => {
 // Returns true  → send the email
 // Returns false → suppress the email
 // ─────────────────────────────────────────────────────────────────────────────
+// The DB enum (EmailTriggerEvent in schema.prisma) only has a single
+// "ASSIGNMENT_NOTIFICATION" value — it does NOT have separate CREDIT/REP
+// values. Our app-level type distinguishes them (so future code/logs can
+// tell which recipient triggered the check), but whenever we talk to
+// Prisma we must collapse both down to the one value that actually exists
+// in the database enum.
+const toDbTriggerEvent = (triggerEvent) => {
+    if (triggerEvent === 'ASSIGNMENT_NOTIFICATION_CREDIT' || triggerEvent === 'ASSIGNMENT_NOTIFICATION_REP') {
+        return 'ASSIGNMENT_NOTIFICATION';
+    }
+    return triggerEvent;
+};
 const shouldSendEmail = async (triggerEvent, applicantId, job) => {
-    // Layer 1: legacy hard block
-    if (job?.withhold_emails === true)
+    try {
+        // Layer 1: legacy hard block
+        if (job?.withhold_emails === true)
+            return false;
+        const dbTriggerEvent = toDbTriggerEvent(triggerEvent);
+        // Layer 2: global automation rule
+        const rule = await prisma_config_1.default.emailAutomationRule.findFirst({
+            where: { trigger_event: dbTriggerEvent },
+        });
+        if (rule && !rule.is_enabled)
+            return false;
+        // Layer 3: applicant-level preference
+        const pref = await prisma_config_1.default.applicantEmailPreference.findFirst({
+            where: {
+                applicant_id: applicantId,
+                trigger_event: dbTriggerEvent,
+            },
+        });
+        if (pref?.is_suppressed)
+            return false;
+        return true;
+    }
+    catch (err) {
+        // Never let a lookup failure here block or fail onboarding —
+        // just suppress this particular email and move on.
+        console.error(`⚠️ shouldSendEmail check failed for "${triggerEvent}" — suppressing this email`, err.message);
         return false;
-    // Layer 2: global automation rule
-    const rule = await prisma_config_1.default.emailAutomationRule.findFirst({
-        where: { trigger_event: triggerEvent },
-    });
-    if (rule && !rule.is_enabled)
-        return false;
-    // Layer 3: applicant-level preference
-    const pref = await prisma_config_1.default.applicantEmailPreference.findFirst({
-        where: {
-            applicant_id: applicantId,
-            trigger_event: triggerEvent,
-        },
-    });
-    if (pref?.is_suppressed)
-        return false;
-    return true;
+    }
 };
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED INCLUDE FRAGMENT
@@ -1083,12 +1104,24 @@ exports.uploadOnboardingDocs = (0, multer_1.default)({
     storage: multer_1.default.memoryStorage(),
     limits: { fileSize: 20 * 1024 * 1024 },
 }).array('files', 20);
+// ── NEW: resolve which onboarding documents are required for this org/state/company-code/recipient combo ──
+const getRequiredOnboardingDocuments = async (organizationId) => {
+    const orgDocs = await prisma_config_1.default.organizationOnboardingDocument.findMany({
+        where: { organization_id: organizationId, is_required: true },
+        include: { template: true },
+    });
+    return orgDocs
+        .map(od => od.template)
+        .filter(t => t.is_active);
+};
 // ══════════════════════════════════════════════════════════════════════════════
 const onboardCandidate = async (req, res) => {
     try {
         const { pipelineStageId } = req.params;
         // ── 1. Parse body ──────────────────────────────────────────────────────────
-        const { start_date, end_date, employment_type, ssn, filing_status, additional_withholding, exempt_from_federal, exempt_from_state, work_state, resident_state, } = req.body;
+        const { start_date, end_date, employment_type, ssn, filing_status, additional_withholding, exempt_from_federal, exempt_from_state, work_state, resident_state, 
+        // ── NEW ──
+        employee_number, local_tax_jurisdiction, local_tax_rate, exempt_from_local, flsa_status, } = req.body;
         let workersCompCodes = [];
         try {
             workersCompCodes = JSON.parse(req.body.workers_comp_codes || '[]');
@@ -1103,10 +1136,35 @@ const onboardCandidate = async (req, res) => {
         catch {
             return (0, response_1.sendError)(res, 'Invalid company_codes format — expected JSON array', 400);
         }
+        // ── NEW: bank accounts, benefit deductions, garnishments ──
+        let bankAccounts = [];
+        try {
+            bankAccounts = JSON.parse(req.body.bank_accounts || '[]');
+        }
+        catch {
+            return (0, response_1.sendError)(res, 'Invalid bank_accounts format — expected JSON array', 400);
+        }
+        let benefitDeductions = [];
+        try {
+            benefitDeductions = JSON.parse(req.body.benefit_deductions || '[]');
+        }
+        catch {
+            return (0, response_1.sendError)(res, 'Invalid benefit_deductions format — expected JSON array', 400);
+        }
+        let garnishments = [];
+        try {
+            garnishments = JSON.parse(req.body.garnishments || '[]');
+        }
+        catch {
+            return (0, response_1.sendError)(res, 'Invalid garnishments format — expected JSON array', 400);
+        }
         const files = req.files ?? [];
         const documentNames = [req.body.document_names ?? []].flat();
         const documentTypes = [req.body.document_types ?? []].flat();
         const sendToCandidate = [req.body.send_to_candidate ?? []].flat();
+        // ── NEW: which required onboarding template (if any) each uploaded file satisfies ──
+        const documentTemplateIds = [req.body.document_template_ids ?? []].flat();
+        const recipientType = req.body.recipient_type || 'ALL';
         // ── 2. Basic validation ────────────────────────────────────────────────────
         if (!start_date || !employment_type)
             return (0, response_1.sendError)(res, 'start_date and employment_type are required', 400);
@@ -1133,6 +1191,28 @@ const onboardCandidate = async (req, res) => {
             return (0, response_1.sendError)(res, `Workers' comp pct must total 100% (got ${totalWcPct}%)`, 400);
         if (!ssn || !/^\d{9}$/.test(ssn))
             return (0, response_1.sendError)(res, 'Valid 9-digit SSN is required', 400);
+        // ── NEW validations ──
+        if (flsa_status && !['EXEMPT', 'NON_EXEMPT'].includes(flsa_status))
+            return (0, response_1.sendError)(res, 'flsa_status must be EXEMPT or NON_EXEMPT', 400);
+        if (bankAccounts.length) {
+            for (const b of bankAccounts) {
+                if (!b.bank_name?.trim() || !b.routing_number || !b.account_number)
+                    return (0, response_1.sendError)(res, 'Each bank account requires bank_name, routing_number, and account_number', 400);
+                if (!/^\d{9}$/.test(b.routing_number))
+                    return (0, response_1.sendError)(res, 'Each routing_number must be exactly 9 digits', 400);
+                if (b.account_type && !['CHECKING', 'SAVINGS'].includes(b.account_type))
+                    return (0, response_1.sendError)(res, 'account_type must be CHECKING or SAVINGS', 400);
+                if (b.amount_type && !['FIXED', 'REMAINING'].includes(b.amount_type))
+                    return (0, response_1.sendError)(res, 'amount_type must be FIXED or REMAINING', 400);
+            }
+            const remainingCount = bankAccounts.filter(b => (b.amount_type || 'REMAINING') === 'REMAINING').length;
+            if (remainingCount > 1)
+                return (0, response_1.sendError)(res, 'Only one bank account can be set to amount_type REMAINING', 400);
+        }
+        if (garnishments.some(g => !g.garnishment_type?.trim()))
+            return (0, response_1.sendError)(res, 'Each garnishment requires a garnishment_type', 400);
+        if (benefitDeductions.some(d => !d.deduction_type?.trim()))
+            return (0, response_1.sendError)(res, 'Each benefit deduction requires a deduction_type', 400);
         if (!companyCodes.length)
             return (0, response_1.sendError)(res, 'At least one company code is required', 400);
         const totalAllocation = companyCodes.reduce((s, c) => s + (c.allocation_pct || 0), 0);
@@ -1184,6 +1264,20 @@ const onboardCandidate = async (req, res) => {
         });
         if (existing)
             return (0, response_1.sendError)(res, 'Assignment already exists for this application', 400);
+        // ── 5b. NEW: Required onboarding document check ────────────────────────────
+        const requiredTemplates = await getRequiredOnboardingDocuments(job.organization.organization_id);
+        if (requiredTemplates.length) {
+            const providedIds = new Set(documentTemplateIds.filter(Boolean));
+            const existingDocs = await prisma_config_1.default.applicantDocument.findMany({
+                where: { applicant_id: applicant.applicant_id, template_id: { not: null } },
+                select: { template_id: true },
+            });
+            existingDocs.forEach(d => d.template_id && providedIds.add(d.template_id));
+            const missing = requiredTemplates.filter(t => !providedIds.has(t.template_id));
+            if (missing.length) {
+                return (0, response_1.sendError)(res, `Missing required onboarding documents: ${missing.map(t => t.name).join(', ')}`, 400);
+            }
+        }
         let uploadedDocs = [];
         if (files.length) {
             const container = await getOnboardingContainer();
@@ -1208,6 +1302,7 @@ const onboardCandidate = async (req, res) => {
                     mime_type: f.mimetype,
                     size: f.size,
                     send_to_candidate: sendToCandidate[i] === 'true',
+                    template_id: documentTemplateIds[i] || null,
                 };
             }));
         }
@@ -1222,6 +1317,14 @@ const onboardCandidate = async (req, res) => {
             work_state,
             resident_state: resident_state || work_state,
         };
+        // ── NEW: local tax payload ──
+        const localTaxInfoPayload = (local_tax_jurisdiction || local_tax_rate || exempt_from_local)
+            ? {
+                jurisdiction: local_tax_jurisdiction || null,
+                local_tax_rate: local_tax_rate ? parseFloat(local_tax_rate) : null,
+                exempt_from_local: exempt_from_local === 'true',
+            }
+            : undefined;
         // ── 8. DB transaction ─────────────────────────────────────────────────────
         // FIX 3: Parallel writes inside the transaction.
         //
@@ -1251,11 +1354,20 @@ const onboardCandidate = async (req, res) => {
             await Promise.all([
                 tx.applicantDemographic.upsert({
                     where: { applicant_id: applicant.applicant_id },
-                    update: { ssn_encrypted: encryptedSSN, tax_info: taxInfoPayload },
+                    update: {
+                        ssn_encrypted: encryptedSSN,
+                        tax_info: taxInfoPayload,
+                        employee_number: employee_number || undefined,
+                        local_tax_info: localTaxInfoPayload,
+                        flsa_status: flsa_status || undefined,
+                    },
                     create: {
                         applicant_id: applicant.applicant_id,
                         ssn_encrypted: encryptedSSN,
                         tax_info: taxInfoPayload,
+                        employee_number: employee_number || null,
+                        local_tax_info: localTaxInfoPayload,
+                        flsa_status: flsa_status || null,
                     },
                 }),
                 tx.assignment.create({
@@ -1275,6 +1387,7 @@ const onboardCandidate = async (req, res) => {
                         applicant_id: applicant.applicant_id,
                         application_id: application.application_id,
                         document_type: doc.document_type,
+                        template_id: doc.template_id,
                         file_url: JSON.stringify({
                             originalFileName: doc.original_name,
                             mimeType: doc.mime_type,
@@ -1284,6 +1397,48 @@ const onboardCandidate = async (req, res) => {
                             sendToCandidate: doc.send_to_candidate,
                             containerName: ONBOARDING_CONTAINER,
                         }),
+                    },
+                })),
+                // ── NEW: bank accounts ──
+                ...bankAccounts.map(b => tx.bankAccount.create({
+                    data: {
+                        applicant_id: applicant.applicant_id,
+                        bank_name: b.bank_name,
+                        account_type: b.account_type || 'CHECKING',
+                        routing_number: b.routing_number,
+                        account_number: b.account_number,
+                        amount: b.amount ?? null,
+                        amount_type: b.amount_type || 'REMAINING',
+                        is_active: b.is_active ?? true,
+                    },
+                })),
+                // ── NEW: benefit deductions ──
+                ...benefitDeductions.map(d => tx.benefitDeduction.create({
+                    data: {
+                        applicant_id: applicant.applicant_id,
+                        deduction_type: d.deduction_type,
+                        amount: d.amount ?? null,
+                        percentage: d.percentage ?? null,
+                        is_active: d.is_active ?? true,
+                        effective_date: d.effective_date ? new Date(d.effective_date) : null,
+                        end_date: d.end_date ? new Date(d.end_date) : null,
+                        notes: d.notes || null,
+                    },
+                })),
+                // ── NEW: garnishments ──
+                ...garnishments.map(g => tx.garnishment.create({
+                    data: {
+                        applicant_id: applicant.applicant_id,
+                        garnishment_type: g.garnishment_type,
+                        case_number: g.case_number || null,
+                        priority_order: g.priority_order ?? 1,
+                        amount: g.amount ?? null,
+                        percentage: g.percentage ?? null,
+                        max_amount: g.max_amount ?? null,
+                        is_active: g.is_active ?? true,
+                        start_date: g.start_date ? new Date(g.start_date) : null,
+                        end_date: g.end_date ? new Date(g.end_date) : null,
+                        notes: g.notes || null,
                     },
                 })),
             ]);
@@ -1337,101 +1492,106 @@ const onboardCandidate = async (req, res) => {
             contentType: f.mimetype,
         }));
         // ── 10. Emails ─────────────────────────────────────────────────────────────
-        // FIX 5 cont.: All 3 emails fired simultaneously with Promise.all instead of
-        //              3 separate staggered .then() chains. True fire-and-forget —
-        //              response is sent before any email resolves.
-        const emailPromises = [];
-        // Three-layer check for each distinct trigger event
-        const [canSendWelcome, canSendCreditNotif, canSendRepNotif] = await Promise.all([
-            aEmail
-                ? shouldSendEmail('ONBOARDING_WELCOME', applicant.applicant_id, result.application.job)
-                : Promise.resolve(false),
-            result.credit_user?.email
-                ? shouldSendEmail('ASSIGNMENT_NOTIFICATION_CREDIT', applicant.applicant_id, result.application.job)
-                : Promise.resolve(false),
-            result.representative_user?.email
-                ? shouldSendEmail('ASSIGNMENT_NOTIFICATION_REP', applicant.applicant_id, result.application.job)
-                : Promise.resolve(false),
-        ]);
-        // Keep legacy flag for the withhold log below
-        const shouldWithholdEmails = result.application.job?.withhold_emails === true;
-        if (canSendWelcome && aEmail) {
-            emailPromises.push((0, emailService_1.sendOnboardingWelcomeEmail)({
-                applicantEmail: aEmail,
+        // Onboarding is ALREADY committed to the DB by this point (step 8).
+        // Wrapped in try/catch so any failure here (SMTP error, bad lookup, etc.)
+        // gets logged instead of turning a successful onboarding into a 500.
+        try {
+            const emailPromises = [];
+            // Three-layer check for each distinct trigger event
+            const [canSendWelcome, canSendCreditNotif, canSendRepNotif] = await Promise.all([
+                aEmail
+                    ? shouldSendEmail('ONBOARDING_WELCOME', applicant.applicant_id, result.application.job)
+                    : Promise.resolve(false),
+                result.credit_user?.email
+                    ? shouldSendEmail('ASSIGNMENT_NOTIFICATION_CREDIT', applicant.applicant_id, result.application.job)
+                    : Promise.resolve(false),
+                result.representative_user?.email
+                    ? shouldSendEmail('ASSIGNMENT_NOTIFICATION_REP', applicant.applicant_id, result.application.job)
+                    : Promise.resolve(false),
+            ]);
+            // Keep legacy flag for the withhold log below
+            const shouldWithholdEmails = result.application.job?.withhold_emails === true;
+            if (canSendWelcome && aEmail) {
+                emailPromises.push((0, emailService_1.sendOnboardingWelcomeEmail)({
+                    applicantEmail: aEmail,
+                    applicantName: aName,
+                    jobTitle,
+                    organizationName: orgName,
+                    startDate,
+                    endDate: end_date ? new Date(end_date) : null,
+                    employmentType: employment_type,
+                    workersCompCodes,
+                    uploadedDocuments: docSummary.filter(d => d.send_to_candidate),
+                    attachments: allAttachments.filter((_, i) => sendToCandidate[i] === 'true'),
+                }));
+            }
+            // Shared base for both notification emails — avoids duplicating every field
+            const notificationBase = {
                 applicantName: aName,
+                applicantEmail: aEmail || '',
                 jobTitle,
                 organizationName: orgName,
                 startDate,
                 endDate: end_date ? new Date(end_date) : null,
                 employmentType: employment_type,
+                companyCodes,
                 workersCompCodes,
-                uploadedDocuments: docSummary.filter(d => d.send_to_candidate),
-                attachments: allAttachments.filter((_, i) => sendToCandidate[i] === 'true'),
-            }));
-        }
-        // Shared base for both notification emails — avoids duplicating every field
-        const notificationBase = {
-            applicantName: aName,
-            applicantEmail: aEmail || '',
-            jobTitle,
-            organizationName: orgName,
-            startDate,
-            endDate: end_date ? new Date(end_date) : null,
-            employmentType: employment_type,
-            companyCodes,
-            workersCompCodes,
-            uploadedDocuments: docSummary,
-            attachments: allAttachments,
-        };
-        if (canSendCreditNotif) {
-            emailPromises.push((0, emailService_1.sendAssignmentNotificationEmail)({
-                ...notificationBase,
-                recipientEmail: result.credit_user.email,
-                recipientName: result.credit_user.name,
-                role: 'Credit User',
-            }));
-        }
-        if (canSendRepNotif) {
-            emailPromises.push((0, emailService_1.sendAssignmentNotificationEmail)({
-                ...notificationBase,
-                recipientEmail: result.representative_user.email,
-                recipientName: result.representative_user.name,
-                role: 'Representative',
-            }));
-        }
-        Promise.all(emailPromises).then(results => {
-            // Log the onboarding email to the applicant communication trail
-            if (canSendWelcome && aEmail) {
-                const onboardingResult = results[0];
-                (0, applicantCommunicationController_1.logApplicantCommunication)({
-                    applicant_id: result.application.applicant_id,
-                    application_id: result.application_id,
-                    communication_type: 'EMAIL',
-                    direction: 'OUTBOUND',
-                    trigger: 'AUTOMATIC',
-                    status: onboardingResult?.success ? 'SENT' : 'FAILED',
-                    subject: `Welcome to ${orgName} - Onboarding for ${jobTitle}`,
-                    to_address: aEmail,
-                    from_address: process.env.SMTP_USER || 'noreply@company.com',
-                    email_message_id: onboardingResult?.messageId,
-                    metadata: {
-                        pipeline_stage_id: pipelineStageId,
-                        employment_type,
-                        start_date: startDate,
+                uploadedDocuments: docSummary,
+                attachments: allAttachments,
+            };
+            if (canSendCreditNotif) {
+                emailPromises.push((0, emailService_1.sendAssignmentNotificationEmail)({
+                    ...notificationBase,
+                    recipientEmail: result.credit_user.email,
+                    recipientName: result.credit_user.name,
+                    role: 'Credit User',
+                }));
+            }
+            if (canSendRepNotif) {
+                emailPromises.push((0, emailService_1.sendAssignmentNotificationEmail)({
+                    ...notificationBase,
+                    recipientEmail: result.representative_user.email,
+                    recipientName: result.representative_user.name,
+                    role: 'Representative',
+                }));
+            }
+            Promise.all(emailPromises).then(results => {
+                // Log the onboarding email to the applicant communication trail
+                if (canSendWelcome && aEmail) {
+                    const onboardingResult = results[0];
+                    (0, applicantCommunicationController_1.logApplicantCommunication)({
+                        applicant_id: result.application.applicant_id,
+                        application_id: result.application_id,
+                        communication_type: 'EMAIL',
+                        direction: 'OUTBOUND',
+                        trigger: 'AUTOMATIC',
+                        status: onboardingResult?.success ? 'SENT' : 'FAILED',
+                        subject: `Welcome to ${orgName} - Onboarding for ${jobTitle}`,
+                        to_address: aEmail,
+                        from_address: process.env.SMTP_USER || 'noreply@company.com',
+                        email_message_id: onboardingResult?.messageId,
+                        metadata: {
+                            pipeline_stage_id: pipelineStageId,
+                            employment_type,
+                            start_date: startDate,
+                        },
+                    });
+                }
+            }).catch(e => console.error('❌ One or more onboarding emails failed:', e.message));
+            if (!canSendWelcome || !canSendCreditNotif || !canSendRepNotif) {
+                console.log('ℹ️ One or more onboarding emails suppressed (withhold_emails, automation rule, or applicant preference)', {
+                    jobId: result.application.job.job_id,
+                    pipelineStageId,
+                    suppressed: {
+                        welcome: !canSendWelcome,
+                        credit_notification: !canSendCreditNotif,
+                        rep_notification: !canSendRepNotif,
                     },
                 });
             }
-        }).catch(e => console.error('❌ One or more onboarding emails failed:', e.message));
-        if (!canSendWelcome || !canSendCreditNotif || !canSendRepNotif) {
-            console.log('ℹ️ One or more onboarding emails suppressed (withhold_emails, automation rule, or applicant preference)', {
-                jobId: result.application.job.job_id,
-                pipelineStageId,
-                suppressed: {
-                    welcome: !canSendWelcome,
-                    credit_notification: !canSendCreditNotif,
-                    rep_notification: !canSendRepNotif,
-                },
-            });
+        }
+        catch (emailErr) {
+            console.error('❌ Email dispatch step failed (onboarding itself succeeded):', emailErr.message);
         }
         // ── 11. Respond ────────────────────────────────────────────────────────────
         return (0, response_1.sendSuccess)(res, {
@@ -1578,6 +1738,24 @@ const updatePipelineStageManually = async (req, res) => {
         return (0, response_1.sendError)(res, 'Failed to update pipeline stage', 500);
     }
 };
+// GET /pipeline/:pipelineStageId/required-onboarding-documents?work_state=MI&locality=Detroit&recipient_type=ALL&company_codes=SEEL,JASCO
+const getRequiredOnboardingDocumentsForStage = async (req, res) => {
+    try {
+        const { pipelineStageId } = req.params;
+        const pipelineStage = await prisma_config_1.default.pipelineStage.findUnique({
+            where: { pipeline_stage_id: pipelineStageId },
+            include: { application: { include: { job: { include: { organization: { select: { organization_id: true } } } } } } },
+        });
+        if (!pipelineStage)
+            return (0, response_1.sendError)(res, 'Pipeline stage not found', 404);
+        const templates = await getRequiredOnboardingDocuments(pipelineStage.application.job.organization.organization_id);
+        return (0, response_1.sendSuccess)(res, templates);
+    }
+    catch (err) {
+        console.error('Error fetching required onboarding documents:', err);
+        return (0, response_1.sendError)(res, 'Failed to fetch required onboarding documents', 500);
+    }
+};
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1600,6 +1778,7 @@ exports.pipelineController = {
     getPipelineByInterviewStatus,
     searchPipelinedApplicants,
     uploadOnboardingDocs: exports.uploadOnboardingDocs,
-    updatePipelineStageManually
+    updatePipelineStageManually,
+    getRequiredOnboardingDocumentsForStage
 };
 //# sourceMappingURL=pipelineController.js.map

@@ -56,7 +56,7 @@ model User {
   created_templates JobTemplate[] @relation("TemplateCreatedBy")
   sent_communications ApplicantCommunication[] @relation("CommSentBy")
   stage_automations  StageEmailAutomation[]  @relation("AutomationCreatedBy")
-
+  created_batches TransactionBatch[] @relation("BatchCreatedBy")
 
   @@index([email])
   @@map("users")
@@ -232,6 +232,7 @@ model Organization {
   contracts          Contract[]
   document_titles    OrganizationDocumentTitle[]
   documents          OrganizationDocument[]
+  onboarding_documents OrganizationOnboardingDocument[]
   jobs               Job[]
   job_templates      JobTemplate[]
   company_offices    CompanyOffice[]
@@ -240,6 +241,7 @@ model Organization {
   representative        User?            @relation("OrganizationRepresentative", fields: [representative_id], references: [user_id])
   activities OrganizationActivity[]
   stage_automations  StageEmailAutomation[]
+  payroll_transactions PayrollTransaction[]
 
 
 
@@ -570,6 +572,8 @@ model Job {
   contact_jobs ContactJob[]
   job_templates JobTemplate[]
   stage_automations  StageEmailAutomation[]
+  payroll_transactions PayrollTransaction[]
+
 
 
   @@index([created_by_user_id])
@@ -775,8 +779,9 @@ model Applicant {
   applications         Application[]
   communications       ApplicantCommunication[]
   email_preferences    ApplicantEmailPreference[]
-
-
+  bank_accounts        BankAccount[]
+  benefit_deductions   BenefitDeduction[]
+  garnishments         Garnishment[]
 
   @@map("applicants")
 }
@@ -844,11 +849,137 @@ model ApplicantDemographic {
   tax_info       Json?     // { filing_status, additional_withholding, exempt_from_federal,
                            //   exempt_from_state, work_state, resident_state }
 
+  // ── NEW: employee number, local tax, FLSA classification ──
+  employee_number   String?      @unique
+  local_tax_info    Json?        // { jurisdiction, local_tax_rate, exempt_from_local }
+  flsa_status       FLSAStatus?
 
   // Relations
   applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
 
   @@map("applicant_demographics")
+}
+
+
+// ============================================
+// NEW: DIRECT DEPOSIT / BANK ACCOUNTS
+// ============================================
+
+model BankAccount {
+  bank_account_id String            @id @default(uuid())
+  applicant_id    String
+  bank_name       String
+  account_type    BankAccountType   @default(CHECKING)
+  routing_number  String
+  account_number  String            // consider encrypting like SSN before production use
+  amount          Decimal?          @db.Decimal(10, 2)
+  amount_type     DepositAmountType @default(REMAINING)
+  is_active       Boolean           @default(true)
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@index([applicant_id])
+  @@map("bank_accounts")
+}
+
+// ============================================
+// NEW: BENEFIT DEDUCTIONS
+// ============================================
+
+model BenefitDeduction {
+  benefit_deduction_id String    @id @default(uuid())
+  applicant_id          String
+  deduction_type        String   // "Health", "Dental", "401k", etc.
+  amount                Decimal? @db.Decimal(10, 2)
+  percentage            Decimal? @db.Decimal(5, 2)
+  is_active             Boolean  @default(true)
+  effective_date        DateTime?
+  end_date              DateTime?
+  notes                 String?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@index([applicant_id])
+  @@map("benefit_deductions")
+}
+
+// ============================================
+// NEW: GARNISHMENTS
+// ============================================
+
+model Garnishment {
+  garnishment_id   String    @id @default(uuid())
+  applicant_id     String
+  garnishment_type String    // "Child Support", "Tax Levy", "Student Loan", etc.
+  case_number      String?
+  priority_order   Int       @default(1)
+  amount           Decimal?  @db.Decimal(10, 2)
+  percentage       Decimal?  @db.Decimal(5, 2)
+  max_amount       Decimal?  @db.Decimal(10, 2)
+  is_active        Boolean   @default(true)
+  start_date       DateTime?
+  end_date         DateTime?
+  notes            String?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
+
+  @@index([applicant_id])
+  @@map("garnishments")
+}
+
+
+
+
+
+
+// ============================================
+// NEW: ONBOARDING DOCUMENT REQUIREMENTS
+// ============================================
+
+model OnboardingDocumentTemplate {
+  template_id        String                     @id @default(uuid())
+  name               String                     // "Michigan State Withholding", "SEEL Employee Handbook"
+  category           OnboardingDocumentCategory @default(OTHER)
+  company_code       String?                    // "SEEL" | "JASCO" | "QIC" — null = applies to every company code
+  recipient_type     DocumentRecipientType      @default(ALL)
+  requires_signature Boolean                    @default(false)
+  work_state         String?                    // 2-letter state code — null = not state-specific
+  locality           String?                    // city/jurisdiction, e.g. "Detroit" — null = state-wide
+  is_active          Boolean                    @default(true)
+  master_file_url    String?                    // Azure Blob URL of the blank/master PDF
+  notes              String?
+  created_at         DateTime                   @default(now())
+  updated_at         DateTime                   @updatedAt
+
+  organization_links  OrganizationOnboardingDocument[]
+  applicant_documents ApplicantDocument[]
+
+  @@index([work_state])
+  @@index([category])
+  @@index([company_code])
+  @@map("onboarding_document_templates")
+}
+
+model OrganizationOnboardingDocument {
+  org_onboarding_doc_id String   @id @default(uuid())
+  organization_id       String
+  template_id           String
+  is_required           Boolean  @default(true)
+  created_at            DateTime @default(now())
+
+  organization Organization               @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  template     OnboardingDocumentTemplate @relation(fields: [template_id], references: [template_id], onDelete: Cascade)
+
+  @@unique([organization_id, template_id])
+  @@index([organization_id])
+  @@index([template_id])
+  @@map("organization_onboarding_documents")
 }
 
 // ============================================
@@ -860,17 +991,22 @@ model ApplicantDocument {
   application_id        String?  // ← NEW: Links document to specific application
   document_type         String   // RESUME, COVER_LETTER, etc.
   file_url              String   // JSON metadata or actual URL
+  template_id            String?  // ← NEW: which required onboarding template this file satisfies (null for resumes/ad-hoc uploads)
   created_at            DateTime @default(now())  // ← NEW: Track when uploaded
 
   // Relations
   applicant   Applicant    @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
   application Application? @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
+  template    OnboardingDocumentTemplate? @relation(fields: [template_id], references: [template_id], onDelete: SetNull)
 
   @@index([applicant_id])
   @@index([application_id])  // ← NEW: Index for querying by application
   @@index([applicant_id, document_type])  // ← NEW: Useful for getting latest resume
+  @@index([template_id])
   @@map("applicant_documents")
 }
+
+
 
 model ApplicantSocialProfiles {
   applicant_social_profiles_id String @id @default(uuid())
@@ -1097,6 +1233,8 @@ model Assignment {
   invoices     Invoice[]
   payrolls     Payroll[]
   imports  TimesheetImport[]
+  payroll_transactions PayrollTransaction[]
+
 
   @@index([start_date])
   @@index([end_date])
@@ -1427,7 +1565,120 @@ model StageEmailAutomation {
 
 
 
+model TransactionBatch {
+  batch_id            String      @id @default(uuid())
+  // Human-facing sequential number shown in the UI (e.g. "40453"),
+  // separate from the internal uuid used for relations.
+  batch_number         Int         @unique @default(autoincrement())
 
+  created_date         DateTime    @default(now())
+  accounting_period     DateTime
+  description           String?
+  status                BatchStatus @default(OPEN)
+
+  created_by_user_id    String
+  verified_at           DateTime?
+  closed_at             DateTime?
+  // Array of { transaction_id, transaction_number, message } collected
+  // by verifyBatch when a transaction fails validation.
+  verification_errors   Json?
+
+  created_at            DateTime    @default(now())
+  updated_at             DateTime   @updatedAt
+
+  created_by            User                  @relation("BatchCreatedBy", fields: [created_by_user_id], references: [user_id])
+  transactions          PayrollTransaction[]
+
+  @@index([created_by_user_id])
+  @@index([status])
+  @@map("transaction_batches")
+}
+
+model PayrollTransaction {
+  transaction_id        String   @id @default(uuid())
+  transaction_number     Int      @unique @default(autoincrement())
+
+  batch_id               String
+
+  // Employee = the Applicant behind this Assignment. We don't
+  // duplicate their name/SSN into columns here — always resolve
+  // through assignment -> application -> applicant so the data
+  // never drifts from the single source of truth.
+  assignment_id           String
+
+  organization_id         String   // "Bill To" customer
+  job_id                  String?  // "Order ID" / Staffing Order
+
+  department              String?
+  job_position             String?
+  branch                   String?
+  week_worked              DateTime
+  bill_units_equal_pay_units Boolean @default(false)
+
+  status                   TransactionStatus @default(DRAFT)
+  error_messages           Json?    // array of strings from verifyBatch
+
+  // Denormalized grand-summary cache, recalculated after every line
+  // mutation so list views don't need to aggregate lines every time.
+  total_pay_units          Decimal? @db.Decimal(10, 2)
+  total_bill_units         Decimal? @db.Decimal(10, 2)
+  total_pay_amount         Decimal? @db.Decimal(14, 2)
+  total_bill_amount        Decimal? @db.Decimal(14, 2)
+
+  created_at               DateTime @default(now())
+  updated_at                DateTime @updatedAt
+
+  batch         TransactionBatch @relation(fields: [batch_id], references: [batch_id], onDelete: Cascade)
+  assignment    Assignment       @relation(fields: [assignment_id], references: [assignment_id])
+  organization  Organization     @relation(fields: [organization_id], references: [organization_id])
+  job           Job?             @relation(fields: [job_id], references: [job_id])
+
+  lines         PayrollTransactionLine[]
+
+  @@index([batch_id])
+  @@index([assignment_id])
+  @@index([organization_id])
+  @@index([job_id])
+  @@index([batch_id, status])
+  @@map("payroll_transactions")
+}
+
+model PayrollTransactionLine {
+  line_id             String                 @id @default(uuid())
+  transaction_id      String
+  earning_type        TransactionEarningType @default(REGULAR)
+  // Only set when earning_type == OTHER. Holds the user-typed label
+  // (e.g. "Training Pay", "Per Diem"). Nullable = safe for existing rows.
+  custom_earning_label String?
+
+  pay_units         Decimal @default(0) @db.Decimal(10, 2)
+  bill_units        Decimal @default(0) @db.Decimal(10, 2)
+  pay_rate          Decimal @default(0) @db.Decimal(10, 2)
+  bill_rate         Decimal @default(0) @db.Decimal(10, 2)
+
+  // item_pay/item_bill are stored (not just computed on read) so the
+  // batch report can query lines directly without recomputation.
+  item_pay          Decimal @default(0) @db.Decimal(14, 2)
+  item_bill         Decimal @default(0) @db.Decimal(14, 2)
+
+  created_at        DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  transaction PayrollTransaction @relation(fields: [transaction_id], references: [transaction_id], onDelete: Cascade)
+
+  @@index([transaction_id])
+  @@map("payroll_transaction_lines")
+}
+
+
+model CustomEarningType {
+  custom_earning_type_id String   @id @default(uuid())
+  label                  String   @unique
+  created_by_user_id     String?
+  created_at             DateTime @default(now())
+
+  @@map("custom_earning_types")
+}
 
 // ============================================
 // ENUMS
@@ -1785,4 +2036,64 @@ enum EmailTriggerEvent {
   OFFER_LETTER_SENT
   ONBOARDING_WELCOME
   ASSIGNMENT_NOTIFICATION  // credit/rep user emails
+}
+
+
+
+
+
+enum BatchStatus {
+  OPEN
+  VERIFIED
+  CLOSED
+}
+
+enum TransactionStatus {
+  DRAFT
+  VERIFIED
+  ERROR
+}
+
+enum TransactionEarningType {
+  REGULAR
+  OVERTIME
+  DOUBLETIME
+  HOLIDAY
+  PTO
+  SICK
+  BONUS
+  OTHER
+}
+
+
+
+enum FLSAStatus {
+  EXEMPT
+  NON_EXEMPT
+}
+
+enum BankAccountType {
+  CHECKING
+  SAVINGS
+}
+
+enum DocumentRecipientType {
+  ALL
+  MANAGER
+  DRIVERS
+  NON_DRIVERS
+}
+
+enum OnboardingDocumentCategory {
+  HANDBOOK
+  POLICY
+  AGREEMENT
+  TAX_FORM
+  PROFILE_TASK
+  OTHER
+}
+
+enum DepositAmountType {
+  FIXED
+  REMAINING
 }
