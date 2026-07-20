@@ -220,6 +220,9 @@ const updateOrganizationCompleteSchema = z.object({
     'SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN',
     'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC',
   ]).optional().nullable(),
+  cost_center: z.string().optional().nullable(),
+  department: z.string().optional().nullable(),
+  email: z.string().email('Valid email is required').optional().nullable(),
  
   // Related entities
   company_offices: z.array(companyOfficeUpdateSchema).optional(),
@@ -261,7 +264,7 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
       fax, zip, industry, revenue, employee_count, last_contacted_at,
       representative_id, branch_region, branch_name, default_ot_rule,
       contract_markup, permanent_markup, overview, custom_company_id,
-      org_branch_division,
+      org_branch_division, cost_center, department, email,
       company_offices, addresses, contacts, organization_users,
     } = validation.data;
  
@@ -362,6 +365,9 @@ const updateOrganizationComplete = async (req: Request, res: Response) => {
       if (overview !== undefined)           orgData.overview = overview;
       if (custom_company_id !== undefined)  orgData.custom_company_id = custom_company_id;
       if (org_branch_division !== undefined) orgData.org_branch_division = org_branch_division;
+      if (cost_center !== undefined)        orgData.cost_center = cost_center;
+      if (department !== undefined)         orgData.department = department;
+      if (email !== undefined)              orgData.email = email;
  
       const updatedOrganization = Object.keys(orgData).length > 0
         ? await tx.organization.update({ where: { organization_id: id }, data: orgData })
@@ -1020,6 +1026,31 @@ function extractBlobName(masterFileUrl: string): string | null {
   }
 }
 
+// GET /organizations/:organizationId/work-state
+// Determines the organization's primary work state, used by the onboarding
+// document guide to auto-suggest the correct state tax forms. Prefers an
+// explicit WORKSITE address; falls back to the primary (or first) company office.
+export const getOrganizationWorkState = async (req: Request, res: Response) => {
+  try {
+    const { organizationId } = req.params;
+
+    const org = await prisma.organization.findUnique({
+      where: { organization_id: organizationId },
+      include: { addresses: true, company_offices: true },
+    });
+    if (!org) return sendError(res, 'Organization not found', 404);
+
+    const worksite = org.addresses?.find(a => a.address_type === 'WORKSITE');
+    const primaryOffice = org.company_offices?.find(o => o.is_primary) || org.company_offices?.[0];
+    const work_state = worksite?.state || primaryOffice?.state || null;
+
+    return sendSuccess(res, { work_state });
+  } catch (err: any) {
+    console.error('Error resolving organization work state:', err);
+    return sendError(res, 'Failed to resolve organization work state', 500);
+  }
+};
+
 // GET /organizations/:templateId/view
 // Returns a short-lived, read-only SAS URL for the template's master file.
 export const getOnboardingDocumentViewUrl = async (req: Request, res: Response) => {
@@ -1068,6 +1099,7 @@ export const organizationController = {
   update: updateOrganizationComplete,
   getOrganizationOnboardingDocuments,
   setOrganizationOnboardingDocuments,
-  getOnboardingDocumentViewUrl
+  getOnboardingDocumentViewUrl,
+  getOrganizationWorkState
 };
 

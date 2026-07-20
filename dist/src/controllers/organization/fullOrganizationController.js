@@ -87,6 +87,9 @@ const createOrganizationCompleteSchema = zod_1.z.object({
         'SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN',
         'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC',
     ]).optional(),
+    cost_center: zod_1.z.string().optional(),
+    department: zod_1.z.string().optional(),
+    email: zod_1.z.string().email('Valid email is required').optional(),
     // Related entities
     company_offices: zod_1.z.array(companyOfficeSchema).optional(),
     addresses: zod_1.z.array(organizationAddressSchema).optional(),
@@ -112,7 +115,7 @@ const createOrganizationComplete = async (req, res) => {
         }
         const { name, website, status, phone, created_by_user_id, 
         // New org fields
-        fax, zip, industry, revenue, employee_count, last_contacted_at, representative_id, branch_region, branch_name, default_ot_rule, contract_markup, permanent_markup, overview, custom_company_id, org_branch_division, 
+        fax, zip, industry, revenue, employee_count, last_contacted_at, representative_id, branch_region, branch_name, default_ot_rule, contract_markup, permanent_markup, overview, custom_company_id, org_branch_division, cost_center, department, email, 
         // Relations
         company_offices, addresses, contacts, organization_users, } = validation.data;
         // Check if creator exists
@@ -214,6 +217,9 @@ const createOrganizationComplete = async (req, res) => {
                     overview,
                     custom_company_id,
                     org_branch_division,
+                    cost_center,
+                    department,
+                    email,
                 },
             });
             // 2. Company Offices

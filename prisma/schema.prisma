@@ -47,6 +47,8 @@ model User {
   reviewed_timesheets  Timesheet[] @relation("TimesheetReviewer")
   dashboard_preference DashboardPreference?
   profile     UserProfile?
+  attendance_logs AttendanceLog[]
+
 
 
   represented_organizations Organization[] @relation("OrganizationRepresentative")
@@ -222,6 +224,9 @@ model Organization {
   overview              String?
   custom_company_id     String?          @unique   // "Company ID" display field
   org_branch_division   OrgBranchDivision?
+  cost_center           String?
+  department            String?
+  email                 String?
 
 
   // Relations
@@ -1680,6 +1685,80 @@ model CustomEarningType {
   @@map("custom_earning_types")
 }
 
+
+model AttendanceLog {
+  attendance_id     String           @id @default(uuid())
+  user_id           String
+
+  // Always stored as 00:00:00 UTC for that calendar day —
+  // exactly one AttendanceLog per user per day (enforced below).
+  work_date         DateTime
+
+  status             AttendanceStatus @default(CLOCKED_OUT)
+
+  // First clock-in and most recent clock-out of the day, kept
+  // denormalized on the parent row so list/summary views don't
+  // need to touch ClockSession at all.
+  first_clock_in_at  DateTime?
+  last_clock_out_at  DateTime?
+
+  // Recalculated after every session mutation (clock-in, clock-out,
+  // manual admin edit) — sum of all ClockSession durations that day.
+  total_hours        Decimal          @default(0) @db.Decimal(6, 2)
+
+  is_late            Boolean?         @default(false)
+  is_manual_entry    Boolean          @default(false) // true if created/edited by an admin, not the clock itself
+  notes              String?
+
+  created_at         DateTime         @default(now())
+  updated_at         DateTime         @updatedAt
+
+  user     User            @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  sessions ClockSession[]
+
+  @@unique([user_id, work_date])       // one attendance row per user per day
+  @@index([user_id])
+  @@index([work_date])
+  @@index([user_id, status])
+  @@index([user_id, work_date])
+  @@map("attendance_logs")
+}
+
+// Individual clock-in → clock-out pairs within a day. Most days will
+// have exactly one, but this lets someone clock out for lunch and
+// back in without losing data, and lets you audit exact timestamps.
+model ClockSession {
+  session_id       String    @id @default(uuid())
+  attendance_id    String
+
+  clock_in_at      DateTime
+  clock_out_at     DateTime?
+
+  // Optional geo/IP capture for verification (nullable — safe to
+  // ignore entirely if you don't want to wire up geolocation yet)
+  clock_in_lat     Decimal?  @db.Decimal(9, 6)
+  clock_in_lng     Decimal?  @db.Decimal(9, 6)
+  clock_in_ip      String?
+  clock_out_lat    Decimal?  @db.Decimal(9, 6)
+  clock_out_lng    Decimal?  @db.Decimal(9, 6)
+  clock_out_ip     String?
+
+  duration_minutes Int?      // set once clock_out_at is filled in
+
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  attendance AttendanceLog @relation(fields: [attendance_id], references: [attendance_id], onDelete: Cascade)
+
+  @@index([attendance_id])
+  @@map("clock_sessions")
+}
+
+
+
+
+
+
 // ============================================
 // ENUMS
 // ============================================
@@ -2096,4 +2175,10 @@ enum OnboardingDocumentCategory {
 enum DepositAmountType {
   FIXED
   REMAINING
+}
+
+enum AttendanceStatus {
+  CLOCKED_IN
+  CLOCKED_OUT
+  ON_BREAK
 }

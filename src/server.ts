@@ -50,6 +50,7 @@ import jobCloneRoutes from './routes/job/jobCloneRoutes';
 import jobSubSectionRoutes from './routes/job/jobSubSectionRoutes';
 import emailAutomationRoutes from './routes/automation/automationRoutes';
 import batchTimeEntryRoutes from './routes/updated-payroll/batchTimeEntryRoutes';
+import attendanceRoutes from './routes/user/attendanceRoutes';
 
 
 dotenv.config();
@@ -222,6 +223,10 @@ app.use('/api/email-automation', emailAutomationRoutes);
 
 // Timeentry routes
 app.use('/api/batch-timeentry', batchTimeEntryRoutes);
+
+
+// Attendance routes
+app.use('/api/attendance', attendanceRoutes);
 
 
 // adding health endpoint for render:

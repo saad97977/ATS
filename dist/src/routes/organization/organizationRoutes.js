@@ -10,6 +10,7 @@ router.patch('/:id', organizationController_1.organizationController.update);
 router.delete('/:id', organizationController_1.organizationController.delete);
 router.get('/:organizationId/onboarding-documents', organizationController_1.organizationController.getOrganizationOnboardingDocuments);
 router.put('/:organizationId/onboarding-documents', organizationController_1.organizationController.setOrganizationOnboardingDocuments);
+router.get('/:organizationId/work-state', organizationController_1.organizationController.getOrganizationWorkState);
 router.get('/:templateId/view', organizationController_1.organizationController.getOnboardingDocumentViewUrl);
 exports.default = router;
 //# sourceMappingURL=organizationRoutes.js.map

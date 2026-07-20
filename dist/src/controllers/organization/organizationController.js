@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.organizationController = exports.getOnboardingDocumentViewUrl = exports.setOrganizationOnboardingDocuments = exports.getOrganizationOnboardingDocuments = void 0;
+exports.organizationController = exports.getOnboardingDocumentViewUrl = exports.getOrganizationWorkState = exports.setOrganizationOnboardingDocuments = exports.getOrganizationOnboardingDocuments = void 0;
 const client_1 = require("@prisma/client");
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const crudFactory_1 = require("../../factories/crudFactory");
@@ -201,6 +201,9 @@ const updateOrganizationCompleteSchema = zod_1.z.object({
         'SMS_HOSPITALITY', 'SMS_MCL_JASCO_GOC', 'SMS_ADMIN',
         'SMS_STAFFING_SOLUTIONS', 'SPECIAL_MULTI_ADMIN', 'SPECIAL_MULTI_INC',
     ]).optional().nullable(),
+    cost_center: zod_1.z.string().optional().nullable(),
+    department: zod_1.z.string().optional().nullable(),
+    email: zod_1.z.string().email('Valid email is required').optional().nullable(),
     // Related entities
     company_offices: zod_1.z.array(companyOfficeUpdateSchema).optional(),
     addresses: zod_1.z.array(organizationAddressUpdateSchema).optional(),
@@ -233,7 +236,7 @@ const updateOrganizationComplete = async (req, res) => {
             }));
             return (0, response_1.sendError)(res, 'Validation failed', 400, errors);
         }
-        const { name, website, status, phone, fax, zip, industry, revenue, employee_count, last_contacted_at, representative_id, branch_region, branch_name, default_ot_rule, contract_markup, permanent_markup, overview, custom_company_id, org_branch_division, company_offices, addresses, contacts, organization_users, } = validation.data;
+        const { name, website, status, phone, fax, zip, industry, revenue, employee_count, last_contacted_at, representative_id, branch_region, branch_name, default_ot_rule, contract_markup, permanent_markup, overview, custom_company_id, org_branch_division, cost_center, department, email, company_offices, addresses, contacts, organization_users, } = validation.data;
         // Check organization exists
         const existingOrg = await prisma_config_1.default.organization.findUnique({
             where: { organization_id: id },
@@ -335,6 +338,12 @@ const updateOrganizationComplete = async (req, res) => {
                 orgData.custom_company_id = custom_company_id;
             if (org_branch_division !== undefined)
                 orgData.org_branch_division = org_branch_division;
+            if (cost_center !== undefined)
+                orgData.cost_center = cost_center;
+            if (department !== undefined)
+                orgData.department = department;
+            if (email !== undefined)
+                orgData.email = email;
             const updatedOrganization = Object.keys(orgData).length > 0
                 ? await tx.organization.update({ where: { organization_id: id }, data: orgData })
                 : existingOrg;
@@ -954,6 +963,30 @@ function extractBlobName(masterFileUrl) {
         return null;
     }
 }
+// GET /organizations/:organizationId/work-state
+// Determines the organization's primary work state, used by the onboarding
+// document guide to auto-suggest the correct state tax forms. Prefers an
+// explicit WORKSITE address; falls back to the primary (or first) company office.
+const getOrganizationWorkState = async (req, res) => {
+    try {
+        const { organizationId } = req.params;
+        const org = await prisma_config_1.default.organization.findUnique({
+            where: { organization_id: organizationId },
+            include: { addresses: true, company_offices: true },
+        });
+        if (!org)
+            return (0, response_1.sendError)(res, 'Organization not found', 404);
+        const worksite = org.addresses?.find(a => a.address_type === 'WORKSITE');
+        const primaryOffice = org.company_offices?.find(o => o.is_primary) || org.company_offices?.[0];
+        const work_state = worksite?.state || primaryOffice?.state || null;
+        return (0, response_1.sendSuccess)(res, { work_state });
+    }
+    catch (err) {
+        console.error('Error resolving organization work state:', err);
+        return (0, response_1.sendError)(res, 'Failed to resolve organization work state', 500);
+    }
+};
+exports.getOrganizationWorkState = getOrganizationWorkState;
 // GET /organizations/:templateId/view
 // Returns a short-lived, read-only SAS URL for the template's master file.
 const getOnboardingDocumentViewUrl = async (req, res) => {
@@ -998,6 +1031,7 @@ exports.organizationController = {
     update: updateOrganizationComplete,
     getOrganizationOnboardingDocuments: exports.getOrganizationOnboardingDocuments,
     setOrganizationOnboardingDocuments: exports.setOrganizationOnboardingDocuments,
-    getOnboardingDocumentViewUrl: exports.getOnboardingDocumentViewUrl
+    getOnboardingDocumentViewUrl: exports.getOnboardingDocumentViewUrl,
+    getOrganizationWorkState: exports.getOrganizationWorkState
 };
 //# sourceMappingURL=organizationController.js.map

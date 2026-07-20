@@ -1,1 +1,1 @@
-{"version":3,"file":"fullOrganizationController.d.ts","sourceRoot":"","sources":["../../../../src/controllers/organization/fullOrganizationController.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,OAAO,EAAE,QAAQ,EAAE,MAAM,SAAS,CAAC;AAwX5C,eAAO,MAAM,8BAA8B;sCA7QI,OAAO,OAAO,QAAQ;CA+QpE,CAAC"}
+{"version":3,"file":"fullOrganizationController.d.ts","sourceRoot":"","sources":["../../../../src/controllers/organization/fullOrganizationController.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,OAAO,EAAE,QAAQ,EAAE,MAAM,SAAS,CAAC;AA8X5C,eAAO,MAAM,8BAA8B;sCAhRI,OAAO,OAAO,QAAQ;CAkRpE,CAAC"}

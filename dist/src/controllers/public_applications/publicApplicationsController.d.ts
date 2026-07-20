@@ -31,6 +31,7 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
     job: {
         organization: {
             name: string;
+            email: string | null;
             status: import(".prisma/client").$Enums.OrganizationStatus;
             created_at: Date;
             created_by_user_id: string;
@@ -38,6 +39,7 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
             phone: string | null;
             organization_id: string;
             zip: string | null;
+            department: string | null;
             last_updated_at: Date | null;
             fax: string | null;
             industry: string | null;
@@ -53,6 +55,7 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
             overview: string | null;
             custom_company_id: string | null;
             org_branch_division: import(".prisma/client").$Enums.OrgBranchDivision | null;
+            cost_center: string | null;
         };
     } & {
         status: import(".prisma/client").$Enums.JobStatus;
