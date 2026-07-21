@@ -1,5 +1,8 @@
 import { Router } from 'express';
 import { assignmentController } from '../../controllers/application/assignmentController';
+import multer from 'multer';
+const upload = multer();
+
 
 const router = Router();
 
@@ -27,8 +30,13 @@ const router = Router();
  * - active_only: Filter for active assignments only (for GET all)
  */
 
+
+
+
 router.get('/:assignmentId/documents/:documentId/view',     assignmentController.viewAssignmentDocument);
 router.get('/:assignmentId/documents/:documentId/download', assignmentController.downloadAssignmentDocument);
+
+router.patch('/:assignmentId/update',upload.none() , assignmentController.updateOnboardingInfo);
 
 // onboarding details endpoint - must come before :id route
 router.get('/:assignmentId/details', assignmentController.getAssignmentDetails);

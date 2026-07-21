@@ -1,7 +1,12 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const assignmentController_1 = require("../../controllers/application/assignmentController");
+const multer_1 = __importDefault(require("multer"));
+const upload = (0, multer_1.default)();
 const router = (0, express_1.Router)();
 /**
  * Assignment Routes
@@ -28,6 +33,7 @@ const router = (0, express_1.Router)();
  */
 router.get('/:assignmentId/documents/:documentId/view', assignmentController_1.assignmentController.viewAssignmentDocument);
 router.get('/:assignmentId/documents/:documentId/download', assignmentController_1.assignmentController.downloadAssignmentDocument);
+router.patch('/:assignmentId/update', upload.none(), assignmentController_1.assignmentController.updateOnboardingInfo);
 // onboarding details endpoint - must come before :id route
 router.get('/:assignmentId/details', assignmentController_1.assignmentController.getAssignmentDetails);
 // Statistics endpoint - must come before :id route

@@ -1176,7 +1176,7 @@ const searchPipelinedApplicants = async (req: Request, res: Response) => {
 const SSN_KEY = Buffer.from(process.env.SSN_ENCRYPTION_KEY || '', 'hex');  // 32 bytes
 const SSN_IV  = Buffer.from(process.env.SSN_ENCRYPTION_IV  || '', 'hex');  // 16 bytes
 
-const encryptSSN = (ssn: string): string => {
+export const encryptSSN = (ssn: string): string => {
   if (!ssn) return '';
   if (SSN_KEY.length !== 32) throw new Error('SSN_ENCRYPTION_KEY must be 32 bytes (64 hex chars)');
   const cipher = crypto.createCipheriv('aes-256-cbc', SSN_KEY, SSN_IV);
@@ -1244,7 +1244,7 @@ const onboardCandidate = async (req: Request, res: Response) => {  try {
       work_state, resident_state,
       // ── NEW ──
       employee_number, local_tax_jurisdiction, local_tax_rate, exempt_from_local,
-      flsa_status,
+      flsa_status, payroll_frequency,
     } = req.body;
 
     let workersCompCodes: Array<{ code: string; description?: string; pct: number }> = [];
@@ -1334,6 +1334,9 @@ const onboardCandidate = async (req: Request, res: Response) => {  try {
     // ── NEW validations ──
     if (flsa_status && !['EXEMPT', 'NON_EXEMPT'].includes(flsa_status))
       return sendError(res, 'flsa_status must be EXEMPT or NON_EXEMPT', 400);
+
+    if (payroll_frequency && !['WEEKLY', 'BI_WEEKLY', 'SEMI_MONTHLY', 'MONTHLY'].includes(payroll_frequency))
+      return sendError(res, 'payroll_frequency must be WEEKLY, BI_WEEKLY, SEMI_MONTHLY, or MONTHLY', 400);
 
     if (bankAccounts.length) {
       for (const b of bankAccounts) {
@@ -1567,6 +1570,7 @@ const onboardCandidate = async (req: Request, res: Response) => {  try {
             start_date:         startDate,
             end_date:           end_date ? new Date(end_date) : null,
             employment_type,
+            payroll_frequency:  payroll_frequency || null,
             workers_comp_code:  workersCompCodes[0]?.code || null,
             workers_comp_codes: workersCompCodes,
             company_codes:      companyCodes,

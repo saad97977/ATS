@@ -5,6 +5,7 @@ import prisma from '../../prisma.config';
 import { createCrudController } from '../../factories/crudFactory';
 import { createAssignmentSchema, updateAssignmentSchema } from '../../validators/schemas';
 import { sendSuccess, sendError } from '../../utils/response';
+import { encryptSSN } from './pipelineController';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AZURE SETUP
@@ -475,6 +476,13 @@ const getAssignmentsByEmploymentType = async (req: Request, res: Response) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/assignments/:assignmentId/details
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/assignments/:assignmentId/details
+// Now also returns the full payroll/onboarding snapshot (tax info, bank
+// accounts, benefit deductions, garnishments, workers comp / company codes)
+// so this endpoint can prefill the "update onboarding info" form — mirrors
+// every field updateOnboardingInfo (PATCH) is capable of writing.
+// ─────────────────────────────────────────────────────────────────────────────
 const getAssignmentDetails = async (req: Request, res: Response) => {
   try {
     const { assignmentId } = req.params;
@@ -486,9 +494,13 @@ const getAssignmentDetails = async (req: Request, res: Response) => {
           include: {
             applicant: {
               include: {
-                contact:     true,
-                demographic: true,
-                documents:   { orderBy: { created_at: 'desc' } },
+                contact:            true,
+                demographic:        true,
+                documents:          { orderBy: { created_at: 'desc' } },
+                // ADDED: needed to populate the onboarding/payroll edit form
+                bank_accounts:      true,
+                benefit_deductions: true,
+                garnishments:       true,
               },
             },
             job: {
@@ -519,7 +531,8 @@ const getAssignmentDetails = async (req: Request, res: Response) => {
     if (!assignment) return sendError(res, 'Assignment not found', 404);
 
     const applicationId = assignment.application_id;
-    const allDocs       = assignment.application.applicant.documents ?? [];
+    const applicant      = assignment.application.applicant;
+    const allDocs        = applicant.documents ?? [];
 
     const isOnboardingDoc = (doc: any): boolean => {
       const raw = doc?.file_url;
@@ -589,6 +602,90 @@ const getAssignmentDetails = async (req: Request, res: Response) => {
       } catch { return []; }
     };
 
+    const parseObj = (v: any): Record<string, any> => {
+      try {
+        if (v && typeof v === 'object') return v;
+        if (typeof v === 'string')       return JSON.parse(v);
+        return {};
+      } catch { return {}; }
+    };
+
+    // ── Build the payroll/onboarding snapshot ──
+    // Mirrors every field updateOnboardingInfo (PATCH) can write, so the
+    // edit form can be prefilled directly from this response.
+    const demographic   = applicant.demographic;
+    const taxInfo        = parseObj(demographic?.tax_info);
+    const localTaxInfo    = parseObj(demographic?.local_tax_info);
+
+    const payrollInfo = {
+      // Tax / withholding — from ApplicantDemographic.tax_info
+      filing_status:          taxInfo.filing_status          ?? null,
+      additional_withholding: taxInfo.additional_withholding ?? null,
+      exempt_from_federal:    taxInfo.exempt_from_federal    ?? false,
+      exempt_from_state:      taxInfo.exempt_from_state      ?? false,
+      work_state:             taxInfo.work_state             ?? null,
+      resident_state:         taxInfo.resident_state         ?? null,
+
+      // Local tax — from ApplicantDemographic.local_tax_info
+      local_tax_jurisdiction: localTaxInfo.jurisdiction       ?? null,
+      local_tax_rate:         localTaxInfo.local_tax_rate     ?? null,
+      exempt_from_local:      localTaxInfo.exempt_from_local  ?? false,
+
+      // SSN: never return the plaintext/decrypted value from a details GET.
+      // Expose only whether one is on file. If the edit form truly needs a
+      // masked last-4, wire in a decryptSSN() + mask helper here instead.
+      ssn_on_file:            !!demographic?.ssn_encrypted,
+
+      employee_number:        demographic?.employee_number ?? null,
+      flsa_status:            demographic?.flsa_status      ?? null,
+
+      // Assignment-level payroll fields
+      start_date:             assignment.start_date,
+      end_date:                assignment.end_date,
+      employment_type:        assignment.employment_type,
+      payroll_frequency:      (assignment as any).payroll_frequency ?? null,
+      workers_comp_code:      (assignment as any).workers_comp_code  ?? null,
+      workers_comp_codes:     parseJson((assignment as any).workers_comp_codes),
+      company_codes:          parseJson((assignment as any).company_codes),
+
+      // Full-replace collections
+      bank_accounts: (applicant.bank_accounts ?? []).map((b: any) => ({
+        bank_account_id: b.bank_account_id,
+        bank_name:       b.bank_name,
+        account_type:    b.account_type,
+        // Mask account/routing numbers the same way SSN is handled — full
+        // numbers shouldn't round-trip through a details GET response.
+        routing_number:  b.routing_number,
+        account_number:  b.account_number ? `••••${String(b.account_number).slice(-4)}` : null,
+        amount:          b.amount,
+        amount_type:     b.amount_type,
+        is_active:       b.is_active,
+      })),
+      benefit_deductions: (applicant.benefit_deductions ?? []).map((d: any) => ({
+        benefit_deduction_id: d.benefit_deduction_id,
+        deduction_type:       d.deduction_type,
+        amount:                d.amount,
+        percentage:            d.percentage,
+        is_active:             d.is_active,
+        effective_date:        d.effective_date,
+        end_date:               d.end_date,
+        notes:                  d.notes,
+      })),
+      garnishments: (applicant.garnishments ?? []).map((g: any) => ({
+        garnishment_id:    g.garnishment_id,
+        garnishment_type:  g.garnishment_type,
+        case_number:       g.case_number,
+        priority_order:    g.priority_order,
+        amount:             g.amount,
+        percentage:         g.percentage,
+        max_amount:         g.max_amount,
+        is_active:          g.is_active,
+        start_date:         g.start_date,
+        end_date:            g.end_date,
+        notes:               g.notes,
+      })),
+    };
+
     return sendSuccess(res, {
       assignment: {
         assignment_id:      assignment.assignment_id,
@@ -596,16 +693,17 @@ const getAssignmentDetails = async (req: Request, res: Response) => {
         start_date:         assignment.start_date,
         end_date:           assignment.end_date,
         employment_type:    assignment.employment_type,
+        payroll_frequency:  (assignment as any).payroll_frequency ?? null,
         workers_comp_code:  (assignment as any).workers_comp_code  ?? null,
         workers_comp_codes: parseJson((assignment as any).workers_comp_codes),
         company_codes:      parseJson((assignment as any).company_codes),
         created_at:         (assignment as any).created_at,
       },
       applicant: {
-        applicant_id: assignment.application.applicant.applicant_id,
-        full_name:    assignment.application.applicant.full_name,
-        status:       assignment.application.applicant.status,
-        contact:      assignment.application.applicant.contact,
+        applicant_id: applicant.applicant_id,
+        full_name:    applicant.full_name,
+        status:       applicant.status,
+        contact:      applicant.contact,
       },
       job: {
         job_id:       assignment.application.job.job_id,
@@ -614,6 +712,8 @@ const getAssignmentDetails = async (req: Request, res: Response) => {
         organization: assignment.application.job.organization,
         rates:        assignment.application.job.job_rates?.[0] ?? null,
       },
+      // ADDED: full onboarding/payroll snapshot for the edit form
+      payroll_info: payrollInfo,
       documents,
     });
 
@@ -763,6 +863,300 @@ export const viewAssignmentDocument = (req: Request, res: Response) =>
 export const downloadAssignmentDocument = (req: Request, res: Response) =>
   streamDocument(req, res, true);
 
+
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// PATCH /assignments/:assignmentId/update
+// Edits payroll/onboarding data captured in onboardCandidate.
+// Only fields present in the request are updated (partial update).
+// Array collections (bank accounts, benefit deductions, garnishments) use
+// a full-replace strategy when their key is present in the body.
+// payroll_frequency lives on Assignment (per-placement).
+// ══════════════════════════════════════════════════════════════════════════
+const updateOnboardingInfo = async (req: Request, res: Response) => {
+  try {
+    const { assignmentId } = req.params;
+
+    // Route only gives us assignmentId — resolve the applicant through it
+    const assignment = await prisma.assignment.findUnique({
+      where: { assignment_id: assignmentId },
+      include: { application: { include: { applicant: { include: { demographic: true } } } } },
+    });
+    if (!assignment) return sendError(res, 'Assignment not found', 404);
+
+    const applicantId = assignment.application.applicant_id;
+    const applicant = assignment.application.applicant;
+    if (!applicant) return sendError(res, 'Applicant not found', 404);
+
+
+    const {
+      ssn, employee_number, filing_status, additional_withholding,
+      exempt_from_federal, exempt_from_state, work_state, resident_state,
+      local_tax_jurisdiction, local_tax_rate, exempt_from_local,
+      flsa_status,
+      start_date, end_date, employment_type, payroll_frequency,
+    } = req.body;
+
+    const hasBankAccounts       = 'bank_accounts' in req.body;
+    const hasBenefitDeductions  = 'benefit_deductions' in req.body;
+    const hasGarnishments       = 'garnishments' in req.body;
+    const hasWorkersCompCodes   = 'workers_comp_codes' in req.body;
+    const hasCompanyCodes       = 'company_codes' in req.body;
+
+    let bankAccounts: Array<{
+      bank_account_id?: string; bank_name: string; account_type?: string;
+      routing_number: string; account_number: string;
+      amount?: number; amount_type?: string; is_active?: boolean;
+    }> = [];
+    if (hasBankAccounts) {
+      try { bankAccounts = JSON.parse(req.body.bank_accounts || '[]'); }
+      catch { return sendError(res, 'Invalid bank_accounts format — expected JSON array', 400); }
+
+      for (const b of bankAccounts) {
+        if (!b.bank_name?.trim() || !b.routing_number || !b.account_number)
+          return sendError(res, 'Each bank account requires bank_name, routing_number, and account_number', 400);
+        if (!/^\d{9}$/.test(b.routing_number))
+          return sendError(res, 'Each routing_number must be exactly 9 digits', 400);
+        if (b.account_type && !['CHECKING', 'SAVINGS'].includes(b.account_type))
+          return sendError(res, 'account_type must be CHECKING or SAVINGS', 400);
+        if (b.amount_type && !['FIXED', 'REMAINING'].includes(b.amount_type))
+          return sendError(res, 'amount_type must be FIXED or REMAINING', 400);
+      }
+      const remainingCount = bankAccounts.filter(b => (b.amount_type || 'REMAINING') === 'REMAINING').length;
+      if (remainingCount > 1)
+        return sendError(res, 'Only one bank account can be set to amount_type REMAINING', 400);
+    }
+
+    let benefitDeductions: Array<{
+      deduction_type: string; amount?: number; percentage?: number;
+      is_active?: boolean; effective_date?: string; end_date?: string; notes?: string;
+    }> = [];
+    if (hasBenefitDeductions) {
+      try { benefitDeductions = JSON.parse(req.body.benefit_deductions || '[]'); }
+      catch { return sendError(res, 'Invalid benefit_deductions format — expected JSON array', 400); }
+      if (benefitDeductions.some(d => !d.deduction_type?.trim()))
+        return sendError(res, 'Each benefit deduction requires a deduction_type', 400);
+    }
+
+    let garnishments: Array<{
+      garnishment_type: string; case_number?: string; priority_order?: number;
+      amount?: number; percentage?: number; max_amount?: number;
+      is_active?: boolean; start_date?: string; end_date?: string; notes?: string;
+    }> = [];
+    if (hasGarnishments) {
+      try { garnishments = JSON.parse(req.body.garnishments || '[]'); }
+      catch { return sendError(res, 'Invalid garnishments format — expected JSON array', 400); }
+      if (garnishments.some(g => !g.garnishment_type?.trim()))
+        return sendError(res, 'Each garnishment requires a garnishment_type', 400);
+    }
+
+    let workersCompCodes: Array<{ code: string; description?: string; pct: number }> = [];
+    if (hasWorkersCompCodes) {
+      try { workersCompCodes = JSON.parse(req.body.workers_comp_codes || '[]'); }
+      catch { return sendError(res, 'Invalid workers_comp_codes format — expected JSON array', 400); }
+      if (!workersCompCodes.length)
+        return sendError(res, 'At least one workers\' comp code is required', 400);
+      if (workersCompCodes.some(w => !w.code?.trim() || typeof w.pct !== 'number' || w.pct <= 0))
+        return sendError(res, 'All workers\' comp entries must have a code and a valid pct > 0', 400);
+      const totalWcPct = workersCompCodes.reduce((s, w) => s + w.pct, 0);
+      if (Math.round(totalWcPct) !== 100)
+        return sendError(res, `Workers' comp pct must total 100% (got ${totalWcPct}%)`, 400);
+    }
+
+    let companyCodes: Array<{ code: string; description?: string; allocation_pct: number }> = [];
+    if (hasCompanyCodes) {
+      try { companyCodes = JSON.parse(req.body.company_codes || '[]'); }
+      catch { return sendError(res, 'Invalid company_codes format — expected JSON array', 400); }
+      if (!companyCodes.length)
+        return sendError(res, 'At least one company code is required', 400);
+      const totalAllocation = companyCodes.reduce((s, c) => s + (c.allocation_pct || 0), 0);
+      if (Math.round(totalAllocation) !== 100)
+        return sendError(res, `Company code allocations must total 100% (got ${totalAllocation}%)`, 400);
+    }
+
+    if (ssn !== undefined && ssn !== '' && !/^\d{9}$/.test(ssn))
+      return sendError(res, 'SSN must be exactly 9 digits', 400);
+
+    if (flsa_status && !['EXEMPT', 'NON_EXEMPT'].includes(flsa_status))
+      return sendError(res, 'flsa_status must be EXEMPT or NON_EXEMPT', 400);
+
+    if (payroll_frequency && !['WEEKLY', 'BI_WEEKLY', 'SEMI_MONTHLY', 'MONTHLY'].includes(payroll_frequency))
+      return sendError(res, 'payroll_frequency must be WEEKLY, BI_WEEKLY, SEMI_MONTHLY, or MONTHLY', 400);
+
+    if (employment_type && !['W2', 'CONTRACTOR_1099'].includes(employment_type))
+      return sendError(res, 'employment_type must be W2 or CONTRACTOR_1099', 400);
+
+    let parsedStartDate: Date | undefined;
+    if (start_date !== undefined) {
+      parsedStartDate = new Date(start_date);
+      if (isNaN(parsedStartDate.getTime())) return sendError(res, 'Invalid start_date', 400);
+    }
+    if (end_date !== undefined && end_date !== null && end_date !== '') {
+      const parsedEnd = new Date(end_date);
+      if (isNaN(parsedEnd.getTime())) return sendError(res, 'Invalid end_date', 400);
+      if (parsedStartDate && parsedEnd <= parsedStartDate)
+        return sendError(res, 'end_date must be after start_date', 400);
+    }
+
+    // FIX: applicant.demographic, not applicant.applicantDemographic
+    const existingTaxInfo      = (applicant.demographic?.tax_info as any) || {};
+    const existingLocalTaxInfo = (applicant.demographic?.local_tax_info as any) || {};
+
+    const taxInfoPayload = {
+      ...existingTaxInfo,
+      ...(filing_status !== undefined && { filing_status }),
+      ...(additional_withholding !== undefined && { additional_withholding: parseFloat(additional_withholding || '0') }),
+      ...(exempt_from_federal !== undefined && { exempt_from_federal: exempt_from_federal === 'true' || exempt_from_federal === true }),
+      ...(exempt_from_state !== undefined && { exempt_from_state: exempt_from_state === 'true' || exempt_from_state === true }),
+      ...(work_state !== undefined && { work_state }),
+      ...(resident_state !== undefined && { resident_state: resident_state || work_state }),
+    };
+
+    const localTaxInfoPayload = (local_tax_jurisdiction !== undefined || local_tax_rate !== undefined || exempt_from_local !== undefined)
+      ? {
+          ...existingLocalTaxInfo,
+          ...(local_tax_jurisdiction !== undefined && { jurisdiction: local_tax_jurisdiction || null }),
+          ...(local_tax_rate !== undefined && { local_tax_rate: local_tax_rate ? parseFloat(local_tax_rate) : null }),
+          ...(exempt_from_local !== undefined && { exempt_from_local: exempt_from_local === 'true' || exempt_from_local === true }),
+        }
+      : undefined;
+
+
+      
+    // ── 7. Encrypt SSN ─────────────────────────────────────────────────────────
+    const encryptedSSN = encryptSSN(ssn);
+    
+    await prisma.$transaction(async (tx) => {
+      // 1. Demographic / tax patch — model accessor `applicantDemographic` is correct here
+      await (tx as any).applicantDemographic.upsert({
+        where:  { applicant_id: applicantId },
+        update: {
+          ...(encryptedSSN !== undefined && { ssn_encrypted: encryptedSSN }),
+          tax_info:        taxInfoPayload,
+          ...(localTaxInfoPayload !== undefined && { local_tax_info: localTaxInfoPayload }),
+          ...(employee_number !== undefined && { employee_number }),
+          ...(flsa_status !== undefined && { flsa_status }),
+        },
+        create: {
+          applicant_id:    applicantId,
+          ssn_encrypted:   encryptedSSN || '',
+          tax_info:        taxInfoPayload,
+          local_tax_info:  localTaxInfoPayload,
+          employee_number: employee_number || null,
+          flsa_status:     flsa_status || null,
+        },
+      });
+
+      // 2. Assignment patch — payroll_frequency lives here
+      const assignmentUpdates: Record<string, any> = {};
+      if (parsedStartDate) assignmentUpdates.start_date = parsedStartDate;
+      if (end_date !== undefined) assignmentUpdates.end_date = end_date ? new Date(end_date) : null;
+      if (employment_type !== undefined) assignmentUpdates.employment_type = employment_type;
+      if (payroll_frequency !== undefined) assignmentUpdates.payroll_frequency = payroll_frequency || null;
+      if (hasWorkersCompCodes) {
+        assignmentUpdates.workers_comp_code  = workersCompCodes[0]?.code || null;
+        assignmentUpdates.workers_comp_codes = workersCompCodes;
+      }
+      if (hasCompanyCodes) assignmentUpdates.company_codes = companyCodes;
+
+      if (Object.keys(assignmentUpdates).length) {
+        await tx.assignment.update({
+          where: { assignment_id: assignmentId },
+          data:  assignmentUpdates,
+        });
+      }
+
+      // 3. Bank accounts — full replace when key present
+      if (hasBankAccounts) {
+        await tx.bankAccount.deleteMany({ where: { applicant_id: applicantId } });
+        if (bankAccounts.length) {
+          await tx.bankAccount.createMany({
+            data: bankAccounts.map(b => ({
+              applicant_id:   applicantId,
+              bank_name:      b.bank_name,
+              account_type:   (b.account_type as any) || 'CHECKING',
+              routing_number: b.routing_number,
+              account_number: b.account_number,
+              amount:         b.amount ?? null,
+              amount_type:    (b.amount_type as any) || 'REMAINING',
+              is_active:      b.is_active ?? true,
+            })),
+          });
+        }
+      }
+
+      // 4. Benefit deductions — full replace when key present
+      if (hasBenefitDeductions) {
+        await tx.benefitDeduction.deleteMany({ where: { applicant_id: applicantId } });
+        if (benefitDeductions.length) {
+          await tx.benefitDeduction.createMany({
+            data: benefitDeductions.map(d => ({
+              applicant_id:   applicantId,
+              deduction_type: d.deduction_type,
+              amount:         d.amount ?? null,
+              percentage:     d.percentage ?? null,
+              is_active:      d.is_active ?? true,
+              effective_date: d.effective_date ? new Date(d.effective_date) : null,
+              end_date:       d.end_date ? new Date(d.end_date) : null,
+              notes:          d.notes || null,
+            })),
+          });
+        }
+      }
+
+      // 5. Garnishments — full replace when key present
+      if (hasGarnishments) {
+        await tx.garnishment.deleteMany({ where: { applicant_id: applicantId } });
+        if (garnishments.length) {
+          await tx.garnishment.createMany({
+            data: garnishments.map(g => ({
+              applicant_id:     applicantId,
+              garnishment_type: g.garnishment_type,
+              case_number:      g.case_number || null,
+              priority_order:   g.priority_order ?? 1,
+              amount:           g.amount ?? null,
+              percentage:       g.percentage ?? null,
+              max_amount:       g.max_amount ?? null,
+              is_active:        g.is_active ?? true,
+              start_date:       g.start_date ? new Date(g.start_date) : null,
+              end_date:         g.end_date ? new Date(g.end_date) : null,
+              notes:            g.notes || null,
+            })),
+          });
+        }
+      }
+    });
+
+    // ── Fetch fresh state for response ──
+    // FIX: relation field names match schema exactly: demographic,
+    // bank_accounts, benefit_deductions, garnishments (snake_case, no @map)
+    const result = await prisma.applicant.findUnique({
+      where: { applicant_id: applicantId },
+      include: {
+        demographic:        true,
+        bank_accounts:      true,
+        benefit_deductions: true,
+        garnishments:       true,
+        applications: {
+          include: { assignment: true },
+        },
+      },
+    });
+
+    return sendSuccess(res, result);
+
+  } catch (err: any) {
+    console.error('Error updating onboarding info:', err);
+    return sendError(res, 'Failed to update onboarding info', 500);
+  }
+};
+
+
+
+
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -780,4 +1174,5 @@ export const assignmentController = {
   getAssignmentDetails,
   viewAssignmentDocument,
   downloadAssignmentDocument,
+  updateOnboardingInfo
 };

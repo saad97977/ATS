@@ -858,7 +858,7 @@ model ApplicantDemographic {
   employee_number   String?      @unique
   local_tax_info    Json?        // { jurisdiction, local_tax_rate, exempt_from_local }
   flsa_status       FLSAStatus?
-
+  
   // Relations
   applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
 
@@ -1227,6 +1227,7 @@ model Assignment {
   hired_notes   String?
   falloff       Boolean?  @default(false)
   extended      Boolean?  @default(false)
+  payroll_frequency PayPeriodType? 
 
   // Existing relation
   application  Application  @relation(fields: [application_id], references: [application_id], onDelete: Cascade)

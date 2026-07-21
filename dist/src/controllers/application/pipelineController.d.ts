@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 export type EmailTriggerEvent = 'INTERVIEW_SCHEDULED' | 'INTERVIEW_RESCHEDULED' | 'INTERVIEW_REJECTED' | 'OFFER_LETTER_SENT' | 'ONBOARDING_WELCOME' | 'ASSIGNMENT_NOTIFICATION_CREDIT' | 'ASSIGNMENT_NOTIFICATION_REP';
+export declare const encryptSSN: (ssn: string) => string;
 export declare const uploadOnboardingDocs: import("express").RequestHandler<import("express-serve-static-core").ParamsDictionary, any, any, import("qs").ParsedQs, Record<string, any>>;
 export declare const pipelineController: {
     getAll: (req: Request, res: Response) => Promise<void>;

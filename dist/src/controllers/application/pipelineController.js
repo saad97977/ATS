@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.pipelineController = exports.uploadOnboardingDocs = void 0;
+exports.pipelineController = exports.uploadOnboardingDocs = exports.encryptSSN = void 0;
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const crudFactory_1 = require("../../factories/crudFactory");
 const schemas_1 = require("../../validators/schemas");
@@ -1074,6 +1074,7 @@ const encryptSSN = (ssn) => {
     const cipher = crypto_1.default.createCipheriv('aes-256-cbc', SSN_KEY, SSN_IV);
     return cipher.update(ssn, 'utf8', 'hex') + cipher.final('hex');
 };
+exports.encryptSSN = encryptSSN;
 // Only needed if you expose a read endpoint later — kept here for completeness
 // const decryptSSN = (enc: string): string => {
 //   const d = crypto.createDecipheriv('aes-256-cbc', SSN_KEY, SSN_IV);
@@ -1121,7 +1122,7 @@ const onboardCandidate = async (req, res) => {
         // ── 1. Parse body ──────────────────────────────────────────────────────────
         const { start_date, end_date, employment_type, ssn, filing_status, additional_withholding, exempt_from_federal, exempt_from_state, work_state, resident_state, 
         // ── NEW ──
-        employee_number, local_tax_jurisdiction, local_tax_rate, exempt_from_local, flsa_status, } = req.body;
+        employee_number, local_tax_jurisdiction, local_tax_rate, exempt_from_local, flsa_status, payroll_frequency, } = req.body;
         let workersCompCodes = [];
         try {
             workersCompCodes = JSON.parse(req.body.workers_comp_codes || '[]');
@@ -1194,6 +1195,8 @@ const onboardCandidate = async (req, res) => {
         // ── NEW validations ──
         if (flsa_status && !['EXEMPT', 'NON_EXEMPT'].includes(flsa_status))
             return (0, response_1.sendError)(res, 'flsa_status must be EXEMPT or NON_EXEMPT', 400);
+        if (payroll_frequency && !['WEEKLY', 'BI_WEEKLY', 'SEMI_MONTHLY', 'MONTHLY'].includes(payroll_frequency))
+            return (0, response_1.sendError)(res, 'payroll_frequency must be WEEKLY, BI_WEEKLY, SEMI_MONTHLY, or MONTHLY', 400);
         if (bankAccounts.length) {
             for (const b of bankAccounts) {
                 if (!b.bank_name?.trim() || !b.routing_number || !b.account_number)
@@ -1307,7 +1310,7 @@ const onboardCandidate = async (req, res) => {
             }));
         }
         // ── 7. Encrypt SSN ─────────────────────────────────────────────────────────
-        const encryptedSSN = encryptSSN(ssn);
+        const encryptedSSN = (0, exports.encryptSSN)(ssn);
         // Build tax payload once — reused in both upsert branches
         const taxInfoPayload = {
             filing_status,
@@ -1376,6 +1379,7 @@ const onboardCandidate = async (req, res) => {
                         start_date: startDate,
                         end_date: end_date ? new Date(end_date) : null,
                         employment_type,
+                        payroll_frequency: payroll_frequency || null,
                         workers_comp_code: workersCompCodes[0]?.code || null,
                         workers_comp_codes: workersCompCodes,
                         company_codes: companyCodes,

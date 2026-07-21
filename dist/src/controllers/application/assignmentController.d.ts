@@ -14,6 +14,7 @@ export declare const assignmentController: {
     getAssignmentDetails: (req: Request, res: Response) => Promise<void>;
     viewAssignmentDocument: (req: Request, res: Response) => Promise<void>;
     downloadAssignmentDocument: (req: Request, res: Response) => Promise<void>;
+    updateOnboardingInfo: (req: Request, res: Response) => Promise<void>;
     delete: (req: Request, res: Response) => Promise<void>;
 };
 //# sourceMappingURL=assignmentController.d.ts.map
