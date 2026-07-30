@@ -25,6 +25,10 @@ export declare const deleteTransactionLine: (req: Request, res: Response) => Pro
 export declare const verifyBatch: (req: Request, res: Response) => Promise<void>;
 export declare const closeBatch: (req: Request, res: Response) => Promise<void>;
 export declare const getBatchReport: (req: Request, res: Response) => Promise<void>;
+export declare const overrideTransactionError: (req: Request, res: Response) => Promise<void>;
+export declare const clearTransactionErrorOverride: (req: Request, res: Response) => Promise<void>;
+export declare const downloadTransactionImportTemplate: (_req: Request, res: Response) => Promise<Response<any, Record<string, any>>>;
+export declare const importTransactionsFromExcel: (req: Request, res: Response) => Promise<void>;
 export declare const transactionBatchController: {
     searchApplicantsForPayroll: (req: Request, res: Response) => Promise<void>;
     getApplicantAssignments: (req: Request, res: Response) => Promise<void>;
@@ -52,5 +56,9 @@ export declare const transactionBatchController: {
     verifyBatch: (req: Request, res: Response) => Promise<void>;
     closeBatch: (req: Request, res: Response) => Promise<void>;
     getBatchReport: (req: Request, res: Response) => Promise<void>;
+    overrideTransactionError: (req: Request, res: Response) => Promise<void>;
+    clearTransactionErrorOverride: (req: Request, res: Response) => Promise<void>;
+    downloadTransactionImportTemplate: (_req: Request, res: Response) => Promise<Response<any, Record<string, any>>>;
+    importTransactionsFromExcel: (req: Request, res: Response) => Promise<void>;
 };
 //# sourceMappingURL=batchTimeEntryController.d.ts.map

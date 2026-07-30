@@ -55,6 +55,8 @@ const jobSubSectionRoutes_1 = __importDefault(require("./routes/job/jobSubSectio
 const automationRoutes_1 = __importDefault(require("./routes/automation/automationRoutes"));
 const batchTimeEntryRoutes_1 = __importDefault(require("./routes/updated-payroll/batchTimeEntryRoutes"));
 const attendanceRoutes_1 = __importDefault(require("./routes/user/attendanceRoutes"));
+const payrollUpdateRoutes_1 = __importDefault(require("./routes/updated-payroll/payrollUpdateRoutes"));
+const reportingRoutes_1 = __importDefault(require("./routes/reporting/reportingRoutes"));
 dotenv_1.default.config();
 // At the top of your main server file or this controller file
 const storage_blob_1 = require("@azure/storage-blob");
@@ -183,8 +185,11 @@ app.use('/jobs/complete', fullJobRoutes_1.default);
 app.use('/api/email-automation', automationRoutes_1.default);
 // Timeentry routes
 app.use('/api/batch-timeentry', batchTimeEntryRoutes_1.default);
+app.use('/api/payroll-updated', payrollUpdateRoutes_1.default);
 // Attendance routes
 app.use('/api/attendance', attendanceRoutes_1.default);
+// Reporting routes
+app.use("/api/reports", reportingRoutes_1.default);
 // adding health endpoint for render:
 app.get('/health', (req, res) => {
     res.status(200).send('OK');

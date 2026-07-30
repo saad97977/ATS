@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendCustomStageEmail = exports.sendNewApplicationEmail = exports.sendDocumentExpiryReminderEmail = exports.sendAssignmentNotificationEmail = exports.sendOnboardingWelcomeEmail = exports.verifyEmailConfiguration = exports.sendOfferLetterEmail = exports.sendInterviewRejectionEmail = exports.sendInterviewRescheduleEmail = exports.sendInterviewInvitationEmail = void 0;
+exports.sendClientInvoiceEmail = exports.sendCustomStageEmail = exports.sendNewApplicationEmail = exports.sendDocumentExpiryReminderEmail = exports.sendAssignmentNotificationEmail = exports.sendOnboardingWelcomeEmail = exports.verifyEmailConfiguration = exports.sendOfferLetterEmail = exports.sendInterviewRejectionEmail = exports.sendInterviewRescheduleEmail = exports.sendInterviewInvitationEmail = void 0;
 const nodemailer_1 = __importDefault(require("nodemailer"));
 /**
  * Email Service
@@ -622,6 +622,46 @@ const sendCustomStageEmail = async ({ to, subject, body, }) => {
     }
 };
 exports.sendCustomStageEmail = sendCustomStageEmail;
+// ─── Client Invoice Email ────────────────────────────────────────────────────
+const sendClientInvoiceEmail = async (data) => {
+    try {
+        const money = (n) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        const htmlContent = `
+      <p>Please find your invoice from <strong>${data.organizationName}</strong> below.</p>
+      <div class="info-box">
+        <p><strong>Invoice Number:</strong> ${data.invoiceNumber}</p>
+        <p><strong>Invoice Date:</strong> ${fmtDate(data.invoiceDate)}</p>
+        <p><strong>Due Date:</strong> ${fmtDate(data.dueDate)}</p>
+        <p><strong>Total Amount Due:</strong> ${money(data.totalAmount)}</p>
+      </div>
+      ${data.pdfUrl
+            ? `<p><a href="${data.pdfUrl}" style="color:#0369a1;font-weight:600">View / Download Invoice PDF</a></p>`
+            : '<p>Your invoice PDF is being finalized and will be available shortly.</p>'}
+      <p>Please remit payment by the due date above. Contact us with any questions.</p>
+    `;
+        const rawContent = `
+Invoice Number: ${data.invoiceNumber}
+Invoice Date:   ${fmtDate(data.invoiceDate)}
+Due Date:       ${fmtDate(data.dueDate)}
+Total Due:      ${money(data.totalAmount)}
+${data.pdfUrl ? `\nDownload: ${data.pdfUrl}` : ''}
+    `.trim();
+        const transporter = createTransporter();
+        const info = await transporter.sendMail({
+            from: { name: data.organizationName, address: process.env.SMTP_USER || 'noreply@company.com' },
+            to: data.organizationEmail,
+            subject: `Invoice ${data.invoiceNumber} from ${data.organizationName}`,
+            text: generateBaseEmailText({ applicantName: data.organizationName, organizationName: data.organizationName, content: rawContent }),
+            html: generateBaseEmailHTML({ applicantName: data.organizationName, organizationName: data.organizationName, subject: `Invoice ${data.invoiceNumber}`, content: htmlContent }),
+        });
+        return { success: true, messageId: info.messageId };
+    }
+    catch (error) {
+        console.error('Error sending client invoice email:', error);
+        return { success: false, error: error.message || 'Failed to send email' };
+    }
+};
+exports.sendClientInvoiceEmail = sendClientInvoiceEmail;
 exports.default = {
     sendInterviewInvitationEmail: exports.sendInterviewInvitationEmail,
     sendInterviewRescheduleEmail: exports.sendInterviewRescheduleEmail,
@@ -633,5 +673,6 @@ exports.default = {
     sendDocumentExpiryReminderEmail: exports.sendDocumentExpiryReminderEmail,
     sendNewApplicationEmail: exports.sendNewApplicationEmail,
     verifyEmailConfiguration: exports.verifyEmailConfiguration,
+    sendClientInvoiceEmail: exports.sendClientInvoiceEmail
 };
 //# sourceMappingURL=emailService.js.map

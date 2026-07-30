@@ -56,6 +56,13 @@ export declare const getApplicationDetails: (applicationId: string) => Promise<(
             custom_company_id: string | null;
             org_branch_division: import(".prisma/client").$Enums.OrgBranchDivision | null;
             cost_center: string | null;
+            invoice_grouping: string | null;
+            invoice_sort_order: string | null;
+            max_invoice_amount: import("@prisma/client/runtime/library").Decimal | null;
+            require_timecard_attachment: boolean;
+            invoice_delivery_method: string | null;
+            do_not_invoice: boolean | null;
+            invoice_net_terms_days: number | null;
         };
     } & {
         status: import(".prisma/client").$Enums.JobStatus;

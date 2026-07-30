@@ -147,6 +147,19 @@ export declare const sendCustomStageEmail: ({ to, subject, body, }: {
     error: any;
     messageId?: undefined;
 }>;
+export declare const sendClientInvoiceEmail: (data: {
+    organizationEmail: string;
+    organizationName: string;
+    invoiceNumber: string;
+    invoiceDate: Date;
+    dueDate: Date;
+    totalAmount: number;
+    pdfUrl?: string | null;
+}) => Promise<{
+    success: boolean;
+    messageId?: string;
+    error?: string;
+}>;
 declare const _default: {
     sendInterviewInvitationEmail: (data: {
         applicantEmail: string;
@@ -292,6 +305,19 @@ declare const _default: {
         error?: string;
     }>;
     verifyEmailConfiguration: () => Promise<boolean>;
+    sendClientInvoiceEmail: (data: {
+        organizationEmail: string;
+        organizationName: string;
+        invoiceNumber: string;
+        invoiceDate: Date;
+        dueDate: Date;
+        totalAmount: number;
+        pdfUrl?: string | null;
+    }) => Promise<{
+        success: boolean;
+        messageId?: string;
+        error?: string;
+    }>;
 };
 export default _default;
 //# sourceMappingURL=emailService.d.ts.map

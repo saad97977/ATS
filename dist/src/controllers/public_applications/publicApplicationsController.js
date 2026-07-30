@@ -425,31 +425,52 @@ const submitApplication = async (req, res) => {
         }, { maxWait: 8000, timeout: 20000 });
         // ── Resume upload (outside transaction) ───────────────────────────────────
         let resumeMetadata = null;
+        let resumeSkippedDuplicate = false;
         if (file) {
             try {
-                const containerClient = await getContainerClient();
-                const blobName = generateBlobName(result.applicantId, result.application.application_id, file.originalname);
-                const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-                await blockBlobClient.upload(file.buffer, file.buffer.length, {
-                    blobHTTPHeaders: { blobContentType: file.mimetype },
+                // ── Duplicate check: skip if this applicant already has a resume with this exact filename ──
+                const existingResumeDocs = await prisma_config_1.default.applicantDocument.findMany({
+                    where: { applicant_id: result.applicantId, document_type: 'RESUME' },
+                    select: { file_url: true },
                 });
-                resumeMetadata = {
-                    originalFileName: file.originalname,
-                    mimeType: file.mimetype,
-                    blobName,
-                    size: file.size,
-                    url: blockBlobClient.url,
-                    uploadedAt: new Date().toISOString(),
-                    applicationId: result.application.application_id,
-                };
-                await prisma_config_1.default.applicantDocument.create({
-                    data: {
-                        applicant_id: result.applicantId,
-                        application_id: result.application.application_id,
-                        document_type: 'RESUME',
-                        file_url: JSON.stringify(resumeMetadata),
-                    },
+                const isDuplicateResume = existingResumeDocs.some((doc) => {
+                    try {
+                        const parsed = JSON.parse(doc.file_url);
+                        return parsed?.originalFileName?.toLowerCase() === file.originalname.toLowerCase();
+                    }
+                    catch {
+                        return false;
+                    }
                 });
+                if (isDuplicateResume) {
+                    resumeSkippedDuplicate = true;
+                    console.log(`Duplicate resume "${file.originalname}" skipped for applicant ${result.applicantId}`);
+                }
+                else {
+                    const containerClient = await getContainerClient();
+                    const blobName = generateBlobName(result.applicantId, result.application.application_id, file.originalname);
+                    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+                    await blockBlobClient.upload(file.buffer, file.buffer.length, {
+                        blobHTTPHeaders: { blobContentType: file.mimetype },
+                    });
+                    resumeMetadata = {
+                        originalFileName: file.originalname,
+                        mimeType: file.mimetype,
+                        blobName,
+                        size: file.size,
+                        url: blockBlobClient.url,
+                        uploadedAt: new Date().toISOString(),
+                        applicationId: result.application.application_id,
+                    };
+                    await prisma_config_1.default.applicantDocument.create({
+                        data: {
+                            applicant_id: result.applicantId,
+                            application_id: result.application.application_id,
+                            document_type: 'RESUME',
+                            file_url: JSON.stringify(resumeMetadata),
+                        },
+                    });
+                }
             }
             catch (uploadErr) {
                 console.error('Resume upload failed (application still created):', uploadErr);
@@ -509,6 +530,7 @@ const submitApplication = async (req, res) => {
         return (0, response_1.sendSuccess)(res, {
             application: completeApplication,
             resume_uploaded: !!resumeMetadata,
+            resume_duplicate_skipped: resumeSkippedDuplicate,
             ...(file && {
                 resume: { filename: file.originalname, size: file.size, mimeType: file.mimetype },
             }),

@@ -473,34 +473,55 @@ export const submitApplication = async (req: Request, res: Response) => {
 
     // ── Resume upload (outside transaction) ───────────────────────────────────
     let resumeMetadata = null;
+    let resumeSkippedDuplicate = false;
     if (file) {
       try {
-        const containerClient = await getContainerClient();
-        const blobName = generateBlobName(result.applicantId, result.application.application_id, file.originalname);
-        const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-
-        await blockBlobClient.upload(file.buffer, file.buffer.length, {
-          blobHTTPHeaders: { blobContentType: file.mimetype },
+        // ── Duplicate check: skip if this applicant already has a resume with this exact filename ──
+        const existingResumeDocs = await prisma.applicantDocument.findMany({
+          where: { applicant_id: result.applicantId, document_type: 'RESUME' },
+          select: { file_url: true },
         });
 
-        resumeMetadata = {
-          originalFileName: file.originalname,
-          mimeType: file.mimetype,
-          blobName,
-          size: file.size,
-          url: blockBlobClient.url,
-          uploadedAt: new Date().toISOString(),
-          applicationId: result.application.application_id,
-        };
-
-        await prisma.applicantDocument.create({
-          data: {
-            applicant_id: result.applicantId,
-            application_id: result.application.application_id,
-            document_type: 'RESUME',
-            file_url: JSON.stringify(resumeMetadata),
-          },
+        const isDuplicateResume = existingResumeDocs.some((doc) => {
+          try {
+            const parsed = JSON.parse(doc.file_url);
+            return parsed?.originalFileName?.toLowerCase() === file.originalname.toLowerCase();
+          } catch {
+            return false;
+          }
         });
+
+        if (isDuplicateResume) {
+          resumeSkippedDuplicate = true;
+          console.log(`Duplicate resume "${file.originalname}" skipped for applicant ${result.applicantId}`);
+        } else {
+          const containerClient = await getContainerClient();
+          const blobName = generateBlobName(result.applicantId, result.application.application_id, file.originalname);
+          const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+          await blockBlobClient.upload(file.buffer, file.buffer.length, {
+            blobHTTPHeaders: { blobContentType: file.mimetype },
+          });
+
+          resumeMetadata = {
+            originalFileName: file.originalname,
+            mimeType: file.mimetype,
+            blobName,
+            size: file.size,
+            url: blockBlobClient.url,
+            uploadedAt: new Date().toISOString(),
+            applicationId: result.application.application_id,
+          };
+
+          await prisma.applicantDocument.create({
+            data: {
+              applicant_id: result.applicantId,
+              application_id: result.application.application_id,
+              document_type: 'RESUME',
+              file_url: JSON.stringify(resumeMetadata),
+            },
+          });
+        }
       } catch (uploadErr) {
         console.error('Resume upload failed (application still created):', uploadErr);
       }
@@ -564,12 +585,13 @@ export const submitApplication = async (req: Request, res: Response) => {
     return sendSuccess(res, {
       application: completeApplication,
       resume_uploaded: !!resumeMetadata,
+      resume_duplicate_skipped: resumeSkippedDuplicate,
       ...(file && {
         resume: { filename: file.originalname, size: file.size, mimeType: file.mimetype },
       }),
       message: `Application submitted successfully for ${job.job_title} at ${job.organization.name}`,
     }, 201);
-
+    
   } catch (err: any) {
     console.error('Error submitting application:', err);
     if (err.code === 'P2028') return sendError(res, 'Request timed out, please try again', 503);

@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.transactionBatchController = exports.getBatchReport = exports.closeBatch = exports.verifyBatch = exports.deleteTransactionLine = exports.updateTransactionLine = exports.addTransactionLine = exports.deleteTransaction = exports.updateTransaction = exports.getTransactionById = exports.importTransactionFromTimesheet = exports.createTransaction = exports.deleteBatch = exports.updateBatch = exports.getBatchById = exports.getAllBatches = exports.createBatch = exports.getAssignmentShortcut = exports.getJobShortcut = exports.getOrganizationShortcut = exports.getApplicantShortcut = exports.getAssignmentTimesheets = exports.getEarningTypes = exports.getJobRatesForAssignment = exports.getAssignmentContextForTransaction = exports.getApplicantAssignments = exports.searchApplicantsForPayroll = void 0;
+exports.transactionBatchController = exports.importTransactionsFromExcel = exports.downloadTransactionImportTemplate = exports.clearTransactionErrorOverride = exports.overrideTransactionError = exports.getBatchReport = exports.closeBatch = exports.verifyBatch = exports.deleteTransactionLine = exports.updateTransactionLine = exports.addTransactionLine = exports.deleteTransaction = exports.updateTransaction = exports.getTransactionById = exports.importTransactionFromTimesheet = exports.createTransaction = exports.deleteBatch = exports.updateBatch = exports.getBatchById = exports.getAllBatches = exports.createBatch = exports.getAssignmentShortcut = exports.getJobShortcut = exports.getOrganizationShortcut = exports.getApplicantShortcut = exports.getAssignmentTimesheets = exports.getEarningTypes = exports.getJobRatesForAssignment = exports.getAssignmentContextForTransaction = exports.getApplicantAssignments = exports.searchApplicantsForPayroll = void 0;
 const prisma_config_1 = __importDefault(require("../../prisma.config"));
 const response_1 = require("../../utils/response");
 // If you already have an SSN decrypt helper (referenced by
@@ -650,13 +650,15 @@ const createTransaction = async (req, res) => {
             return (0, response_1.sendError)(res, 'Assignment not found', 404);
         if (!context.organization_id)
             return (0, response_1.sendError)(res, 'Could not resolve Bill To organization for this assignment', 400);
-        // Prevent creating two transactions for the same assignment + week in
-        // the same batch (mirrors the Timesheet uniqueness rule).
+        // Prevent creating two transactions for the same assignment + week
+        // ANYWHERE — across every batch, not just this one — so the same
+        // payroll can never be processed twice.
         const duplicate = await prisma_config_1.default.payrollTransaction.findFirst({
-            where: { batch_id: batchId, assignment_id, week_worked: new Date(week_worked) },
+            where: { assignment_id, week_worked: new Date(week_worked) },
+            include: { batch: { select: { batch_number: true } } },
         });
         if (duplicate) {
-            return (0, response_1.sendError)(res, 'A transaction for this assignment and week already exists in this batch', 409);
+            return (0, response_1.sendError)(res, `A transaction for this assignment and week already exists in Batch #${duplicate.batch.batch_number}`, 409);
         }
         const transaction = await prisma_config_1.default.payrollTransaction.create({
             data: {
@@ -722,11 +724,14 @@ const importTransactionFromTimesheet = async (req, res) => {
         }
         const assignment_id = timesheet.assignment_id;
         const week_worked = timesheet.week_start_date;
+        // Global check — a timesheet's week can only ever become one
+        // transaction, in one batch, ever.
         const duplicate = await prisma_config_1.default.payrollTransaction.findFirst({
-            where: { batch_id: batchId, assignment_id, week_worked },
+            where: { assignment_id, week_worked },
+            include: { batch: { select: { batch_number: true } } },
         });
         if (duplicate) {
-            return (0, response_1.sendError)(res, 'A transaction for this assignment and week already exists in this batch', 409);
+            return (0, response_1.sendError)(res, `A transaction for this assignment and week already exists in Batch #${duplicate.batch.batch_number}`, 409);
         }
         const context = await resolveAssignmentContext(assignment_id);
         if (!context)
@@ -1089,7 +1094,11 @@ const verifyBatch = async (req, res) => {
                 if (toNum(l.pay_units) > 0 && toNum(l.pay_rate) <= 0) {
                     errors.push(`${l.earning_type}: pay units entered but pay rate is 0.`);
                 }
-                if (toNum(l.bill_units) > 0 && toNum(l.bill_rate) <= 0) {
+                // Internal / non-billable employees legitimately have no bill rate.
+                // An admin can override this specific error via
+                // POST /transactions/:transactionId/override-error — once
+                // t.error_override is true, this check is skipped on re-verify.
+                if (toNum(l.bill_units) > 0 && toNum(l.bill_rate) <= 0 && !t.error_override) {
                     errors.push(`${l.earning_type}: bill units entered but bill rate is 0.`);
                 }
             }
@@ -1244,6 +1253,327 @@ const getBatchReport = async (req, res) => {
     }
 };
 exports.getBatchReport = getBatchReport;
+// ════════════════════════════════════════════════════════════════
+// PATCH for transactionBatchController.ts
+// One small FIND/REPLACE inside verifyBatch, then APPEND the new
+// functions before the final export object, then add their names
+// to that export object.
+//
+// NOTE: this file needs `multer` wired on its route the same way
+// timesheetController.importTimesheets does — add
+// `upload.single('file')` middleware on the new import route.
+// ════════════════════════════════════════════════════════════════
+// ────────────────────────────────────────────────────────────────
+// FIND (inside verifyBatch, the per-line bill-rate error check):
+// ────────────────────────────────────────────────────────────────
+/*
+      for (const l of t.lines) {
+        if (toNum(l.pay_units) > 0 && toNum(l.pay_rate) <= 0) {
+          errors.push(`${l.earning_type}: pay units entered but pay rate is 0.`);
+        }
+        if (toNum(l.bill_units) > 0 && toNum(l.bill_rate) <= 0) {
+          errors.push(`${l.earning_type}: bill units entered but bill rate is 0.`);
+        }
+      }
+*/
+// ────────────────────────────────────────────────────────────────
+// REPLACE WITH:
+// ────────────────────────────────────────────────────────────────
+/*
+      for (const l of t.lines) {
+        if (toNum(l.pay_units) > 0 && toNum(l.pay_rate) <= 0) {
+          errors.push(`${l.earning_type}: pay units entered but pay rate is 0.`);
+        }
+        // Internal / non-billable employees legitimately have no bill rate.
+        // An admin can override this specific error via
+        // POST /transactions/:transactionId/override-error — once
+        // t.error_override is true, this check is skipped on re-verify.
+        if (toNum(l.bill_units) > 0 && toNum(l.bill_rate) <= 0 && !t.error_override) {
+          errors.push(`${l.earning_type}: bill units entered but bill rate is 0.`);
+        }
+      }
+*/
+// ════════════════════════════════════════════════════════════════
+// APPEND — new functions, add these before the final export object
+// ════════════════════════════════════════════════════════════════
+// ── Error override ("approve errors because internal employee has no
+// bill rate") ───────────────────────────────────────────────────────
+// POST /transactions/:transactionId/override-error
+// body: { reason }
+const overrideTransactionError = async (req, res) => {
+    try {
+        const { transactionId } = req.params;
+        const { reason } = req.body;
+        if (!reason?.trim())
+            return (0, response_1.sendError)(res, 'reason is required to override an error', 400);
+        const transaction = await prisma_config_1.default.payrollTransaction.findUnique({
+            where: { transaction_id: transactionId },
+            include: { batch: true },
+        });
+        if (!transaction)
+            return (0, response_1.sendError)(res, 'Transaction not found', 404);
+        if (transaction.batch.status !== 'OPEN')
+            return (0, response_1.sendError)(res, 'Batch is not OPEN', 400);
+        const updated = await prisma_config_1.default.payrollTransaction.update({
+            where: { transaction_id: transactionId },
+            data: { error_override: true, error_override_reason: reason },
+        });
+        return (0, response_1.sendSuccess)(res, { transaction: updated, message: 'Error override recorded — re-run verify to apply it.' });
+    }
+    catch (err) {
+        console.error('Error overriding transaction error:', err);
+        return (0, response_1.sendError)(res, 'Failed to override transaction error', 500);
+    }
+};
+exports.overrideTransactionError = overrideTransactionError;
+// POST /transactions/:transactionId/clear-override
+const clearTransactionErrorOverride = async (req, res) => {
+    try {
+        const { transactionId } = req.params;
+        const transaction = await prisma_config_1.default.payrollTransaction.findUnique({ where: { transaction_id: transactionId } });
+        if (!transaction)
+            return (0, response_1.sendError)(res, 'Transaction not found', 404);
+        const updated = await prisma_config_1.default.payrollTransaction.update({
+            where: { transaction_id: transactionId },
+            data: { error_override: false, error_override_reason: null },
+        });
+        return (0, response_1.sendSuccess)(res, { transaction: updated });
+    }
+    catch (err) {
+        console.error('Error clearing override:', err);
+        return (0, response_1.sendError)(res, 'Failed to clear override', 500);
+    }
+};
+exports.clearTransactionErrorOverride = clearTransactionErrorOverride;
+// ── Excel / CSV import (Module 3, Method 3) ─────────────────────────
+// Template: Employee Number, Assignment, Hours, Payroll Code, Pay Period, Earnings
+// "Assignment" = assignment_id, "Pay Period" = week_worked date (any day
+// in that pay week is accepted), "Earnings" = pay rate for that line.
+const CODE_TO_EARNING_TYPE = {
+    REG: 'REGULAR', OT: 'OVERTIME', DT: 'DOUBLETIME', HOL: 'HOLIDAY',
+    VAC: 'PTO', PTO: 'PTO', SICK: 'SICK', BONUS: 'BONUS',
+};
+function parseImportCsv(content) {
+    const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter((l) => l.trim());
+    if (lines.length < 2)
+        return [];
+    const headers = splitImportCsvLine(lines[0]);
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+        const vals = splitImportCsvLine(lines[i]);
+        const row = {};
+        headers.forEach((h, idx) => { row[h.trim()] = (vals[idx] ?? '').trim(); });
+        rows.push(row);
+    }
+    return rows;
+}
+function splitImportCsvLine(line) {
+    const result = [];
+    let current = '';
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+            if (inQuote && line[i + 1] === '"') {
+                current += '"';
+                i++;
+            }
+            else
+                inQuote = !inQuote;
+        }
+        else if (ch === ',' && !inQuote) {
+            result.push(current);
+            current = '';
+        }
+        else
+            current += ch;
+    }
+    result.push(current);
+    return result;
+}
+// GET /batches/:batchId/transactions/import-template
+const downloadTransactionImportTemplate = async (_req, res) => {
+    const header = 'employee_number,assignment_id,hours,payroll_code,pay_period,earnings';
+    const example = 'EMP-1001,3f2c1a9e-...,40,REG,2026-06-28,16.00';
+    const example2 = 'EMP-1001,3f2c1a9e-...,5,OT,2026-06-28,24.00';
+    const csv = [header, example, example2].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="payroll_transaction_import_template.csv"');
+    return res.send(csv);
+};
+exports.downloadTransactionImportTemplate = downloadTransactionImportTemplate;
+// POST /batches/:batchId/transactions/import
+// multipart/form-data, field name "file" — requires multer on the route
+const importTransactionsFromExcel = async (req, res) => {
+    try {
+        const { batchId } = req.params;
+        const batch = await prisma_config_1.default.transactionBatch.findUnique({ where: { batch_id: batchId } });
+        if (!batch)
+            return (0, response_1.sendError)(res, 'Batch not found', 404);
+        if (batch.status !== 'OPEN')
+            return (0, response_1.sendError)(res, 'Cannot import into a non-OPEN batch (Pay Period must be open)', 400);
+        const file = req.file;
+        if (!file)
+            return (0, response_1.sendError)(res, 'No file uploaded. Use multipart/form-data with field name "file"', 400);
+        const isXlsx = /\.(xlsx|xls)$/i.test(file.originalname);
+        const isCsv = /\.csv$/i.test(file.originalname);
+        if (!isXlsx && !isCsv)
+            return (0, response_1.sendError)(res, 'Only CSV (.csv) and Excel (.xlsx / .xls) files are supported', 400);
+        let rawRows = [];
+        if (isCsv) {
+            rawRows = parseImportCsv(file.buffer.toString('utf-8'));
+        }
+        else {
+            const XLSX = require('xlsx');
+            const wb = XLSX.read(file.buffer, { type: 'buffer', cellDates: true });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            rawRows = XLSX.utils.sheet_to_json(ws, { raw: false, defval: '' });
+        }
+        if (!rawRows.length)
+            return (0, response_1.sendError)(res, 'File contained no data rows', 400);
+        const errors = [];
+        let successCount = 0;
+        const createdTransactionIds = new Set();
+        for (let i = 0; i < rawRows.length; i++) {
+            const row = rawRows[i];
+            const rowNum = i + 2;
+            const get = (key) => String(row[key] ?? row[key.toLowerCase()] ?? row[key.toUpperCase()] ?? '').trim();
+            const employeeNumber = get('employee_number');
+            const assignmentId = get('assignment_id') || get('assignment');
+            const hoursStr = get('hours');
+            const payrollCode = get('payroll_code').toUpperCase();
+            const payPeriodStr = get('pay_period');
+            const earningsStr = get('earnings');
+            const rowErrors = [];
+            if (!employeeNumber)
+                rowErrors.push('employee_number is required');
+            if (!assignmentId)
+                rowErrors.push('assignment_id is required');
+            if (!hoursStr)
+                rowErrors.push('hours is required');
+            if (!payrollCode)
+                rowErrors.push('payroll_code is required');
+            if (!payPeriodStr)
+                rowErrors.push('pay_period is required');
+            const hours = parseFloat(hoursStr);
+            if (hoursStr && (isNaN(hours) || hours < 0))
+                rowErrors.push(`Invalid hours: "${hoursStr}"`); // "Hours numeric"
+            const payPeriodDate = payPeriodStr ? new Date(payPeriodStr) : null;
+            if (payPeriodStr && (!payPeriodDate || isNaN(payPeriodDate.getTime())))
+                rowErrors.push(`Invalid pay_period date: "${payPeriodStr}"`);
+            const earningType = CODE_TO_EARNING_TYPE[payrollCode];
+            let customLabel = null;
+            if (payrollCode && !earningType) {
+                // "Payroll Code exists" — check it's a previously admin-registered
+                // custom earning type before accepting it as OTHER.
+                const custom = await prisma_config_1.default.customEarningType.findUnique({ where: { label: payrollCode } });
+                if (!custom)
+                    rowErrors.push(`Unknown payroll_code: "${payrollCode}" — register it as a custom earning type first`);
+                else
+                    customLabel = custom.label;
+            }
+            if (rowErrors.length) {
+                errors.push({ row: rowNum, message: rowErrors.join('; ') });
+                continue;
+            }
+            try {
+                // "Employee exists" + "Assignment exists"
+                const assignment = await prisma_config_1.default.assignment.findUnique({
+                    where: { assignment_id: assignmentId },
+                    include: {
+                        application: {
+                            include: {
+                                applicant: { include: { demographic: true } },
+                                job: { include: { organization: true } },
+                            },
+                        },
+                    },
+                });
+                if (!assignment) {
+                    errors.push({ row: rowNum, message: `Assignment not found: ${assignmentId}` });
+                    continue;
+                }
+                const applicant = assignment.application?.applicant;
+                if (!applicant || applicant.demographic?.employee_number !== employeeNumber) {
+                    errors.push({ row: rowNum, message: `employee_number ${employeeNumber} does not match assignment ${assignmentId}` });
+                    continue;
+                }
+                const job = assignment.application?.job;
+                const organizationId = job?.organization?.organization_id;
+                if (!organizationId) {
+                    errors.push({ row: rowNum, message: `Could not resolve Bill To organization for assignment ${assignmentId}` });
+                    continue;
+                }
+                // Find the transaction GLOBALLY (not scoped to this batch) so a
+                // row can't sneak the same assignment/week into a second batch.
+                let transaction = await prisma_config_1.default.payrollTransaction.findFirst({
+                    where: { assignment_id: assignmentId, week_worked: payPeriodDate },
+                });
+                if (transaction && transaction.batch_id !== batchId) {
+                    errors.push({ row: rowNum, message: `Assignment ${assignmentId} / week already exists in another batch (#${transaction.batch_id})` });
+                    continue;
+                }
+                if (!transaction) {
+                    transaction = await prisma_config_1.default.payrollTransaction.create({
+                        data: {
+                            batch_id: batchId, assignment_id: assignmentId, organization_id: organizationId,
+                            job_id: job?.job_id ?? null, job_position: job?.job_title ?? null,
+                            week_worked: payPeriodDate, bill_units_equal_pay_units: false,
+                        },
+                    });
+                }
+                // "Duplicate?" — same earning type already imported for this transaction
+                const finalEarningType = earningType ?? 'OTHER';
+                const existingLine = await prisma_config_1.default.payrollTransactionLine.findFirst({
+                    where: { transaction_id: transaction.transaction_id, earning_type: finalEarningType, custom_earning_label: customLabel },
+                });
+                if (existingLine) {
+                    errors.push({ row: rowNum, message: `Duplicate: ${payrollCode} already imported for this assignment/week` });
+                    continue;
+                }
+                const payRate = parseFloat(earningsStr) || toNum(assignment.hire_pay_rate);
+                const billRate = toNum(assignment.hire_bill_rate);
+                const item_pay = Number((hours * payRate).toFixed(2));
+                const item_bill = Number((hours * billRate).toFixed(2));
+                await prisma_config_1.default.payrollTransactionLine.create({
+                    data: {
+                        transaction_id: transaction.transaction_id, earning_type: finalEarningType, custom_earning_label: customLabel,
+                        pay_units: hours, bill_units: hours, pay_rate: payRate, bill_rate: billRate, item_pay, item_bill,
+                    },
+                });
+                createdTransactionIds.add(transaction.transaction_id);
+                successCount++;
+            }
+            catch (e) {
+                errors.push({ row: rowNum, message: e.message });
+            }
+        }
+        // Recalculate totals for every transaction touched by this import
+        for (const transactionId of createdTransactionIds) {
+            const lines = await prisma_config_1.default.payrollTransactionLine.findMany({ where: { transaction_id: transactionId } });
+            const totals = lines.reduce((acc, l) => {
+                acc.total_pay_units += toNum(l.pay_units);
+                acc.total_bill_units += toNum(l.bill_units);
+                acc.total_pay_amount += toNum(l.item_pay);
+                acc.total_bill_amount += toNum(l.item_bill);
+                return acc;
+            }, { total_pay_units: 0, total_bill_units: 0, total_pay_amount: 0, total_bill_amount: 0 });
+            await prisma_config_1.default.payrollTransaction.update({ where: { transaction_id: transactionId }, data: totals });
+        }
+        return (0, response_1.sendSuccess)(res, {
+            row_count: rawRows.length,
+            success_count: successCount,
+            error_count: errors.length,
+            transactions_touched: createdTransactionIds.size,
+            errors,
+        });
+    }
+    catch (err) {
+        console.error('Error importing transactions from Excel:', err);
+        return (0, response_1.sendError)(res, 'Failed to import transactions', 500);
+    }
+};
+exports.importTransactionsFromExcel = importTransactionsFromExcel;
 exports.transactionBatchController = {
     // Lookups / search (for frontend form dropdowns)
     searchApplicantsForPayroll: exports.searchApplicantsForPayroll,
@@ -1278,5 +1608,9 @@ exports.transactionBatchController = {
     closeBatch: exports.closeBatch,
     // Report
     getBatchReport: exports.getBatchReport,
+    overrideTransactionError: exports.overrideTransactionError,
+    clearTransactionErrorOverride: exports.clearTransactionErrorOverride,
+    downloadTransactionImportTemplate: exports.downloadTransactionImportTemplate,
+    importTransactionsFromExcel: exports.importTransactionsFromExcel,
 };
 //# sourceMappingURL=batchTimeEntryController.js.map

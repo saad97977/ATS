@@ -228,7 +228,16 @@ model Organization {
   department            String?
   email                 String?
 
+  invoice_grouping            String?  @default("DEPARTMENT") // DEPARTMENT | BRANCH | EMPLOYEE | JOB | WORK_WEEK
+  invoice_sort_order          String?  @default("EMPLOYEE_NAME")
+  max_invoice_amount          Decimal? @db.Decimal(14, 2)
+  require_timecard_attachment Boolean  @default(false)
+  invoice_delivery_method     String?  @default("EMAIL") // EMAIL | PORTAL | PRINT
 
+
+  do_not_invoice         Boolean?  @default(false)
+  invoice_net_terms_days Int?      @default(30)
+  
   // Relations
   addresses          OrganizationAddress[]
   contacts           OrganizationContact[]
@@ -247,8 +256,7 @@ model Organization {
   activities OrganizationActivity[]
   stage_automations  StageEmailAutomation[]
   payroll_transactions PayrollTransaction[]
-
-
+  client_invoices        ClientInvoice[]
 
 
   @@index([created_by_user_id])
@@ -787,6 +795,8 @@ model Applicant {
   bank_accounts        BankAccount[]
   benefit_deductions   BenefitDeduction[]
   garnishments         Garnishment[]
+  payroll_checks PayrollCheck[]
+
 
   @@map("applicants")
 }
@@ -880,8 +890,16 @@ model BankAccount {
   amount          Decimal?          @db.Decimal(10, 2)
   amount_type     DepositAmountType @default(REMAINING)
   is_active       Boolean           @default(true)
+
+  sequence             Int?      @default(1)
+  prenote_send_date    DateTime?
+  prenote_approve_date DateTime?
+
+
   created_at      DateTime          @default(now())
   updated_at      DateTime          @updatedAt
+
+  
 
   applicant Applicant @relation(fields: [applicant_id], references: [applicant_id], onDelete: Cascade)
 
@@ -1224,10 +1242,17 @@ model Assignment {
   hire_markup       Decimal?  @db.Decimal(5, 2)
   hire_burden       Decimal?  @db.Decimal(5, 2)
 
+
+
   hired_notes   String?
   falloff       Boolean?  @default(false)
   extended      Boolean?  @default(false)
   payroll_frequency PayPeriodType? 
+
+  agency_id String?
+
+  agency    Agency? @relation(fields: [agency_id], references: [agency_id])
+
 
   // Existing relation
   application  Application  @relation(fields: [application_id], references: [application_id], onDelete: Cascade)
@@ -1631,6 +1656,13 @@ model PayrollTransaction {
   total_pay_amount         Decimal? @db.Decimal(14, 2)
   total_bill_amount        Decimal? @db.Decimal(14, 2)
 
+  error_override        Boolean @default(false)
+  error_override_reason String?
+
+
+  payroll_batch_id          String?
+  removed_from_batch_reason String?   // "delete with a reason" note
+ 
   created_at               DateTime @default(now())
   updated_at                DateTime @updatedAt
 
@@ -1641,6 +1673,10 @@ model PayrollTransaction {
 
   lines         PayrollTransactionLine[]
 
+  payroll_batch PayrollBatch? @relation(fields: [payroll_batch_id], references: [payroll_batch_id])
+
+
+  @@unique([assignment_id, week_worked])
   @@index([batch_id])
   @@index([assignment_id])
   @@index([organization_id])
@@ -1681,6 +1717,12 @@ model CustomEarningType {
   custom_earning_type_id String   @id @default(uuid())
   label                  String   @unique
   created_by_user_id     String?
+
+  multiplier  Decimal @default(1) @db.Decimal(5, 2)
+  is_taxable  Boolean @default(true)
+  is_billable Boolean @default(true)
+
+
   created_at             DateTime @default(now())
 
   @@map("custom_earning_types")
@@ -1754,6 +1796,318 @@ model ClockSession {
   @@index([attendance_id])
   @@map("clock_sessions")
 }
+
+
+
+// ════════════════════════════════════════════════════════════════
+// NEW MODELS
+// ════════════════════════════════════════════════════════════════
+
+// ── Module 3 support: Admin-managed WC Code lookup ──────────────────
+model WCCode {
+  wc_code_id     String   @id @default(uuid())
+  code           String   @unique
+  description    String
+  insurance_rate Decimal  @db.Decimal(6, 4)   // e.g. 0.0235 = 2.35%
+  cost_pct       Decimal? @db.Decimal(6, 4)
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@map("wc_codes")
+}
+
+
+
+
+// ── "Bank" dropdown — used by both Payroll Batch creation and ACH
+// generation (must be the same bank for both) ───────────────────────
+model CompanyBankAccount {
+  company_bank_account_id String   @id @default(uuid())
+  company_name            String
+  description             String?
+  ach_company_id          String   // NACHA "Company ID" (typically IRS EIN prefixed with 1)
+  ach_company_name        String   // up to 16 chars per NACHA spec
+  originating_bank_name   String
+  originating_dfi_id      String   // first 8 digits of routing number, immediate origin
+  routing_number          String
+  account_number          String
+  is_active               Boolean  @default(true)
+  created_at              DateTime @default(now())
+
+  payroll_batches PayrollBatch[]
+  ach_files       ACHFile[]
+
+  @@map("company_bank_accounts")
+}
+
+// ── Step 2: Payroll Batch ────────────────────────────────────────────
+model PayrollBatch {
+  payroll_batch_id  String   @id @default(uuid())
+  batch_number      Int      @unique @default(autoincrement())
+
+  accounting_period DateTime // always a Sunday — validated in controller
+  check_date        DateTime // always a Friday — validated in controller
+  run_type          PayrollRunType
+  bank_id           String
+  description       String?
+  message           String?
+
+  status            PayrollBatchStatus @default(DRAFT)
+
+  created_by_user_id String
+  processed_at        DateTime?
+  checks_printed_at   DateTime?
+  posted_at           DateTime?
+  posted_by_user_id   String?
+  voided_at           DateTime?
+  void_reason         String?
+
+  reopened_at         DateTime?
+  reopened_by_user_id String?
+  reopen_reason       String?
+
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  
+
+  bank         CompanyBankAccount   @relation(fields: [bank_id], references: [company_bank_account_id])
+  transactions PayrollTransaction[]
+  checks       PayrollCheck[]
+  ach_files    ACHFile[]
+
+  @@index([status])
+  @@map("payroll_batches")
+}
+
+// ── Payroll Check (one per employee per payroll batch, aggregating
+// all of that employee's selected transactions/assignments) ─────────
+model PayrollCheck {
+  payroll_check_id String              @id @default(uuid())
+  payroll_batch_id String
+  applicant_id     String?
+  check_number     String?             @unique
+  status           PayrollCheckStatus  @default(PENDING)
+
+  gross_pay                 Decimal @db.Decimal(14, 2)
+  federal_tax               Decimal @default(0) @db.Decimal(14, 2)
+  state_tax                 Decimal @default(0) @db.Decimal(14, 2)
+  local_tax                 Decimal @default(0) @db.Decimal(14, 2)
+  employee_ss                Decimal @default(0) @db.Decimal(14, 2)
+  employee_medicare          Decimal @default(0) @db.Decimal(14, 2)
+  benefit_deductions_total    Decimal @default(0) @db.Decimal(14, 2)
+  garnishments_total          Decimal @default(0) @db.Decimal(14, 2)
+  deduction_breakdown          Json?  // [{ type, label, amount, ytd, source }]
+  net_pay                      Decimal @db.Decimal(14, 2)
+
+  ytd_gross_snapshot    Decimal? @db.Decimal(14, 2)
+  ytd_tax_snapshot      Json?    // { federal, state, local, ss, medicare }
+
+  is_direct_deposit      Boolean   @default(false)
+  correction_reason      String?
+  printed_at             DateTime?
+  verified_at            DateTime?
+  verified_by_user_id    String?
+  posted_at              DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  employer_wc_cost    Decimal @default(0) @db.Decimal(14, 2)
+  employer_ss         Decimal @default(0) @db.Decimal(14, 2)
+  employer_medicare   Decimal @default(0) @db.Decimal(14, 2)
+  employer_futa       Decimal @default(0) @db.Decimal(14, 2)
+  employer_suta       Decimal @default(0) @db.Decimal(14, 2)
+  total_employer_cost Decimal @default(0) @db.Decimal(14, 2)
+
+  agency_id            String?
+  
+  
+  agency               Agency? @relation(fields: [agency_id], references: [agency_id])
+
+
+  batch     PayrollBatch       @relation(fields: [payroll_batch_id], references: [payroll_batch_id], onDelete: Cascade)
+  applicant Applicant?          @relation(fields: [applicant_id], references: [applicant_id])
+  lines     PayrollCheckLine[]
+
+  @@index([payroll_batch_id])
+  @@index([applicant_id])
+  @@map("payroll_checks")
+}
+
+model PayrollCheckLine {
+  payroll_check_line_id String   @id @default(uuid())
+  payroll_check_id       String
+  transaction_id          String
+  week_worked             DateTime
+  customer_name           String   // Bill To snapshot
+  department              String?
+  earning_type            String
+  hours                   Decimal  @db.Decimal(10, 2)
+  pay_rate                Decimal  @db.Decimal(10, 2)
+  amount                  Decimal  @db.Decimal(14, 2)
+
+  check PayrollCheck @relation(fields: [payroll_check_id], references: [payroll_check_id], onDelete: Cascade)
+
+  @@index([payroll_check_id])
+  @@map("payroll_check_lines")
+}
+
+// ── Step 4: ACH (tied to PayrollBatch) ───────────────────────────────
+model ACHFile {
+  ach_file_id             String    @id @default(uuid())
+  payroll_batch_id        String
+  company_bank_account_id String
+  file_name               String
+  file_content            String    @db.Text
+  total_amount            Decimal   @db.Decimal(14, 2)
+  entry_count             Int
+  accounting_period       DateTime
+  effective_date          DateTime
+  include_balancing_line  Boolean   @default(false)
+  status                  String    @default("GENERATED") // GENERATED | TRANSMITTED
+  generated_at            DateTime  @default(now())
+  transmitted_at          DateTime?
+
+  batch                PayrollBatch       @relation(fields: [payroll_batch_id], references: [payroll_batch_id], onDelete: Cascade)
+  company_bank_account CompanyBankAccount @relation(fields: [company_bank_account_id], references: [company_bank_account_id])
+
+  @@index([payroll_batch_id])
+  @@map("ach_files")
+}
+
+// ── Step 3: Billing Batch ────────────────────────────────────────────
+model BillingBatch {
+  billing_batch_id  String   @id @default(uuid())
+  batch_number      Int      @unique @default(autoincrement())
+
+  accounting_period DateTime
+  invoice_date      DateTime
+  batch_type        BillingBatchType
+  description       String?
+
+  status            BillingBatchStatus @default(DRAFT)
+
+  created_by_user_id String
+  processed_at        DateTime?
+  posted_at           DateTime?
+  posted_by_user_id   String?
+  discarded_at         DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  invoices ClientInvoice[]
+
+  @@map("billing_batches")
+}
+
+model ClientInvoice {
+  client_invoice_id String    @id @default(uuid())
+  billing_batch_id  String
+  organization_id   String
+  invoice_number    String    @unique
+  status            String    @default("DRAFT") // DRAFT | SENT | VIEWED | PAID | OVERDUE | VOID
+  invoice_date      DateTime  @default(now())
+  due_date          DateTime
+  subtotal          Decimal   @db.Decimal(14, 2)
+  tax_rate          Decimal   @default(0) @db.Decimal(6, 4)
+  tax_amount        Decimal   @default(0) @db.Decimal(14, 2)
+  total_amount      Decimal   @db.Decimal(14, 2)
+  paid_at           DateTime?
+  emailed_at        DateTime?
+  pdf_url           String?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  batch        BillingBatch        @relation(fields: [billing_batch_id], references: [billing_batch_id])
+  organization Organization        @relation(fields: [organization_id], references: [organization_id])
+  lines        ClientInvoiceLine[]
+
+  @@index([billing_batch_id])
+  @@index([organization_id])
+  @@map("client_invoices")
+}
+
+model ClientInvoiceLine {
+  client_invoice_line_id String  @id @default(uuid())
+  client_invoice_id      String
+  transaction_id         String
+  employee_name          String
+  department             String?
+  earning_type            String
+  bill_units              Decimal @db.Decimal(10, 2)
+  bill_rate               Decimal @db.Decimal(10, 2)
+  amount                  Decimal @db.Decimal(14, 2)
+
+  invoice ClientInvoice @relation(fields: [client_invoice_id], references: [client_invoice_id], onDelete: Cascade)
+
+  @@index([client_invoice_id])
+  @@map("client_invoice_lines")
+}
+
+
+
+// ── 1. Agency support (Module 3) ───────────────────────────────────
+// Deliberately lightweight vs. the textbook Agency/AgencyContact/
+// AgencyEmployee/AgencyAssignment 4-table design — one table holds
+// the agency's own contact + banking info inline, since an agency is
+// paid as a vendor (no per-worker employee record needed on our side).
+model Agency {
+  agency_id      String   @id @default(uuid())
+  name           String   @unique
+  contact_name   String?
+  contact_email  String?
+  contact_phone  String?
+  address        String?
+  bank_name      String?
+  routing_number String?
+  account_number String?
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now())
+
+  assignments    Assignment[]
+  payroll_checks PayrollCheck[]
+
+  @@map("agencies")
+}
+
+
+
+// ── 2. Real federal tax brackets (replaces the flat-rate placeholder) ──
+// IRS "Percentage Method" style: annualize gross by pay frequency, find
+// the bracket, apply base_tax + marginal rate, de-annualize.
+model TaxBracket {
+  tax_bracket_id    String   @id @default(uuid())
+  tax_year          Int
+  filing_status     String   // SINGLE | MARRIED | MARRIED_FILING_SEPARATELY | HEAD_OF_HOUSEHOLD
+  min_annual_income Decimal  @db.Decimal(12, 2)
+  max_annual_income Decimal? @db.Decimal(12, 2) // null = top/unbounded bracket
+  rate              Decimal  @db.Decimal(6, 4)   // marginal rate for this bracket
+  base_tax          Decimal  @db.Decimal(12, 2)  // cumulative tax already owed at min_annual_income
+
+  @@index([tax_year, filing_status])
+  @@map("tax_brackets")
+}
+
+// ── 3. State tax — flat-rate lookup (simplification) ───────────────
+// Covers the many states that use a single flat income-tax rate today.
+// States with their own progressive brackets (e.g. CA, NY) aren't modeled
+// — extend with a StateTaxBracket table mirroring TaxBracket if needed.
+model StateTaxRate {
+  state_tax_rate_id String  @id @default(uuid())
+  state              String  @unique // 2-letter code
+  flat_rate          Decimal @db.Decimal(6, 4)
+  tax_year           Int
+  notes              String?
+
+  @@map("state_tax_rates")
+}
+
+
+
 
 
 
@@ -2182,4 +2536,80 @@ enum AttendanceStatus {
   CLOCKED_IN
   CLOCKED_OUT
   ON_BREAK
+}
+
+
+
+// ── Run type dropdown for Payroll Batch creation ────────────────────
+enum PayrollRunType {
+  ADVANCE_BANK_PAYOUT      @map("Advance Bank Payout")
+  CHECK_RUN                @map("Check Run")
+  CHECK_REISSUE            @map("Check Reissue")
+  CHECK_REVERSE            @map("Check Reverse")
+  CHECK_VOID               @map("Check Void")
+  CLEAR_AP_ITEMS           @map("Clear AP Items")
+  DEDUCTION_AUTHORITY_PAY  @map("Deduction Authority Pay")
+  SUBAGENCY_PAY            @map("SubAgency Pay")
+  DIRECT_DEPOSIT           @map("Direct Deposit")
+  DIRECT_DEPOSIT_REISSUE   @map("Direct Deposit Reissue")
+  DIRECT_DEPOSIT_REVERSE   @map("Direct Deposit Reverse")
+  MANUAL_CHECK             @map("Manual Check")
+  MANUAL_CHECK_VOID        @map("Manual Check Void")
+  OFF_CYCLE_PAYROLL        @map("Off Cycle Payroll")
+  ON_CYCLE_PAYROLL         @map("On Cycle Payroll")
+  BONUS_CHECK              @map("Bonus Check")
+  COMMISSION_CHECK         @map("Commission Check")
+  EXPENSE_REIMBURSEMENT    @map("Expense Reimbursement")
+  ADJUSTMENT               @map("Adjustment")
+  PAYROLL_CORRECTION       @map("Payroll Correction")
+  REPLACEMENT_CHECK        @map("Replacement Check")
+  FINAL_PAY                @map("Final Pay")
+  TERMINATION_PAY          @map("Termination Pay")
+  HOLIDAY_PAY              @map("Holiday Pay")
+  VACATION_PAY             @map("Vacation Pay")
+  SICK_PAY                 @map("Sick Pay")
+  RETROACTIVE_PAY          @map("Retroactive Pay")
+  THIRD_PARTY_PAYMENT      @map("Third Party Payment")
+  GARNISHMENT_PAYMENT      @map("Garnishment Payment")
+  TAX_PAYMENT              @map("Tax Payment")
+  ACH_PAYMENT              @map("ACH Payment")
+  WIRE_TRANSFER            @map("Wire Transfer")
+  CASH_PAYMENT             @map("Cash Payment")
+  NET_PAY_ADJUSTMENT       @map("Net Pay Adjustment")
+  YEAR_END_ADJUSTMENT      @map("Year End Adjustment")
+  OTHER                    @map("Other")
+}
+
+enum PayrollBatchStatus {
+  DRAFT           // batch info entered, transactions being selected
+  PROCESSED       // payroll calculated, checks generated (unprinted)
+  CHECKS_PRINTED  // check numbers assigned / stubs printed
+  POSTED          // finalized
+  VOIDED
+}
+
+enum PayrollCheckStatus {
+  PENDING
+  PRINTED
+  VERIFIED_OK
+  CORRECTION_NEEDED
+  POSTED
+  VOIDED
+}
+
+// ⚠️ Placeholder list — replace with your actual billing batch types.
+enum BillingBatchType {
+  WEEKLY_BILLING
+  OFF_CYCLE_BILLING
+  ADJUSTMENT_BILLING
+  CREDIT_MEMO
+  MANUAL_INVOICE
+  CORRECTION
+}
+
+enum BillingBatchStatus {
+  DRAFT
+  PROCESSED
+  POSTED
+  DISCARDED
 }

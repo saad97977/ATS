@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { transactionBatchController as ctrl } from './../../controllers/updated-payroll/batchTimeEntryController';
 import { authenticateToken } from '../../middleware/authMiddleware';
+import multer from 'multer';
+const upload = multer({ storage: multer.memoryStorage() });
+
+
 
 const router = Router();
 
@@ -44,5 +48,15 @@ router.delete('/transactions/:transactionId', ctrl.deleteTransaction);
 router.post('/transactions/:transactionId/lines', ctrl.addTransactionLine);
 router.patch('/lines/:lineId', ctrl.updateTransactionLine);
 router.delete('/lines/:lineId', ctrl.deleteTransactionLine);
+
+
+
+
+router.post('/transactions/:transactionId/override-error', ctrl.overrideTransactionError);
+router.post('/transactions/:transactionId/clear-override', ctrl.clearTransactionErrorOverride);
+router.get('/batches/:batchId/transactions/import-template', ctrl.downloadTransactionImportTemplate);
+router.post('/batches/:batchId/transactions/import', upload.single('file'), ctrl.importTransactionsFromExcel);
+
+
 
 export default router;
